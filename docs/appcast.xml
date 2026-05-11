@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.4.10</title>
-      <pubDate>Mon, 11 May 2026 13:08:20 +0000</pubDate>
-      <sparkle:version>21</sparkle:version>
-      <sparkle:shortVersionString>1.4.10</sparkle:shortVersionString>
+      <title>Apollo 1.4.11</title>
+      <pubDate>Mon, 11 May 2026 13:46:09 +0000</pubDate>
+      <sparkle:version>22</sparkle:version>
+      <sparkle:shortVersionString>1.4.11</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Endurecimento de segurança: (1) prompt-injection guard no agente IA — títulos/descrições/status/tags de tarefas externas sanitizados, brackets ASCII de markers neutralizados, regra explícita no system prompt. (2) URLs do ClickUp agora percent-encoded (defense-in-depth contra IDs com /, ?, # vindos do servidor). (3) Sandbox ATIVADO — Apollo agora roda confinado às permissões declaradas (rede client+server, file picker, EventKit, Contatos, AppleScript). Reduz drasticamente o blast radius de qualquer code injection.]]></description>
+      <description><![CDATA[KeychainHelper agora usa o macOS Keychain de verdade via SecItem*, kSecAttrAccessibleWhenUnlockedThisDeviceOnly. Migração automática: tokens existentes no JSON legado são lidos uma única vez e copiados pro Keychain. Espelho híbrido no JSON mantido como fallback até notarização (signature estável).]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.10/Apollo-1.4.10.zip"
-        sparkle:edSignature="Q5Eqk/lRTlnL1Lr8g3BwtNf2xzSP0/2I9BOdmyUHB3lAkwrkYtc4a/bOnUL15Spqez+6jx632VWGqWGSgFFiDQ=="
-        length="37585392"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.11/Apollo-1.4.11.zip"
+        sparkle:edSignature="eT+S32XAw4I+pTcqJnUJFgMjdJs3X9ND6FSQwpLPsQYLYSceUUThRlKNc4bZ1ZM7Y0b96COS93h3gjL+snLgAA=="
+        length="37564285"
         type="application/octet-stream" />
     </item>
   </channel>
