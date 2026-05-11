@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.4.7</title>
-      <pubDate>Mon, 11 May 2026 11:30:17 +0000</pubDate>
-      <sparkle:version>18</sparkle:version>
-      <sparkle:shortVersionString>1.4.7</sparkle:shortVersionString>
+      <title>Apollo 1.4.8</title>
+      <pubDate>Mon, 11 May 2026 12:04:38 +0000</pubDate>
+      <sparkle:version>19</sparkle:version>
+      <sparkle:shortVersionString>1.4.8</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Menu da barra de menus agora usa 'Apollo' em vez de 'DayPanel' (nome interno do executável). 'Sobre Apollo', 'Ocultar Apollo', 'Encerrar Apollo'.]]></description>
+      <description><![CDATA[Fix comentário com @ aparecia duplicado (ClickUp concatenava comment_text + segments no storage — agora envia só segments). Fix anexos enviados com comentário continuavam aparecendo como linhas separadas — agora agrupados por proximidade temporal (mesmo autor, até 90s após o comentário) já que ClickUp v2 não honra comment_id no upload.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.7/Apollo-1.4.7.zip"
-        sparkle:edSignature="NKyiGV5AzdqHDWlQpQ+VPkOGEIjug3mWuqYgNWtzrlOWWr21vUXZE8Vu3fx0SeLQOkQWgZHPhcMC15V80FZCAg=="
-        length="37529649"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.8/Apollo-1.4.8.zip"
+        sparkle:edSignature="368T5p7ZzXsGSLRLcUikip50hwzErVHM1fR2DKQV3zZmsCMp7AfojCHJdxmTGOHd1fEIXhm//dUBBW576+HnDA=="
+        length="37534776"
         type="application/octet-stream" />
     </item>
   </channel>

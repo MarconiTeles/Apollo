@@ -123,41 +123,120 @@ struct TaskCommentsSection: View, Equatable {
         }
     }
 
-    /// Comments + events sorted oldest → newest. Stable sort
-    /// (Swift's `sorted` is stable) keeps relative order for
-    /// items sharing the same timestamp — useful when several
-    /// uploads land in a single API call.
+    /// Comments + events sorted oldest → newest, with attachment
+    /// uploads merged INTO the comment they belong to (instead of
+    /// floating as standalone "Você anexou X" rows next to the
+    /// comment text the user actually typed).
     ///
-    /// De-dup rule: when a file is uploaded *as part of a
-    /// comment* (via the comment_id-anchored multipart flow the
-    /// composer now uses), ClickUp surfaces the attachment in
-    /// BOTH the `/comment` response (inline on the comment's
-    /// `attachments` array) AND the `/history` activity feed
-    /// (one "uploaded X" entry per file). Rendering both
-    /// produces the bug the user reported: one comment bubble
-    /// PLUS three "Você anexou Y" rows next to it.
+    /// Two grouping signals, applied in order:
     ///
-    /// Fix: collect the set of attachment ids already inlined
-    /// on a comment, then drop any `attachmentAdded` event
-    /// whose attachment matches. The standalone uploads (drag-
-    /// drop from before this version, or attachments added
-    /// outside the composer) keep their event rows since they
-    /// don't have a sibling comment to merge into.
+    ///  1. **API-level association** — when ClickUp returns the
+    ///     attachment inline on a comment (the rare happy path
+    ///     where the comment_id multipart anchor was honored),
+    ///     dedup by attachment id.
+    ///
+    ///  2. **Time + author proximity** — the v2 attachment
+    ///     endpoint does NOT honor `comment_id` reliably, so the
+    ///     more common case is: comment lands at T, then N file
+    ///     uploads land at T+1s … T+10s, all from the same user,
+    ///     and ClickUp serves the comment with `attachments: []`.
+    ///     Visually those should still group with the comment.
+    ///     For each `attachmentAdded` event, find the most recent
+    ///     comment from the same user posted within
+    ///     `mergeWindow` seconds before — if found, merge the
+    ///     attachment into that comment's bubble and consume the
+    ///     event row.
+    ///
+    /// Events with no matching comment (drag-and-drop without a
+    /// composer, AI-agent uploads, attachments from other users
+    /// posted in isolation) keep their own event row.
     private var timeline: [TimelineEntry] {
-        let attachmentIdsInComments: Set<String> = Set(
-            comments.flatMap { $0.attachments.map(\.id) }
+        // Tunable: how long after a comment we'll still attach
+        // late-arriving uploads. 90s comfortably covers the
+        // worst-case multi-file upload from a slow connection
+        // without grabbing unrelated later uploads.
+        let mergeWindow: TimeInterval = 90
+
+        let sortedComments = comments.sorted { $0.date < $1.date }
+        let sortedEvents   = events.sorted { $0.date < $1.date }
+
+        // 1. Build the API-inline set first (always trusted).
+        let inlineAttachmentIds: Set<String> = Set(
+            sortedComments.flatMap { $0.attachments.map(\.id) }
         )
 
-        var merged: [TimelineEntry] = []
-        merged.reserveCapacity(comments.count + events.count)
-        merged.append(contentsOf: comments.map(TimelineEntry.comment))
-        for e in events {
-            // Suppress upload events whose file is already
-            // rendered inside a comment in this same timeline.
-            if case .attachmentAdded(let att) = e.kind,
-               attachmentIdsInComments.contains(att.id) {
+        // 2. Walk attachmentAdded events and pair each with the
+        //    most recent same-author comment within the window.
+        //    `extrasByComment` carries the late-arriving files
+        //    we'll splice into the comment's `attachments` for
+        //    rendering; `consumedEventIds` records which event
+        //    rows to suppress.
+        var extrasByComment: [String: [CUTask.Attachment]] = [:]
+        var consumedEventIds: Set<String> = []
+
+        for event in sortedEvents {
+            guard case .attachmentAdded(let att) = event.kind else { continue }
+
+            // Skip uploads already inline on a comment — case 1.
+            if inlineAttachmentIds.contains(att.id) {
+                consumedEventIds.insert(event.id)
                 continue
             }
+
+            // Need an author to correlate with a comment author.
+            // System-generated uploads (rare, e.g. integration
+            // attachments) have no actor and never merge.
+            guard let actorId = event.actor?.id else { continue }
+
+            // Latest same-user comment posted at or before the
+            // upload, within mergeWindow.
+            let candidate = sortedComments.last { c in
+                c.userId == actorId
+                  && c.date <= event.date
+                  && event.date.timeIntervalSince(c.date) <= mergeWindow
+            }
+            if let target = candidate {
+                extrasByComment[target.id, default: []].append(att)
+                consumedEventIds.insert(event.id)
+            }
+        }
+
+        // 3. Rebuild comments with the spliced-in attachments.
+        //    De-dup by id so a comment that ClickUp DID return
+        //    inline plus an extra event-derived copy doesn't
+        //    render twice.
+        let augmentedComments: [CUComment] = sortedComments.map { c in
+            guard let extras = extrasByComment[c.id], !extras.isEmpty else {
+                return c
+            }
+            var all = c.attachments
+            let existingIds = Set(all.map(\.id))
+            for a in extras where !existingIds.contains(a.id) {
+                all.append(a)
+            }
+            return CUComment(
+                id:          c.id,
+                text:        c.text,
+                date:        c.date,
+                userId:      c.userId,
+                userName:    c.userName,
+                userEmail:   c.userEmail,
+                userColor:   c.userColor,
+                initials:    c.initials,
+                profilePic:  c.profilePic,
+                resolved:    c.resolved,
+                reactions:   c.reactions,
+                replyCount:  c.replyCount,
+                attachments: all
+            )
+        }
+
+        // 4. Merge into the chronological timeline, dropping any
+        //    event we already folded into a comment.
+        var merged: [TimelineEntry] = []
+        merged.reserveCapacity(augmentedComments.count + sortedEvents.count)
+        merged.append(contentsOf: augmentedComments.map(TimelineEntry.comment))
+        for e in sortedEvents where !consumedEventIds.contains(e.id) {
             merged.append(.event(e))
         }
         return merged.sorted { $0.date < $1.date }

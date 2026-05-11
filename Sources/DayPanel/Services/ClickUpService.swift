@@ -764,10 +764,23 @@ final class ClickUpService {
 
         let segments = Self.buildCommentSegments(text: text, members: mentionedMembers)
 
+        // SEND SEGMENTS ONLY. Sending `comment_text` alongside the
+        // structured `comment` array makes ClickUp's storage layer
+        // CONCATENATE the two on GET — the user sees their typed
+        // message rendered twice ("@Joao olha isso@Joao olha isso").
+        // Verified by inspecting raw responses: `comment_text` on
+        // the returned object comes back as segments-joined +
+        // original-text appended. Sending only the structured form
+        // forces ClickUp to derive `comment_text` from it on the
+        // way out, producing a single clean copy.
+        //
+        // For pure-text comments (no mentions), `buildCommentSegments`
+        // still produces a single `{"text": "..."}` segment, so the
+        // wire shape stays valid for ClickUp regardless of whether
+        // mentions are present.
         var body: [String: Any] = [
-            "comment_text": text,
-            "comment":      segments,
-            "notify_all":   notifyAll,
+            "comment":    segments,
+            "notify_all": notifyAll,
         ]
         if let assignee {
             body["assignee"] = assignee
