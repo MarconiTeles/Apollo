@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.4.5</title>
-      <pubDate>Mon, 11 May 2026 11:17:13 +0000</pubDate>
-      <sparkle:version>16</sparkle:version>
-      <sparkle:shortVersionString>1.4.5</sparkle:shortVersionString>
+      <title>Apollo 1.4.6</title>
+      <pubDate>Mon, 11 May 2026 11:25:32 +0000</pubDate>
+      <sparkle:version>17</sparkle:version>
+      <sparkle:shortVersionString>1.4.6</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Composer de comentários: arquivos arrastados (ou pelo paperclip) acumulam como chips dentro da caixa de mensagem antes do envio (estilo ClickUp). Ao enviar, texto + arquivos saem em um único balão na timeline. Funciona com @ mention e drop direto do Finder, Mail, Safari.]]></description>
+      <description><![CDATA[Fix: anexos enviados junto com um comentário agora aparecem dentro do balão dele em vez de criarem eventos 'Você anexou X' separados na timeline. A duplicidade vinha de ClickUp surfacing o mesmo arquivo no /comment (inline) e no /history (evento) — Apollo agora filtra o evento quando o id já está no comentário irmão.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.5/Apollo-1.4.5.zip"
-        sparkle:edSignature="jNOmOMnipg2n7vTLk44dTNMCFIGktECxq7juoBFxEk8onMOPd7zwjNWhPdAqbfada7Wp5hAivMlEK2ZshMcCBg=="
-        length="37526728"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.6/Apollo-1.4.6.zip"
+        sparkle:edSignature="N20yamHlpDhPF7FdNydrW+fbJgVWZA6KkWg6pR3gGwkte1xAhV7KcX6xIDckfXt0NchsErZWz4iRJ/QNfTBFDg=="
+        length="37529411"
         type="application/octet-stream" />
     </item>
   </channel>

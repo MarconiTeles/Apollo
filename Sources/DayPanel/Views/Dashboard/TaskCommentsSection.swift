@@ -127,11 +127,39 @@ struct TaskCommentsSection: View, Equatable {
     /// (Swift's `sorted` is stable) keeps relative order for
     /// items sharing the same timestamp — useful when several
     /// uploads land in a single API call.
+    ///
+    /// De-dup rule: when a file is uploaded *as part of a
+    /// comment* (via the comment_id-anchored multipart flow the
+    /// composer now uses), ClickUp surfaces the attachment in
+    /// BOTH the `/comment` response (inline on the comment's
+    /// `attachments` array) AND the `/history` activity feed
+    /// (one "uploaded X" entry per file). Rendering both
+    /// produces the bug the user reported: one comment bubble
+    /// PLUS three "Você anexou Y" rows next to it.
+    ///
+    /// Fix: collect the set of attachment ids already inlined
+    /// on a comment, then drop any `attachmentAdded` event
+    /// whose attachment matches. The standalone uploads (drag-
+    /// drop from before this version, or attachments added
+    /// outside the composer) keep their event rows since they
+    /// don't have a sibling comment to merge into.
     private var timeline: [TimelineEntry] {
+        let attachmentIdsInComments: Set<String> = Set(
+            comments.flatMap { $0.attachments.map(\.id) }
+        )
+
         var merged: [TimelineEntry] = []
         merged.reserveCapacity(comments.count + events.count)
         merged.append(contentsOf: comments.map(TimelineEntry.comment))
-        merged.append(contentsOf: events.map(TimelineEntry.event))
+        for e in events {
+            // Suppress upload events whose file is already
+            // rendered inside a comment in this same timeline.
+            if case .attachmentAdded(let att) = e.kind,
+               attachmentIdsInComments.contains(att.id) {
+                continue
+            }
+            merged.append(.event(e))
+        }
         return merged.sorted { $0.date < $1.date }
     }
 
