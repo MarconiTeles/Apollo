@@ -7,7 +7,7 @@
     <item>
       <title>Apollo 1.5.0</title>
       <pubDate>Mon, 11 May 2026 16:16:13 +0000</pubDate>
-      <sparkle:version>16</sparkle:version>
+      <sparkle:version>24</sparkle:version>
       <sparkle:shortVersionString>1.5.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <description><![CDATA[Primeiro release notarizado (Developer ID Marconi Lima — CU544M36UD). Gatekeeper aceita sem prompt na primeira instalação. Sandbox reativado (Sparkle XPC + Application Groups com Team ID funcionam agora). Time-sensitive notifications voltam (entitlement restrito agora honrado). KeychainHelper: espelho JSON desligado — signature estável significa Keychain confiável entre releases.]]></description>
