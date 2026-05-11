@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.4.1</title>
-      <pubDate>Mon, 11 May 2026 03:53:15 +0000</pubDate>
-      <sparkle:version>12</sparkle:version>
-      <sparkle:shortVersionString>1.4.1</sparkle:shortVersionString>
+      <title>Apollo 1.4.2</title>
+      <pubDate>Mon, 11 May 2026 04:35:25 +0000</pubDate>
+      <sparkle:version>13</sparkle:version>
+      <sparkle:shortVersionString>1.4.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Primeiro release com Sparkle OTA. Inclui Command Palette, animações refinadas, anexos em tarefas, atalho ⌘⌥O para reabrir onboarding, e tutorial swipe redesenhado.]]></description>
+      <description><![CDATA[Banner persistente in-app quando há nova versão (não-modal, fica até instalar/dispensar), notificação do sistema na descoberta, intervalo de checagem reduzido para 1h.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.1/Apollo-1.4.1.zip"
-        sparkle:edSignature="HvnaDs/eHjv3IjkQ4yto7C5+ZgsRViLeXWmaDhw2UwgIC7XyK+FmRhzwkFdtvLjNAWeS23le2fexqdOYRqT1Ag=="
-        length="37271569"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.2/Apollo-1.4.2.zip"
+        sparkle:edSignature="PblCRSv+XCaBGqXH1xw/u8uwhf9OWbtcMlZnh4OG11wU1rASLoTBoivcEYiPkWN0PsbHxui8od9GCbmfIfEADg=="
+        length="37331692"
         type="application/octet-stream" />
     </item>
   </channel>

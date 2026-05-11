@@ -21,12 +21,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // If we ever want to gate updates by channel (beta vs
     // stable), reject downgrades, or customise the prompt
     // copy, those delegates are where the hooks live.
+    /// Bridge between Sparkle and the rest of the app: publishes
+    /// `availableUpdate` for the banner, fires UNUserNotifications,
+    /// and pushes an entry into AppState's in-app notification log.
+    /// Created BEFORE `updaterController` so we can hand it as the
+    /// delegate during the controller's init.
+    private lazy var updateService: UpdateService = {
+        let s = UpdateService()
+        s.appState = appState
+        return s
+    }()
+
     private lazy var updaterController: SPUStandardUpdaterController = {
-        SPUStandardUpdaterController(
+        let controller = SPUStandardUpdaterController(
             startingUpdater: true,
-            updaterDelegate: nil,
+            updaterDelegate: updateService,
             userDriverDelegate: nil
         )
+        // The service exposes thin wrappers around `checkForUpdates`
+        // / `checkForUpdatesInBackground`; hand it back the
+        // controller so its banner buttons can route through Sparkle.
+        updateService.updaterController = controller
+        return controller
     }()
 
     /// Spotlight-style ⌘K palette. Owns its own `NSPanel`
@@ -445,7 +461,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.contentSize = NSSize(width: 960, height: 620)
         p.behavior    = .semitransient
         p.contentViewController = NSHostingController(
-            rootView: ContentView().environmentObject(appState)
+            rootView: ContentView()
+                .environmentObject(appState)
+                .environmentObject(updateService)
         )
         popover = p
     }
@@ -574,7 +592,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         let host = NSHostingController(
-            rootView: ContentView().environmentObject(appState)
+            rootView: ContentView()
+                .environmentObject(appState)
+                .environmentObject(updateService)
         )
         w.contentViewController = host
         w.delegate = self

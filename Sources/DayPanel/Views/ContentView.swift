@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var updateService: UpdateService
 
     @State private var showSettings    = false
     @State private var showNewEvent    = false
@@ -445,6 +446,28 @@ struct ContentView: View {
                                          onComplete: welcomeFinished)
                         .transition(.opacity)
                         .zIndex(999)
+                }
+
+                // Sparkle "new version available" banner — sits at the
+                // bottom-trailing corner, anchored ABOVE all dashboard
+                // surfaces (zIndex 1200, higher than the
+                // notifications/filters tier at 1100) but suppressed
+                // while welcome / onboarding overlays own the screen
+                // so the intro stays clean. Sparkle's modal still
+                // fires through "Verificar Atualizações…"; this is a
+                // persistent passive announcement that survives a
+                // "Remind Me Later" click.
+                if !showWelcome && !showOnboarding {
+                    UpdateAvailableBanner(updateService: updateService)
+                        .padding(.trailing, 18)
+                        .padding(.bottom, 18)
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity,
+                            alignment: .bottomTrailing
+                        )
+                        .allowsHitTesting(updateService.availableUpdate != nil)
+                        .zIndex(1200)
                 }
             }
             .coordinateSpace(name: "appWindow")
