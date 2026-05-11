@@ -934,6 +934,7 @@ final class ClickUpService {
 
     @discardableResult
     func uploadAttachment(taskId: String, fileURL: URL,
+                          commentId: String? = nil,
                           onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> URL? {
         guard let token else { throw CUError.notConfigured }
         guard fileURL.startAccessingSecurityScopedResource() ||
@@ -954,6 +955,23 @@ final class ClickUpService {
                      forHTTPHeaderField: "Content-Type")
 
         var body = Data()
+
+        // Optional `comment_id` multipart field — when present,
+        // ClickUp's attachment endpoint anchors the upload to the
+        // specified comment instead of creating a standalone
+        // "uploaded N files" activity entry. The web client uses
+        // this for the chat-style flow where one bubble carries
+        // both text and files. If the field is absent (or the
+        // server ignores it on an older account), the file still
+        // attaches to the task — same as the legacy task-level
+        // upload — which is a graceful fallback rather than a
+        // hard error.
+        if let commentId {
+            body.append("--\(boundary)\r\n")
+            body.append("Content-Disposition: form-data; name=\"comment_id\"\r\n\r\n")
+            body.append("\(commentId)\r\n")
+        }
+
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"attachment\"; filename=\"\(filename)\"\r\n")
         body.append("Content-Type: \(mime)\r\n\r\n")

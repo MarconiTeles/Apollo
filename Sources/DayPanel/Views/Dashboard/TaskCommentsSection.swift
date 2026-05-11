@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 // Comments thread for a single ClickUp task. Modeled after ClickUp's
 // in-app comments panel:
@@ -70,6 +71,19 @@ struct TaskCommentsSection: View, Equatable {
     /// receives only the literal "@username" string and
     /// can't tell which workspace member to ping.
     @State private var mentionedIds:    [Int] = []
+
+    /// Files dragged or picked into the composer that haven't been
+    /// sent yet — they render as chips above the textfield and
+    /// flush to ClickUp when the user clicks "Enviar", attached to
+    /// the comment we just posted (so text + files end up in ONE
+    /// bubble in the timeline). Drag-and-drop and the paperclip
+    /// button both feed this queue.
+    @State private var pendingAttachments: [URL] = []
+
+    /// True while a Finder drag is hovering anywhere over the
+    /// composer surface. Drives the accent ring overlay so the
+    /// user knows the drop will be accepted.
+    @State private var isDropTargeted: Bool = false
 
     private let quickEmojis = ["👍", "❤️", "😂", "🎉", "🚀", "👀", "🙏"]
 
@@ -579,6 +593,24 @@ struct TaskCommentsSection: View, Equatable {
             //     never saw. RoundedRectangle + VStack fixes
             //     all three in one shot.
             VStack(alignment: .leading, spacing: 0) {
+                // Pending-attachment chips — rendered ABOVE the
+                // textfield so the user sees what will go out
+                // alongside the typed message. Same visual model
+                // as ClickUp's web composer: each file is a
+                // capsule with icon + name + X. Files only flush
+                // to ClickUp on send; until then they're
+                // ephemeral state that can be removed freely.
+                if !pendingAttachments.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(pendingAttachments, id: \.self) { url in
+                            pendingAttachmentChip(url)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.top, 8)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
                 TextField(
                     "Escreva um comentário…  •  use @ para mencionar",
                     text: $draft,
@@ -590,7 +622,7 @@ struct TaskCommentsSection: View, Equatable {
                 .font(.caption)
                 .lineLimit(1...8)
                 .padding(.horizontal, 12)
-                .padding(.top, 10)
+                .padding(.top, pendingAttachments.isEmpty ? 10 : 8)
                 .padding(.bottom, 6)
                 .onChange(of: draft) { _, new in updateMentionState(text: new) }
                 // Cmd+Return submits without inserting a
@@ -614,10 +646,9 @@ struct TaskCommentsSection: View, Equatable {
                 // chat input that grows together.
                 HStack(alignment: .center, spacing: 6) {
                     Button {
-                        Task { await pickAndUpload() }
+                        pickFilesIntoPending()
                     } label: {
-                        Image(systemName: uploading
-                              ? "arrow.up.circle.fill" : "paperclip")
+                        Image(systemName: "paperclip")
                             .font(.callout)
                             .foregroundStyle(Color.accentColor)
                             .frame(width: 28, height: 28)
@@ -666,27 +697,165 @@ struct TaskCommentsSection: View, Equatable {
                 // Accent-tinted border when the editor is focused so
                 // the box clearly enters "active" mode the instant
                 // the user clicks anywhere in it (not only when the
-                // first keystroke registers).
+                // first keystroke registers). The drop-hover state
+                // (`isDropTargeted`) takes precedence visually:
+                // the same ring thickens + brightens so the user
+                // knows the file will land if released.
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(
-                        draftFocused
-                            ? Color.accentColor.opacity(0.55)
-                            : .white.opacity(0.15),
-                        lineWidth: draftFocused ? 1.25 : 0.5
+                        isDropTargeted
+                            ? Color.accentColor.opacity(0.85)
+                            : (draftFocused
+                               ? Color.accentColor.opacity(0.55)
+                               : .white.opacity(0.15)),
+                        lineWidth: isDropTargeted ? 1.6 : (draftFocused ? 1.25 : 0.5)
                     )
             )
+            // Accept file drops anywhere on the composer surface.
+            // The `loadObject(ofClass: URL.self)` path covers
+            // drags from Finder, Mail attachments, Safari
+            // downloads, iMessage media — anything that
+            // advertises `public.file-url`.
+            .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+                handleDroppedProviders(providers)
+            }
             // Clicking ANYWHERE inside the box (the placeholder
             // area, padding, around the icons) focuses the field —
             // keeps the active-mode handoff feeling instant.
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .onTapGesture { draftFocused = true }
             .animation(.easeInOut(duration: 0.18), value: draftFocused)
+            .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
+            .animation(.spring(response: 0.35, dampingFraction: 0.85),
+                       value: pendingAttachments)
         }
     }
 
+    // MARK: - Pending attachment chip
+
+    private func pendingAttachmentChip(_ url: URL) -> some View {
+        let ext  = url.pathExtension.lowercased()
+        return HStack(spacing: 8) {
+            Image(systemName: chipIcon(forExtension: ext))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(chipTint(forExtension: ext))
+                .frame(width: 16)
+
+            Text(url.lastPathComponent)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 4)
+
+            Button {
+                withAnimation { pendingAttachments.removeAll { $0 == url } }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain).focusEffectDisabled()
+            .help("Remover anexo")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10),
+                              lineWidth: 0.5)
+        )
+    }
+
+    private func chipIcon(forExtension ext: String) -> String {
+        switch ext {
+        case "png", "jpg", "jpeg", "gif", "webp", "heic": return "photo"
+        case "mp4", "mov", "m4v", "avi", "mkv":           return "play.rectangle"
+        case "mp3", "wav", "m4a", "aac", "flac":          return "waveform"
+        case "pdf":                                       return "doc.richtext"
+        case "zip", "rar", "7z", "tar", "gz":             return "shippingbox"
+        case "txt", "md", "rtf":                          return "doc.text"
+        case "csv", "xlsx", "xls", "numbers":             return "tablecells"
+        case "key", "ppt", "pptx":                        return "rectangle.on.rectangle"
+        case "doc", "docx", "pages":                      return "doc"
+        default:                                          return "paperclip"
+        }
+    }
+
+    private func chipTint(forExtension ext: String) -> Color {
+        switch ext {
+        case "png", "jpg", "jpeg", "gif", "webp", "heic": return .pink
+        case "mp4", "mov", "m4v", "avi", "mkv":           return .indigo
+        case "mp3", "wav", "m4a", "aac", "flac":          return .purple
+        case "pdf":                                       return .red
+        case "zip", "rar", "7z", "tar", "gz":             return .brown
+        case "csv", "xlsx", "xls", "numbers":             return .green
+        case "key", "ppt", "pptx":                        return .orange
+        case "doc", "docx", "pages":                      return .blue
+        default:                                          return Color.accentColor
+        }
+    }
+
+    // MARK: - Pending-attachment drop / pick
+
+    /// Open NSOpenPanel (multi-select, any type) and append the
+    /// chosen URLs to `pendingAttachments`. Replaces the previous
+    /// `pickAndUpload` flow that fired uploads immediately —
+    /// files now queue and ship together with the typed message
+    /// on send.
+    private func pickFilesIntoPending() {
+        let panel = NSOpenPanel()
+        panel.title                   = "Anexar ao comentário"
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories    = false
+        panel.canChooseFiles          = true
+        panel.allowedContentTypes     = []
+        guard panel.runModal() == .OK else { return }
+        appendPending(panel.urls)
+    }
+
+    /// Drain dropped NSItemProviders. URL resolution can be
+    /// asynchronous (Mail attachments / Continuity screenshots
+    /// materialize the file lazily), so each provider loads off
+    /// the main thread and the append happens back on main.
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        guard !providers.isEmpty else { return false }
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                DispatchQueue.main.async { appendPending([url]) }
+            }
+        }
+        return true
+    }
+
+    /// De-duplicated append. Same URL dragged twice stays as one
+    /// entry — matches what `CreateTaskSheet` does for its own
+    /// attachment list.
+    private func appendPending(_ urls: [URL]) {
+        for url in urls where !pendingAttachments.contains(url) {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                pendingAttachments.append(url)
+            }
+        }
+        // Focus the field after a drop so ⌘⏎ works without a
+        // mouse round-trip — matches ClickUp's drag-to-reply UX.
+        draftFocused = true
+    }
+
+    /// Allows send when there's actual content to ship — either
+    /// typed text OR queued attachments. The legacy rule
+    /// ("text non-empty") would have stranded files in the
+    /// composer after a drag-only flow.
     private var canSend: Bool {
-        !posting && !uploading &&
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !posting && !uploading else { return false }
+        let hasText = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return hasText || !pendingAttachments.isEmpty
     }
 
     /// Live upload bar shown above the composer while a file is in flight.
@@ -813,51 +982,6 @@ struct TaskCommentsSection: View, Equatable {
 
     // MARK: - Attachment
 
-    @MainActor
-    private func pickAndUpload() async {
-        let panel = NSOpenPanel()
-        panel.title                   = "Anexar ao comentário"
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories    = false
-        panel.canChooseFiles          = true
-        panel.allowedContentTypes     = []   // any file type
-        guard panel.runModal() == .OK else { return }
-        let urls = panel.urls
-        guard !urls.isEmpty else { return }
-
-        withAnimation(.easeInOut(duration: 0.18)) {
-            uploading      = true
-            uploadTotal    = urls.count
-            uploadIndex    = 0
-            uploadProgress = 0
-        }
-
-        for (i, url) in urls.enumerated() {
-            await MainActor.run {
-                uploadFilename = url.lastPathComponent
-                uploadIndex    = i + 1
-                uploadProgress = 0
-            }
-            _ = await appState.uploadCommentAttachment(for: task, fileURL: url) { p in
-                Task { @MainActor in
-                    // Smooth small fluctuations a bit; ignore micro-changes.
-                    if abs(p - uploadProgress) > 0.005 || p >= 1.0 {
-                        withAnimation(.linear(duration: 0.1)) {
-                            uploadProgress = p
-                        }
-                    }
-                }
-            }
-        }
-
-        withAnimation(.easeInOut(duration: 0.25)) {
-            uploading      = false
-            uploadFilename = nil
-            uploadProgress = 0
-        }
-        await refresh()
-    }
-
     // MARK: - Networking helpers
 
     private func refresh() async {
@@ -883,14 +1007,29 @@ struct TaskCommentsSection: View, Equatable {
         }
     }
 
+    /// Unified send path: posts the typed comment (if any), then
+    /// uploads each pending attachment anchored to that comment's
+    /// id. The result lands as ONE bubble in the timeline (text +
+    /// files), matching ClickUp's web composer flow. Each upload
+    /// shows progress via the existing `uploadProgressBar`.
+    ///
+    /// Edge cases:
+    /// - text-only → behave like the legacy send.
+    /// - files-only (no text) → post a single-space comment so
+    ///   ClickUp's API accepts it (`comment_text` must be
+    ///   non-empty), then attach the files to that bubble.
+    /// - text + files → post comment, then upload each file with
+    ///   `commentId` so they land inside the same bubble.
+    /// - post failure → keep the draft + pending files so the
+    ///   user doesn't lose their work; surface error via the
+    ///   existing notify path inside `appState.postComment`.
     private func send() async {
         let txt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !txt.isEmpty else { return }
+        let files = pendingAttachments
+        guard !txt.isEmpty || !files.isEmpty else { return }
+
         // Trim `mentionedIds` to those whose "@username"
-        // still appears in the final draft. The user might
-        // have typed a mention from the picker and then
-        // backspaced it out — keeping that ID would notify
-        // someone whose name isn't actually in the comment.
+        // still appears in the final draft.
         let lower = txt.lowercased()
         let liveMentions = mentionedIds.filter { id in
             guard let m = appState.availableMembers.first(where: { $0.id == id }) else {
@@ -898,25 +1037,77 @@ struct TaskCommentsSection: View, Equatable {
             }
             return lower.contains("@" + m.username.lowercased())
         }
+
         await MainActor.run { posting = true }
-        if let posted = await appState.postComment(
+
+        // ── 1. Post the comment ────────────────────────────
+        // If the user only attached files (no typed message),
+        // ClickUp still expects a non-empty `comment_text`. A
+        // single space is the smallest value that keeps the
+        // bubble rendering essentially "files only".
+        let commentBody = txt.isEmpty ? " " : txt
+        let posted = await appState.postComment(
             on: task,
-            text: txt,
+            text: commentBody,
             mentionedMemberIds: liveMentions
-        ) {
+        )
+
+        // ── 2. Upload pending attachments anchored to the new
+        //       comment, so they land inside the same bubble.
+        //       If the post failed we still try the uploads —
+        //       they'll appear as plain task attachments rather
+        //       than orphaning the files the user dragged in.
+        if !files.isEmpty {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                uploading      = true
+                uploadTotal    = files.count
+                uploadIndex    = 0
+                uploadProgress = 0
+            }
+            for (i, url) in files.enumerated() {
+                await MainActor.run {
+                    uploadFilename = url.lastPathComponent
+                    uploadIndex    = i + 1
+                    uploadProgress = 0
+                }
+                _ = await appState.uploadCommentAttachment(
+                    for:       task,
+                    fileURL:   url,
+                    commentId: posted?.id
+                ) { p in
+                    Task { @MainActor in
+                        if abs(p - uploadProgress) > 0.005 || p >= 1.0 {
+                            withAnimation(.linear(duration: 0.1)) {
+                                uploadProgress = p
+                            }
+                        }
+                    }
+                }
+            }
+            withAnimation(.easeInOut(duration: 0.25)) {
+                uploading      = false
+                uploadFilename = nil
+                uploadProgress = 0
+            }
+        }
+
+        // ── 3. Reset composer + reconcile the timeline ─────
+        // If `posted` is non-nil we trust it as the canonical
+        // record; otherwise we refresh from the server to pull
+        // back whatever did land (the upload may have created
+        // its own activity entries even if the comment POST
+        // failed).
+        if posted != nil && files.isEmpty {
             await MainActor.run {
-                self.comments.append(posted)
-                self.draft = ""
-                self.mentionedIds = []
+                if let p = posted { self.comments.append(p) }
             }
         } else {
             await refresh()
-            await MainActor.run {
-                self.draft = ""
-                self.mentionedIds = []
-            }
         }
         await MainActor.run {
+            self.draft = ""
+            self.mentionedIds = []
+            self.pendingAttachments = []
             posting = false
             mentionQuery = nil
         }

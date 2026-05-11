@@ -2914,10 +2914,12 @@ final class AppState: ObservableObject {
     /// 0.0…1.0 from a background queue.
     func uploadCommentAttachment(for task: CUTask,
                                  fileURL: URL,
+                                 commentId: String? = nil,
                                  onProgress: (@Sendable (Double) -> Void)? = nil) async -> Bool {
         do {
-            _ = try await cuSvc.uploadAttachment(taskId: task.id,
-                                                 fileURL: fileURL,
+            _ = try await cuSvc.uploadAttachment(taskId:    task.id,
+                                                 fileURL:   fileURL,
+                                                 commentId: commentId,
                                                  onProgress: onProgress)
             notifyTask(.success,
                        title:    task.title,
