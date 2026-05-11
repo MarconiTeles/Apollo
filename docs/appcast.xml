@@ -5,6 +5,19 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 1.5.0</title>
+      <pubDate>Mon, 11 May 2026 16:16:13 +0000</pubDate>
+      <sparkle:version>16</sparkle:version>
+      <sparkle:shortVersionString>1.5.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Primeiro release notarizado (Developer ID Marconi Lima — CU544M36UD). Gatekeeper aceita sem prompt na primeira instalação. Sandbox reativado (Sparkle XPC + Application Groups com Team ID funcionam agora). Time-sensitive notifications voltam (entitlement restrito agora honrado). KeychainHelper: espelho JSON desligado — signature estável significa Keychain confiável entre releases.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.0/Apollo-1.5.0.zip"
+        sparkle:edSignature="zIrgaTrQq/pgNoW5Q8dBDOMV4JVNp3JePuA8YBwq3cUCkdIQaeL+QcAInIyEs5Gn0F05mZjUkBcUCycy7rUXBg=="
+        length="37606936"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 1.4.12</title>
       <pubDate>Mon, 11 May 2026 13:56:07 +0000</pubDate>
       <sparkle:version>23</sparkle:version>

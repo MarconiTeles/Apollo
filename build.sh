@@ -124,16 +124,68 @@ xattr -dr com.apple.quarantine "$OLLAMA_BUNDLE" 2>/dev/null || true
 #   ~/Library/Application Support/Apollo/Models/apollo-ia.gguf
 # managed by `EmbeddedRuntimeManager.downloadModel()`.
 
-# Sandbox is OFF for adhoc builds (Sparkle's installer XPC
-# can't gain authorization without a Developer ID Team ID,
-# breaking OTA updates — see Apollo.entitlements for the full
-# rationale). We also skip --entitlements entirely on adhoc:
-# the only key currently declared in the file is
-# `time-sensitive`, which AMFI rejects on adhoc binaries with
-# code 163, silently failing launch. Re-enable both
-# (--entitlements + the sandbox block in the .entitlements
-# file) AFTER notarization with Developer ID.
-codesign --force --deep --sign - "$APP" > /dev/null 2>&1
+# ── Codesign (Developer ID + Hardened Runtime + entitlements) ──
+#
+# Switched from adhoc to Developer ID Application on 1.4.x →
+# 1.5.0. With a real cert we get:
+#   • Hardened Runtime — required by Apple's notary, also
+#     enables the modern code-signing protections (no
+#     unsigned dylibs, no DYLD_INSERT_LIBRARIES, etc).
+#   • --timestamp — embeds a secure timestamp from Apple's
+#     timestamp server. Required by the notary; lets users
+#     install the app years later even after the cert expires.
+#   • Entitlements file applied — `time-sensitive`
+#     notifications + sandbox keys now resolve correctly
+#     because AMFI honors restricted entitlements once they're
+#     signed by a recognized Team ID (CU544M36UD here).
+#
+# Override via APOLLO_SIGNING_ID env var if a future signing
+# identity rotates in.
+SIGNING_ID="${APOLLO_SIGNING_ID:-Developer ID Application: Marconi Lima (CU544M36UD)}"
+ENTITLEMENTS_PATH="Sources/DayPanel/Resources/Apollo.entitlements"
+
+# Sign the inner Frameworks FIRST (deepest dependency first).
+# Sparkle's framework ships with its own XPC services
+# (Installer.xpc, Downloader.xpc) and the Autoupdate helper +
+# Updater.app — each needs to be signed individually so the
+# outer-bundle signature is valid.
+SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
+if [ -d "$SPARKLE_FW" ]; then
+    for SUB in \
+        "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc" \
+        "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc" \
+        "$SPARKLE_FW/Versions/B/Updater.app" \
+        "$SPARKLE_FW/Versions/B/Autoupdate"
+    do
+        if [ -e "$SUB" ]; then
+            codesign --force --options runtime --timestamp \
+                --sign "$SIGNING_ID" \
+                "$SUB" > /dev/null
+        fi
+    done
+    codesign --force --options runtime --timestamp \
+        --sign "$SIGNING_ID" \
+        "$SPARKLE_FW" > /dev/null
+fi
+
+# Embedded Ollama runtime — needs its own signature otherwise
+# the outer --deep walk reports "not signed at all".
+if [ -f "$OLLAMA_BUNDLE" ]; then
+    codesign --force --options runtime --timestamp \
+        --sign "$SIGNING_ID" \
+        "$OLLAMA_BUNDLE" > /dev/null
+fi
+
+# Outer .app — apply entitlements, hardened runtime, timestamp.
+codesign --force --options runtime --timestamp \
+    --sign "$SIGNING_ID" \
+    --entitlements "$ENTITLEMENTS_PATH" \
+    "$APP" > /dev/null
+
+# Sanity check: --deep --strict catches mismatched nested
+# signatures (helper not signed with same identity, etc.) that
+# the notary would reject silently.
+codesign --verify --deep --strict "$APP" 2>&1 | head -3
 
 # Clean up any stale build/DayPanel.app from previous runs.
 rm -rf build/DayPanel.app

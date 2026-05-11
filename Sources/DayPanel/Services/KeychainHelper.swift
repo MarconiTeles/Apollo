@@ -40,11 +40,14 @@ enum KeychainHelper {
     private static let service = "com.painellunar.app.secrets"
 
     /// While true, every `save(_:for:)` also writes to the legacy
-    /// JSON store. Lets us survive a Keychain-ACL invalidation
-    /// (which happens on every adhoc-signature rotation today).
-    /// Flip to `false` after notarization stabilises the
-    /// signature.
-    private static let writeLegacyMirror = true
+    /// JSON store. We flipped this to `false` for 1.5.0+: with
+    /// Developer ID notarized builds the signature is stable
+    /// across releases, so Keychain items keep their ACL across
+    /// OTA updates and the JSON fallback is no longer needed.
+    /// `load(for:)` still reads the legacy JSON as a one-time
+    /// migration path so users coming from <=1.4.12 don't lose
+    /// their tokens.
+    private static let writeLegacyMirror = false
 
     // MARK: - Legacy JSON store (still read, optionally written)
 

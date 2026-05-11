@@ -3,54 +3,87 @@
 <plist version="1.0">
 <dict>
     <!--
-        Sandbox is INTENTIONALLY off for the moment.
+        ╔══════════════════════════════════════════════════════════╗
+        ║  Apollo entitlements (Developer ID-signed builds)         ║
+        ╚══════════════════════════════════════════════════════════╝
 
-        Background: 1.4.10 turned on com.apple.security.app-sandbox
-        with a full set of standard sandbox entitlements (network,
-        files, calendars, contacts, apple-events). The build runs
-        and most features work, BUT Sparkle's Installer XPC
-        service can't gain the system authorization it needs to
-        replace the bundle from inside the sandbox — installer
-        launch fails with -60005 ("Authorization service failed"
-        / "Failed copying system domain rights"). OTA updates
-        therefore hang at the "launching the installer" step,
-        leaving the user stuck on whichever version installed
-        sandbox first. Confirmed in Console logs.
+        Sandbox is back on as of 1.5.0. The previous attempt
+        (1.4.10 / 1.4.11) failed because Sparkle's Installer
+        XPC needs an Application Group keyed by `<TEAMID>.<bundle>`
+        to gain system authorization, and adhoc binaries have no
+        Team ID. Now that we sign with Developer ID
+        `CU544M36UD`, the XPC services live inside an
+        application-group entitlement and OTA installs work in
+        sandbox.
 
-        Sparkle's own sandboxing guide
-        (https://sparkle-project.org/documentation/sandboxing/)
-        documents the workaround: pin the Installer / Downloader
-        XPC services into an Application Group keyed by
-        `<TEAMID>.<bundle-id>`. That requires a Developer ID
-        Team ID — adhoc-signed binaries have no Team ID, so the
-        workaround can't be applied to this build.
+          • app-sandbox            — confines the process to its
+                                     container + declared
+                                     capabilities.
 
-        Plan: re-enable sandbox immediately after notarization
-        with Developer ID is in place. The full entitlements
-        block below stays as a comment so it's a one-line flip
-        when the cert arrives.
+          • network.client         — outbound HTTPS to ClickUp,
+                                     Google, GitHub Pages
+                                     (Sparkle feed),
+                                     OpenAI/Groq/Gemini.
 
-        <key>com.apple.security.app-sandbox</key>
-        <true/>
-        <key>com.apple.security.network.client</key>
-        <true/>
-        <key>com.apple.security.network.server</key>
-        <true/>
-        <key>com.apple.security.files.user-selected.read-write</key>
-        <true/>
-        <key>com.apple.security.personal-information.calendars</key>
-        <true/>
-        <key>com.apple.security.personal-information.addressbook</key>
-        <true/>
-        <key>com.apple.security.automation.apple-events</key>
-        <true/>
+          • network.server         — localhost listener for the
+                                     Google OAuth redirect.
 
-        Only `time-sensitive` notifications remain declared here
-        — same as the pre-1.4.10 state. Note that AMFI still
-        silently downgrades this to `.active` on adhoc-signed
-        binaries, but declaring it keeps the codebase ready for
-        the eventual Developer-ID flip.
+          • files.user-selected
+                  .read-write       — NSOpenPanel + drag-drop
+                                     attachments.
+
+          • personal-information
+                  .calendars        — EventKit access (Calendar
+                                     RSVP bridge + future sync).
+
+          • personal-information
+                  .addressbook      — Contacts picker for
+                                     attendee selection.
+
+          • automation
+                  .apple-events     — AppleScript bridge that
+                                     sends RSVPs to Calendar.app.
+
+          • application-groups      — REQUIRED by Sparkle's
+                                     XPC services in sandbox.
+                                     ID is `<TEAMID>.<bundle>`
+                                     verbatim — Sparkle looks
+                                     for that exact name.
+
+          • developer
+                  .usernotifications
+                  .time-sensitive   — pierces Focus modes when
+                                     the user opts in. Restricted
+                                     entitlement — AMFI requires
+                                     a recognized Team ID, which
+                                     we now have.
     -->
+
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+
+    <key>com.apple.security.personal-information.addressbook</key>
+    <true/>
+
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>CU544M36UD.com.painellunar.app</string>
+    </array>
 
     <key>com.apple.developer.usernotifications.time-sensitive</key>
     <true/>

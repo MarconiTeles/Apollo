@@ -131,10 +131,134 @@ if [[ ! -f "$DMG_PATH" ]]; then
     exit 1
 fi
 
+# ── Notarization (Apple notary service) ───────────────────────────────────
+# Submit the .app (as a ZIP — the notary doesn't accept .app
+# directly) to Apple's notary service, wait for the verdict,
+# then staple the resulting ticket onto the bundle so Gatekeeper
+# can validate it offline. After stapling, both the .zip we
+# ship to Sparkle AND the .dmg get re-built so they include
+# the stapled bundle.
+#
+# Credentials live in a Keychain profile created once with:
+#   xcrun notarytool store-credentials AC_PASSWORD_APOLLO \
+#     --apple-id "marconimpn@gmail.com" \
+#     --team-id  CU544M36UD \
+#     --password "<app-specific password>"
+#
+# Override the profile name via APOLLO_NOTARY_PROFILE if you
+# rotate to a different credential set.
+NOTARY_PROFILE="${APOLLO_NOTARY_PROFILE:-AC_PASSWORD_APOLLO}"
+
+# Submission ZIP — separate from the Sparkle ZIP because we
+# want the staple to land on the bundle BEFORE Sparkle
+# packages it.
+NOTARY_ZIP="$DIST_DIR/Apollo-${NEW_VERSION}-notary.zip"
+rm -f "$NOTARY_ZIP"
+echo "→ Zipping for notarization…"
+ditto -c -k --keepParent "$APP_PATH" "$NOTARY_ZIP"
+
+echo "→ Submitting to Apple notary (this can take 1–10 min)…"
+NOTARY_OUT="$(xcrun notarytool submit "$NOTARY_ZIP" \
+    --keychain-profile "$NOTARY_PROFILE" \
+    --wait \
+    --output-format plist 2>&1)" || {
+    echo "✗ Notarization submit failed:" >&2
+    echo "$NOTARY_OUT" >&2
+    exit 1
+}
+
+# Pull the submission id + status out of the plist output so
+# we can fetch the log on failure.
+NOTARY_TMP="$(mktemp)"
+echo "$NOTARY_OUT" > "$NOTARY_TMP"
+NOTARY_STATUS="$($PB -c 'Print :status' "$NOTARY_TMP" 2>/dev/null || echo unknown)"
+NOTARY_ID="$($PB -c 'Print :id' "$NOTARY_TMP" 2>/dev/null || echo unknown)"
+rm -f "$NOTARY_TMP"
+
+if [[ "$NOTARY_STATUS" != "Accepted" ]]; then
+    echo "✗ Notarization status: $NOTARY_STATUS (id=$NOTARY_ID)" >&2
+    echo "  Fetching notary log…" >&2
+    xcrun notarytool log "$NOTARY_ID" \
+        --keychain-profile "$NOTARY_PROFILE" >&2 || true
+    exit 1
+fi
+echo "✓ Notarization accepted (id=$NOTARY_ID)"
+
+echo "→ Stapling ticket onto the .app bundle…"
+xcrun stapler staple "$APP_PATH"
+xcrun stapler validate "$APP_PATH" >/dev/null
+
+# Remove the submission ZIP — we re-zip below with the stapled
+# bundle so Sparkle ships the ticket-carrying copy.
+rm -f "$NOTARY_ZIP"
+
+# Rebuild the DMG so the .dmg distributed to users carries the
+# stapled bundle too. CRITICAL: do NOT call package.sh here —
+# it re-runs build.sh which re-codesigns the .app, generating
+# a new CdHash and DESTROYING the staple we just attached.
+# Instead, re-run only the DMG-creation steps directly against
+# the already-stapled build/Apollo.app.
+echo "→ Rebuilding DMG with stapled bundle (no re-sign)…"
+STAGE_DIR="$DIST_DIR/.stage"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+cp -R "$APP_PATH" "$STAGE_DIR/"
+ln -s /Applications "$STAGE_DIR/Applications"
+
+# Helper script + LEIA-ME — kept in sync with package.sh by
+# inlining the same templates. (If you change either copy,
+# update the other so DMG installs from both paths behave
+# identically.)
+cat > "$STAGE_DIR/Remover-Quarentena.command" <<'CMDEOF'
+#!/bin/bash
+set +e
+clear
+echo ""
+echo "  Apollo — Liberar o app no macOS"
+echo "  ────────────────────────────────"
+APP_PATH="/Applications/Apollo.app"
+if [ ! -d "$APP_PATH" ]; then
+    echo "  ✗ Não encontrei $APP_PATH"
+    read -n 1 -s -r -p "  Pressione qualquer tecla para fechar..."
+    exit 1
+fi
+osascript -e 'tell application id "com.painellunar.app" to quit' 2>/dev/null
+pkill -x DayPanel 2>/dev/null
+sleep 1.2
+xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null
+xattr -dr com.apple.provenance "$APP_PATH" 2>/dev/null
+echo "  ✓ Pronto. Abra o Apollo pelo Launchpad ou Spotlight."
+sleep 1
+exit 0
+CMDEOF
+chmod +x "$STAGE_DIR/Remover-Quarentena.command"
+
+cat > "$STAGE_DIR/LEIA-ME.txt" <<EOF
+Apollo ${NEW_VERSION} (notarizado)
+
+Instalação:
+  1. Arraste "Apollo.app" para a pasta "Applications".
+  2. Abra pelo Launchpad ou Spotlight.
+
+Como esta versão é notarizada pela Apple, o Gatekeeper
+aceita o app sem prompt. Se você vier de uma versão adhoc
+e ainda ver o aviso de quarentena, rode o script
+"Remover-Quarentena.command" uma única vez.
+EOF
+
+hdiutil create \
+    -volname "Apollo ${NEW_VERSION}" \
+    -srcfolder "$STAGE_DIR" \
+    -ov -format UDZO \
+    "$DMG_PATH" > /dev/null
+rm -rf "$STAGE_DIR"
+echo "✓ DMG rebuilt at $DMG_PATH (stapled bundle preserved)"
+
 # ── ZIP for Sparkle ───────────────────────────────────────────────────────
 # Sparkle expects a ZIP that, when unzipped, contains Apollo.app
 # at the top level. `ditto` preserves resource forks, symlinks,
-# and code-signing metadata better than plain `zip`.
+# and code-signing metadata better than plain `zip`. Run AFTER
+# the notarization staple so the ZIP carries the ticket.
 ZIP_NAME="Apollo-${NEW_VERSION}.zip"
 ZIP_PATH="$DIST_DIR/$ZIP_NAME"
 echo "→ Packaging $ZIP_NAME for Sparkle…"
