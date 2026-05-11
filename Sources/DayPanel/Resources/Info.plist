@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Apollo</string>
+	<key>CFBundleExecutable</key>
+	<string>DayPanel</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.painellunar.app</string>
+	<key>CFBundleName</key>
+	<string>Apollo</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.4.1</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>DayPanel OAuth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>daypanel</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>12</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+	</dict>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Apollo envia respostas de presença (Sim/Não/Talvez) para o app Calendário, que sincroniza com o Google Calendar.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Apollo exibe e cria eventos no Calendário (incluindo Google Calendar sincronizado pelo macOS).</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Apollo exibe seus eventos do Calendário (incluindo Google Calendar sincronizado pelo macOS) na visão diária.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Apollo sugere convidados a partir dos seus contatos (incluindo contatos do Google sincronizados via Configurações → Contas de Internet) ao criar eventos.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Apollo</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSUserNotificationsUsageDescription</key>
+	<string>Apollo envia notificações do sistema sobre mudanças em tarefas, eventos e sincronização.</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUEnableInstallerLauncherService</key>
+	<false/>
+	<key>SUFeedURL</key>
+	<string>https://marconiteles.github.io/Apollo/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>L2b4fNayblDQ1rwco3UoAr8031tLw3UPmRP7gX20nmk=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+</dict>
+</plist>

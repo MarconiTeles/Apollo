@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Lets Apollo deliver notifications with `.timeSensitive`
+        interruption level — the banner pierces Focus modes when the
+        user enables "Time Sensitive Notifications" for the app in
+        System Settings → Notifications → Apollo. Without this
+        entitlement, macOS silently downgrades the level to .active.
+    -->
+    <key>com.apple.developer.usernotifications.time-sensitive</key>
+    <true/>
+</dict>
+</plist>

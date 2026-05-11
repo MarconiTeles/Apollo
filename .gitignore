@@ -1,0 +1,50 @@
+# Swift / SPM
+.build/
+.swiftpm/
+Package.resolved.bak
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Build outputs (regenerable)
+build/
+DerivedData/
+
+# Release artifacts (uploaded to GitHub Releases, not committed)
+dist/*.dmg
+dist/*.zip
+dist/*.zip.sig
+*.dmg
+*.zip
+*.zip.sig
+# Keep dist/appcast.xml so we have the source-of-truth feed history,
+# even though docs/appcast.xml is what Pages serves.
+
+# macOS junk
+.DS_Store
+*.swp
+*~
+
+# Editor / IDE
+.vscode/
+.idea/
+*.iml
+
+# Local credentials (never commit)
+.env
+.env.*
+*.p12
+*.cer
+*.mobileprovision
+
+# Google OAuth Desktop client values — pasted by each contributor,
+# kept out of the tree because GitHub's secret scanner flags
+# `GOCSPX-…` even though Desktop "client_secret" is distributable
+# by design. Use GoogleAuthSecrets.example.swift as the template.
+Sources/DayPanel/Services/GoogleAuthSecrets.swift
+
+# Secrets that might land in a config file
+secrets.json
+config.local.json
+
+# Logs
+*.log

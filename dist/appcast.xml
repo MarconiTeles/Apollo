@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Apollo updates</title>
+    <description>Atualizações OTA do Apollo</description>
+    <language>pt-br</language>
+    <item>
+      <title>Apollo 1.4.1</title>
+      <pubDate>Mon, 11 May 2026 03:53:15 +0000</pubDate>
+      <sparkle:version>12</sparkle:version>
+      <sparkle:shortVersionString>1.4.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Primeiro release com Sparkle OTA. Inclui Command Palette, animações refinadas, anexos em tarefas, atalho ⌘⌥O para reabrir onboarding, e tutorial swipe redesenhado.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.1/Apollo-1.4.1.zip"
+        sparkle:edSignature="HvnaDs/eHjv3IjkQ4yto7C5+ZgsRViLeXWmaDhw2UwgIC7XyK+FmRhzwkFdtvLjNAWeS23le2fexqdOYRqT1Ag=="
+        length="37271569"
+        type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>
