@@ -5,42 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.5.1</title>
-      <pubDate>Mon, 11 May 2026 16:48:48 +0000</pubDate>
-      <sparkle:version>25</sparkle:version>
-      <sparkle:shortVersionString>1.5.1</sparkle:shortVersionString>
+      <title>Apollo 1.5.2</title>
+      <pubDate>Mon, 11 May 2026 21:30:58 +0000</pubDate>
+      <sparkle:version>26</sparkle:version>
+      <sparkle:shortVersionString>1.5.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Hotfix da 1.5.0: removido entitlement time-sensitive que exigia provisioning profile embutido (AMFI -413, app não abria). Notificações caem para .active (banner + som, sem piercing de Focus mode) até embutirmos o profile. Restante da 1.5.0 (Developer ID, sandbox, Keychain-only) preservado.]]></description>
+      <description><![CDATA[Anexos embedded na descrição (Google Drive, Docs etc) agora aparecem clicáveis no app. ClickUp omitia silenciosamente esses links no campo description padrão; Apollo agora pede include_markdown_description=true e achata [url](url) -> url pra o detector de links inline renderizar como clicável.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.1/Apollo-1.5.1.zip"
-        sparkle:edSignature="bEqQl+Bw3oNjOW0QdQMZfH13OBU90Uk5JaqlTonYyKVFMJwSzVvS8ldgR4CmSSPgxKSfX49kbtVMoKqmTSdOAA=="
-        length="37607949"
-        type="application/octet-stream" />
-    </item>
-    <item>
-      <title>Apollo 1.5.0</title>
-      <pubDate>Mon, 11 May 2026 16:16:13 +0000</pubDate>
-      <sparkle:version>24</sparkle:version>
-      <sparkle:shortVersionString>1.5.0</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Primeiro release notarizado (Developer ID Marconi Lima — CU544M36UD). Gatekeeper aceita sem prompt na primeira instalação. Sandbox reativado (Sparkle XPC + Application Groups com Team ID funcionam agora). Time-sensitive notifications voltam (entitlement restrito agora honrado). KeychainHelper: espelho JSON desligado — signature estável significa Keychain confiável entre releases.]]></description>
-      <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.0/Apollo-1.5.0.zip"
-        sparkle:edSignature="zIrgaTrQq/pgNoW5Q8dBDOMV4JVNp3JePuA8YBwq3cUCkdIQaeL+QcAInIyEs5Gn0F05mZjUkBcUCycy7rUXBg=="
-        length="37606936"
-        type="application/octet-stream" />
-    </item>
-    <item>
-      <title>Apollo 1.4.12</title>
-      <pubDate>Mon, 11 May 2026 13:56:07 +0000</pubDate>
-      <sparkle:version>23</sparkle:version>
-      <sparkle:shortVersionString>1.4.12</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Revert sandbox (1.4.10/1.4.11 quebravam OTA porque Sparkle Installer XPC não consegue autorização em sandbox+adhoc, erro -60005). Sandbox volta quando notarização com Developer ID estiver no lugar. Keychain refactor (1.4.11) preservado.]]></description>
-      <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.12/Apollo-1.4.12.zip"
-        sparkle:edSignature="JZ0n+hC3DvwOYuLiu0Rait5VtvIw7agLbHx/swL8AEV6xa7g4njmKd3E4WAvzJ5UN1Tzw5KBlyZ4/NW3LejfBQ=="
-        length="37551317"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.2/Apollo-1.5.2.zip"
+        sparkle:edSignature="Bw8eVVgMfQYzlYoC8ce+gz5LP1qO//w/wighOTBIwArPH+BwXtgJ/gH64zL7qWdBXdHAAJyT5OgHLwATG51gDw=="
+        length="37610193"
         type="application/octet-stream" />
     </item>
   </channel>

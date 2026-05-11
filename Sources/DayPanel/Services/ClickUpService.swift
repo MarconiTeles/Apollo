@@ -30,6 +30,14 @@ final class ClickUpService {
             // the top-level list view and only surfaces them
             // under the parent's detail popup.
             URLQueryItem(name: "subtasks",       value: "true"),
+            // `markdown_description` opt-in: ClickUp's plain
+            // `description` / `text_content` fields silently drop
+            // inline file references (Google Drive embeds,
+            // pasted-as-link attachments). The markdown version
+            // includes them as `[label](url)` so the renderer can
+            // surface them. parseTasks falls back to the plain
+            // field when markdown_description isn't returned.
+            URLQueryItem(name: "include_markdown_description", value: "true"),
         ]
 
         var req = URLRequest(url: comps.url!)
@@ -145,6 +153,10 @@ final class ClickUpService {
         var comps = URLComponents(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))")!
         comps.queryItems = [
             URLQueryItem(name: "include_subtasks", value: "true"),
+            // Same rationale as `listTasks` — without this flag
+            // the response's `description` field omits inline
+            // file references (Google Drive embeds etc.).
+            URLQueryItem(name: "include_markdown_description", value: "true"),
         ]
         var req = URLRequest(url: comps.url!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
@@ -1017,6 +1029,43 @@ final class ClickUpService {
         return nil
     }
 
+    /// Flattens ClickUp's markdown `[label](url)` link syntax into a
+    /// form the RichTextEditor (which relies on `NSDataDetector` for
+    /// link detection) can render directly:
+    ///
+    ///   • `[https://x](https://x)` → `https://x`
+    ///     ClickUp emits this shape when the user pastes / embeds a
+    ///     file URL (Google Drive, Dropbox, etc.). Label and URL are
+    ///     identical — collapsing to just the URL is lossless.
+    ///   • `[click here](https://x)` → `click here (https://x)`
+    ///     Label differs from URL. We keep both so the linkable URL
+    ///     stays in the visible text (NSDataDetector picks it up)
+    ///     without dropping the human-readable label.
+    ///
+    /// Idempotent on strings with no markdown links. Safe to apply
+    /// every parse — runs once per task during the list/getTask path.
+    private static func flattenMarkdownLinks(_ s: String) -> String {
+        // `[label](url)` — label can contain anything except `]`,
+        // url can contain anything except `)`. Non-greedy on both
+        // so adjacent links don't merge.
+        let pattern = #"\[([^\]]+)\]\(([^)]+)\)"#
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return s }
+        let nss = NSMutableString(string: s)
+        // Walk matches in reverse so each replacement doesn't shift
+        // the offsets of pending matches.
+        let matches = re.matches(in: s,
+                                 range: NSRange(s.startIndex..., in: s))
+        for m in matches.reversed() {
+            let labelRange = m.range(at: 1)
+            let urlRange   = m.range(at: 2)
+            let label = (s as NSString).substring(with: labelRange)
+            let url   = (s as NSString).substring(with: urlRange)
+            let replacement = (label == url) ? url : "\(label) (\(url))"
+            nss.replaceCharacters(in: m.range, with: replacement)
+        }
+        return nss as String
+    }
+
     /// Percent-encodes ID-shaped strings before they're spliced
     /// into a URL path. ClickUp task / list / comment IDs are
     /// usually plain alphanumerics, BUT they're server-supplied
@@ -1248,7 +1297,20 @@ final class ClickUpService {
                 startDate = Date(timeIntervalSince1970: val / 1000)
             }
 
-            let description = item["description"]  as? String ?? item["text_content"] as? String
+            // Prefer `markdown_description` when present — it carries
+            // inline file references and embedded links the standard
+            // `description` / `text_content` plain-text fields silently
+            // drop. ClickUp exposes it whenever the caller passed
+            // `include_markdown_description=true` on the request URL.
+            // We then flatten the `[label](url)` markdown syntax so
+            // the RichTextEditor (which uses NSDataDetector for URL
+            // detection) sees plain URLs it can linkify — otherwise
+            // users see the literal brackets sitting in the
+            // description.
+            let rawDescription = (item["markdown_description"] as? String)
+                ?? (item["description"] as? String)
+                ?? (item["text_content"] as? String)
+            let description = rawDescription.map(Self.flattenMarkdownLinks(_:))
 
             let assignees: [CUTask.Assignee] = (item["assignees"] as? [[String: Any]] ?? [])
                 .compactMap { a in
