@@ -85,7 +85,30 @@
         <string>CU544M36UD.com.painellunar.app</string>
     </array>
 
-    <key>com.apple.developer.usernotifications.time-sensitive</key>
-    <true/>
+    <!--
+        `com.apple.developer.usernotifications.time-sensitive` is
+        REMOVED for now. It's a "restricted entitlement" — even
+        with Developer ID Application signing, AMFI demands a
+        matching provisioning profile EMBEDDED in the .app
+        authorizing the Team ID to use this entitlement. Without
+        the profile, the launch fails immediately with
+        AMFI -413 "No matching profile found", which is what we
+        hit on the first 1.5.0 push.
+
+        To re-enable later:
+          1. Apple Developer portal → Certificates / Identifiers
+             / Profiles → create a "Developer ID" provisioning
+             profile that includes the `usernotifications
+             .time-sensitive` capability.
+          2. Download the .provisionprofile.
+          3. Copy it to `Sources/DayPanel/Resources/embedded
+             .provisionprofile` so `build.sh` can ship it inside
+             the .app at `Contents/embedded.provisionprofile`.
+          4. Re-add the key here and rebuild.
+
+        Until then, `interruptionLevel = .timeSensitive` silently
+        downgrades to `.active` — still pops a banner with sound,
+        just doesn't pierce Focus modes.
+    -->
 </dict>
 </plist>

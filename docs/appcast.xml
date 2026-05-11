@@ -5,6 +5,19 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 1.5.1</title>
+      <pubDate>Mon, 11 May 2026 16:48:48 +0000</pubDate>
+      <sparkle:version>25</sparkle:version>
+      <sparkle:shortVersionString>1.5.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Hotfix da 1.5.0: removido entitlement time-sensitive que exigia provisioning profile embutido (AMFI -413, app não abria). Notificações caem para .active (banner + som, sem piercing de Focus mode) até embutirmos o profile. Restante da 1.5.0 (Developer ID, sandbox, Keychain-only) preservado.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.1/Apollo-1.5.1.zip"
+        sparkle:edSignature="bEqQl+Bw3oNjOW0QdQMZfH13OBU90Uk5JaqlTonYyKVFMJwSzVvS8ldgR4CmSSPgxKSfX49kbtVMoKqmTSdOAA=="
+        length="37607949"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 1.5.0</title>
       <pubDate>Mon, 11 May 2026 16:16:13 +0000</pubDate>
       <sparkle:version>24</sparkle:version>
