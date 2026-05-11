@@ -1059,7 +1059,7 @@ struct TaskRowView: View, Equatable {
             Button { showStatusMenu.toggle() } label: { pill }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
-                .popover(isPresented: $showStatusMenu, arrowEdge: .bottom) {
+                .popover(isPresented: $showStatusMenu, arrowEdge: .top) {
                     StatusPickerPopover(
                         statuses:          appState.availableStatuses,
                         currentStatusName: task.status

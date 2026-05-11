@@ -572,18 +572,20 @@ struct TaskCollectionView: NSViewRepresentable {
             popover.contentViewController = host
 
             // Anchor reasoning: the pill's NSView is flipped
-            // (isFlipped = true), so the bounds rect we pass has
-            // its origin at the pill's TOP-LEFT in flipped space.
-            // NSPopover converts this to screen coords internally.
-            // To make the popover appear directly BELOW the pill
-            // (matching the SwiftUI row's `arrowEdge: .bottom`
-            // semantic — arrow at top of popover, popover under
-            // anchor), we ask for `.minY` of the source rect
-            // which, after the framework's flip-aware conversion,
-            // maps to the visible BOTTOM edge of the pill.
+            // (isFlipped = true). NSPopover internally converts to
+            // screen coords using the view's `isFlipped` state.
+            // Empirically (matching what other macOS apps do for
+            // dropdown-style pickers), `.maxY` puts the popover
+            // BELOW the anchor — matching the SwiftUI sibling's
+            // `arrowEdge: .top` setting (arrow at TOP of the
+            // popover bubble, popover under the source). The
+            // system still auto-flips to ABOVE when the row is so
+            // close to the window bottom that the dropdown
+            // wouldn't fit downward, which is the desired macOS
+            // behavior.
             popover.show(relativeTo: anchorView.bounds,
                          of: anchorView,
-                         preferredEdge: .minY)
+                         preferredEdge: .maxY)
             statusPickerPopover = popover
         }
 

@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.4.2</title>
-      <pubDate>Mon, 11 May 2026 04:35:25 +0000</pubDate>
-      <sparkle:version>13</sparkle:version>
-      <sparkle:shortVersionString>1.4.2</sparkle:shortVersionString>
+      <title>Apollo 1.4.3</title>
+      <pubDate>Mon, 11 May 2026 04:48:29 +0000</pubDate>
+      <sparkle:version>14</sparkle:version>
+      <sparkle:shortVersionString>1.4.3</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Banner persistente in-app quando há nova versão (não-modal, fica até instalar/dispensar), notificação do sistema na descoberta, intervalo de checagem reduzido para 1h.]]></description>
+      <description><![CDATA[Status picker agora abre para baixo por padrão (macOS auto-flipa para cima só quando a linha tá no fim da janela).]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.2/Apollo-1.4.2.zip"
-        sparkle:edSignature="PblCRSv+XCaBGqXH1xw/u8uwhf9OWbtcMlZnh4OG11wU1rASLoTBoivcEYiPkWN0PsbHxui8od9GCbmfIfEADg=="
-        length="37331692"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.3/Apollo-1.4.3.zip"
+        sparkle:edSignature="RK9q6X0s3vvF/b9k2oid5W5Lb7JCqcUTwewBCgeHQ1JBlYVKXBdAXmEFjfhQ6sPdxvi04jPJRdD/QL+eY6ooCQ=="
+        length="37331877"
         type="application/octet-stream" />
     </item>
   </channel>

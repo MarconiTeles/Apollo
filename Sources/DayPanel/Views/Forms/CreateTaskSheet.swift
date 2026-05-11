@@ -622,7 +622,7 @@ struct CreateTaskSheet: View {
                 Button { showStatusPicker.toggle() } label: { statusPillLabel }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
-                    .popover(isPresented: $showStatusPicker, arrowEdge: .bottom) {
+                    .popover(isPresented: $showStatusPicker, arrowEdge: .top) {
                         StatusPickerPopover(
                             statuses:          appState.availableStatuses,
                             currentStatusName: statusName
