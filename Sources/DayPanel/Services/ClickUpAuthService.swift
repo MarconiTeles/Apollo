@@ -11,8 +11,6 @@ final class ClickUpAuthService: ObservableObject {
 
     var accessToken: String? { KeychainHelper.load(for: KeychainHelper.Keys.clickupToken) }
 
-    private var pollingTask: Task<Void, Never>?
-
     func checkAuthState() {
         isConnected   = accessToken != nil
         workspaceName = KeychainHelper.load(for: KeychainHelper.Keys.clickupWorkspace)
@@ -20,59 +18,62 @@ final class ClickUpAuthService: ObservableObject {
         userId        = KeychainHelper.load(for: KeychainHelper.Keys.clickupUserId).flatMap { Int($0) }
     }
 
-    // MARK: - One-button connection flow
+    // MARK: - Connection flow
     //
-    // 1. Opens ClickUp's API-token page in the browser
-    // 2. Watches the clipboard for ~2 minutes
-    // 3. When the user clicks "Copiar" next to their token (pk_…),
-    //    we detect it automatically and connect — no manual paste needed.
+    // Previously this method polled `NSPasteboard.general` every
+    // 0.5s for 2 minutes hunting for a `pk_…` string. That was a
+    // security smell on two axes:
+    //
+    //   1. ANY string copied during the polling window that
+    //      matched the prefix would be silently consumed and
+    //      saved as the user's token — including a malicious
+    //      `pk_…` placed in the clipboard by another app /
+    //      webpage with a different user's credentials, or even
+    //      attacker-chosen "tokens" used to phish.
+    //   2. Pasteboard polling is opaque to the user — they have
+    //      no idea Apollo is reading their clipboard.
+    //
+    // The new flow is explicit:
+    //
+    //   - `startConnection()` opens ClickUp's tokens page and
+    //     flips `isWaitingForToken = true`. That's it — no
+    //     background polling, no clipboard reads.
+    //   - The Settings UI surfaces a paste field while
+    //     `isWaitingForToken` is true. User pastes the token and
+    //     hits Confirm, which calls `submitToken(_:)`.
+    //   - `submitToken` validates the prefix + length, saves to
+    //     Keychain, fetches the profile, and clears the waiting
+    //     state.
 
     func startConnection() {
         connectionError   = nil
         isWaitingForToken = true
-
         NSWorkspace.shared.open(URL(string: "https://app.clickup.com/settings/apps")!)
-
-        pollingTask?.cancel()
-        let pasteboard    = NSPasteboard.general
-        let startingCount = pasteboard.changeCount
-
-        pollingTask = Task { [weak self] in
-            var lastCount = startingCount
-
-            for _ in 0..<240 {                       // 240 × 0.5s = 120s window
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                if Task.isCancelled { return }
-
-                let currentCount = pasteboard.changeCount
-                if currentCount != lastCount {
-                    lastCount = currentCount
-                    if let raw = pasteboard.string(forType: .string) {
-                        let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if candidate.hasPrefix("pk_") && candidate.count >= 30 {
-                            await self?.completeConnection(token: candidate)
-                            return
-                        }
-                    }
-                }
-            }
-
-            // Timed out — user never copied a token
-            await MainActor.run {
-                guard let self else { return }
-                if self.isWaitingForToken {
-                    self.isWaitingForToken = false
-                    self.connectionError   = "Tempo esgotado. Tente novamente."
-                }
-            }
-        }
     }
 
     func cancelConnection() {
-        pollingTask?.cancel()
-        pollingTask       = nil
         isWaitingForToken = false
         connectionError   = nil
+    }
+
+    /// Called by the Settings paste field's Confirm button.
+    /// Validates the token shape before saving so a typo or a
+    /// wrong-pasted-string doesn't end up in the Keychain.
+    /// Returns `true` on a structurally valid token; `false`
+    /// surfaces an inline `connectionError`.
+    @discardableResult
+    func submitToken(_ raw: String) -> Bool {
+        let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // ClickUp personal tokens always start with `pk_` and
+        // are typically ~50 chars (prefix + workspace id +
+        // random suffix). 30 chars is a generous lower bound.
+        guard candidate.hasPrefix("pk_"), candidate.count >= 30 else {
+            connectionError = "Token inválido. Tem que começar com 'pk_'."
+            return false
+        }
+        connectionError = nil
+        Task { await self.completeConnection(token: candidate) }
+        return true
     }
 
     private func completeConnection(token: String) async {

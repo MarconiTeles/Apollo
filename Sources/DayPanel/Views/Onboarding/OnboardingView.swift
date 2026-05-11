@@ -19,6 +19,12 @@ struct OnboardingView: View {
     @State private var step:           Step = .welcome
     @State private var showListPicker  = false
 
+    /// Local buffer for the pasted ClickUp token while the user
+    /// is confirming. Replaces the legacy clipboard-polling
+    /// flow — the service no longer reads the pasteboard
+    /// implicitly, so the UI owns the typed value.
+    @State private var pastedClickUpToken: String = ""
+
     enum Step: Int, CaseIterable {
         // AI / aiPreview steps removed per design — the
         // wizard no longer pitches the optional AI feature
@@ -82,6 +88,17 @@ struct OnboardingView: View {
     private var clickupReady:  Bool { appState.clickUpAuthService.isConnected }
     private var listReady:     Bool {
         KeychainHelper.load(for: KeychainHelper.Keys.clickupListId) != nil
+    }
+
+    /// Hand the typed token to the auth service. On success the
+    /// service flips `isConnected` (the step then advances). On
+    /// failure `connectionError` is set and the field stays
+    /// populated so the user can fix and retry.
+    private func confirmPastedClickUpToken() {
+        let raw = pastedClickUpToken
+        if appState.clickUpAuthService.submitToken(raw) {
+            pastedClickUpToken = ""
+        }
     }
 
     var body: some View {
@@ -309,19 +326,28 @@ struct OnboardingView: View {
             bodyText: "Suas tarefas vêm do ClickUp. Vamos abrir uma página onde você gera um token pessoal e cola aqui — leva uns 30 segundos."
         ) {
             if appState.clickUpAuthService.isWaitingForToken {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Aguardando você copiar o token no navegador…")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Cole o token do ClickUp:")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        SecureField("pk_…", text: $pastedClickUpToken)
+                            .textFieldStyle(.roundedBorder)
+                            .focusEffectDisabled()
+                            .onSubmit { confirmPastedClickUpToken() }
+                        Button("Conectar") { confirmPastedClickUpToken() }
+                            .keyboardShortcut(.return, modifiers: [])
+                            .disabled(pastedClickUpToken
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                                .isEmpty)
+                    }
+                    Button {
+                        appState.clickUpAuthService.cancelConnection()
+                    } label: {
+                        Text("Cancelar").font(.caption.weight(.medium)).foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain).focusEffectDisabled()
                 }
-                Button {
-                    appState.clickUpAuthService.cancelConnection()
-                } label: {
-                    Text("Cancelar").font(.caption.weight(.medium)).foregroundStyle(.red)
-                }
-                .buttonStyle(.plain).focusEffectDisabled()
-                .padding(.top, 6)
             } else {
                 actionButton("Conectar com ClickUp",
                              icon: "link",

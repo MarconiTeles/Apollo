@@ -74,6 +74,18 @@ final class GoogleAuthService: ObservableObject {
     private var listener: NWListener?
     private var pkceVerifier: String = ""
 
+    /// Per-flow CSRF token. Generated fresh by `connect()` and
+    /// sent to Google as the OAuth `state` parameter; the
+    /// localhost redirect listener echoes whatever Google
+    /// reflects back, and we MUST refuse any callback whose
+    /// `state` value doesn't match this — otherwise an attacker
+    /// on the same machine (or a malicious page that knows the
+    /// listener port) can race the real callback by hitting
+    /// `http://127.0.0.1:PORT/?code=…` with their own code
+    /// and trick the app into exchanging it for tokens scoped
+    /// to the attacker's account. Cleared after each flow ends.
+    private var expectedState: String = ""
+
     /// `calendar.events` grants both READ and WRITE access
     /// to events on every calendar the user has access to —
     /// including the primary one Apollo lists from. Avoids
@@ -126,6 +138,11 @@ final class GoogleAuthService: ObservableObject {
             self.pkceVerifier = verifier
             let challenge = Self.pkceChallenge(for: verifier)
 
+            // CSRF token — bound to this flow only. The listener
+            // refuses any redirect whose `state` doesn't match.
+            let state = Self.makeOAuthState()
+            self.expectedState = state
+
             // Spin up a one-shot localhost listener BEFORE
             // opening the browser so we don't lose the
             // redirect to a race condition.
@@ -144,6 +161,7 @@ final class GoogleAuthService: ObservableObject {
                 .init(name: "code_challenge_method", value: "S256"),
                 .init(name: "access_type",           value: "offline"),
                 .init(name: "prompt",                value: "consent"),
+                .init(name: "state",                 value: state),
             ]
             guard let url = components.url else {
                 throw AuthError.message("URL de autorização inválida")
@@ -154,6 +172,9 @@ final class GoogleAuthService: ObservableObject {
             // Wait for the redirect — captured by the listener.
             let code = try await waitForCode()
             stopListener()
+            // Single-use — flush so a stray late callback can't
+            // re-use the same nonce in a subsequent connect.
+            self.expectedState = ""
 
             // Exchange code for tokens.
             try await exchangeCode(
@@ -171,6 +192,10 @@ final class GoogleAuthService: ObservableObject {
             }
         } catch {
             stopListener()
+            // Don't let a half-finished flow leave the nonce in
+            // place — that would let a SECOND attempted flow
+            // accept a callback from the first.
+            self.expectedState = ""
             let msg = (error as? AuthError)?.message ?? error.localizedDescription
             publish { self.lastError = msg }
         }
@@ -417,7 +442,10 @@ final class GoogleAuthService: ObservableObject {
             let firstLine = request.components(separatedBy: "\r\n").first ?? ""
             // "GET /?code=…&scope=… HTTP/1.1"
             let pathPart = firstLine.components(separatedBy: " ").dropFirst().first ?? ""
-            let codeOrError = Self.extractCode(from: String(pathPart))
+            let codeOrError = Self.extractCode(
+                from: String(pathPart),
+                expectedState: self.expectedState
+            )
 
             // Send a friendly HTML response so the user's
             // browser tab shows a clear "you can close this"
@@ -458,18 +486,46 @@ final class GoogleAuthService: ObservableObject {
         }
     }
 
-    /// Parses the redirect path for `code=` or `error=`.
-    private static func extractCode(from path: String) -> Result<String, Error> {
+    /// Parses the redirect path for `code=` or `error=`, AND
+    /// enforces that the `state` query parameter matches the
+    /// nonce we generated at the start of the flow. Without the
+    /// state check, any process on the same machine that knows
+    /// (or guesses) the listener port can race a forged
+    /// `http://127.0.0.1:PORT/?code=<attacker>` to the listener
+    /// and trick the app into exchanging it for tokens scoped
+    /// to the attacker's Google account.
+    private static func extractCode(from path: String,
+                                    expectedState: String) -> Result<String, Error> {
         guard let comp = URLComponents(string: "http://localhost\(path)") else {
             return .failure(AuthError.message("Redirect malformado"))
         }
         if let err = comp.queryItems?.first(where: { $0.name == "error" })?.value {
             return .failure(AuthError.message("Google retornou erro: \(err)"))
         }
+        // CSRF: refuse any redirect whose state doesn't match
+        // the nonce stored at the start of this flow. Empty
+        // `expectedState` means no flow is in progress — also
+        // a reject.
+        let receivedState = comp.queryItems?.first(where: { $0.name == "state" })?.value ?? ""
+        guard !expectedState.isEmpty, receivedState == expectedState else {
+            return .failure(AuthError.message(
+                "Redirect rejeitado: state inválido (possível ataque CSRF)."
+            ))
+        }
         if let code = comp.queryItems?.first(where: { $0.name == "code" })?.value {
             return .success(code)
         }
         return .failure(AuthError.message("Redirect sem código"))
+    }
+
+    /// 32-byte CSPRNG nonce, URL-safe base64. Same shape +
+    /// entropy as the PKCE verifier — Google accepts up to 256
+    /// chars on `state`, and 32 random bytes is way past any
+    /// practical collision / guessing threshold.
+    private static func makeOAuthState() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return Data(bytes).base64URLEncoded()
     }
 
     // MARK: - PKCE helpers

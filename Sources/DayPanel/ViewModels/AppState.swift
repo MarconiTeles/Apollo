@@ -1571,7 +1571,7 @@ final class AppState: ObservableObject {
                 fetched = try await googleCalendar.listEvents(from: start, to: end)
             } catch {
                 hadError = true
-                print("[DayPanel] Google Calendar list failed: \(error)")
+                Log.error("Google Calendar list failed: \(error)")
             }
         }
         if cuConfigured {
@@ -1587,7 +1587,7 @@ final class AppState: ObservableObject {
                     availableMembers  = m
                     availableTags     = tg
                 }
-            } catch { hadError = true; print("[DayPanel] ClickUp: \(error)") }
+            } catch { hadError = true; Log.error("ClickUp: \(error)") }
         }
 
         let now = Date()
@@ -2064,7 +2064,7 @@ final class AppState: ObservableObject {
                        message:  api.userFacingMessage,
                        taskId:   task.id)
         } catch {
-            print("[DayPanel] patchTask: \(error)")
+            Log.error("patchTask: \(error)")
             await MainActor.run {
                 if let idx = tasks.firstIndex(where: { $0.id == task.id }) { tasks[idx] = original }
             }
@@ -2274,7 +2274,7 @@ final class AppState: ObservableObject {
                        message:  api.userFacingMessage,
                        taskId:   task.id)
         } catch {
-            print("[DayPanel] updateTaskStatus: \(error)")
+            Log.error("updateTaskStatus: \(error)")
             // Permanent — roll back the optimistic state.
             await MainActor.run {
                 if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
@@ -2334,7 +2334,7 @@ final class AppState: ObservableObject {
                        message:  api.userFacingMessage,
                        taskId:   task.id)
         } catch {
-            print("[DayPanel] completeTask: \(error)")
+            Log.error("completeTask: \(error)")
             // Roll back optimistic conclusion.
             await MainActor.run {
                 if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
@@ -2370,7 +2370,7 @@ final class AppState: ObservableObject {
                        message: task.notificationDetails,
                        taskId: task.id)
         } catch {
-            print("[DayPanel] deleteTask: \(error)")
+            Log.error("deleteTask: \(error)")
             await sync()
         }
     }
@@ -2391,7 +2391,7 @@ final class AppState: ObservableObject {
                        message: task.notificationDetails,
                        taskId: task.id)
         } catch {
-            print("[DayPanel] archiveTask: \(error)")
+            Log.error("archiveTask: \(error)")
         }
     }
 
@@ -2429,7 +2429,7 @@ final class AppState: ObservableObject {
                        message: task.notificationDetails,
                        taskId: task.id)
         } catch {
-            print("[DayPanel] moveTaskToList: \(error)")
+            Log.error("moveTaskToList: \(error)")
         }
     }
 
@@ -2463,7 +2463,7 @@ final class AppState: ObservableObject {
             }
             return sub
         } catch {
-            print("[DayPanel] createSubtask: \(error)")
+            Log.error("createSubtask: \(error)")
             return nil
         }
     }
@@ -2513,7 +2513,7 @@ final class AppState: ObservableObject {
             }
             return updated
         } catch {
-            print("[DayPanel] updateEvent: \(error)")
+            Log.error("updateEvent: \(error)")
             return nil
         }
     }
@@ -2539,7 +2539,7 @@ final class AppState: ObservableObject {
                 newStatus: status
             )
         } catch {
-            print("[DayPanel] respondToEvent (Google): \(error)")
+            Log.error("respondToEvent (Google): \(error)")
             notify(.error,
                    title: "Não consegui atualizar a presença",
                    message: error.localizedDescription)
@@ -2600,7 +2600,7 @@ final class AppState: ObservableObject {
             }
             return false
         } catch {
-            print("[DayPanel] switchList: \(error)")
+            Log.error("switchList: \(error)")
             return false
         }
     }
@@ -2620,7 +2620,7 @@ final class AppState: ObservableObject {
         do {
             return try await cuSvc.getTaskComments(taskId: task.id)
         } catch {
-            print("[DayPanel] loadComments: \(error)")
+            Log.error("loadComments: \(error)")
             return []
         }
     }
@@ -2789,7 +2789,7 @@ final class AppState: ObservableObject {
         do {
             return try await cuSvc.getTaskActivity(id: task.id)
         } catch {
-            print("[DayPanel] loadActivity: \(error)")
+            Log.error("loadActivity: \(error)")
             return []
         }
     }
@@ -2882,7 +2882,7 @@ final class AppState: ObservableObject {
                        taskId:   task.id)
             return result
         } catch {
-            print("[DayPanel] postComment: \(error)")
+            Log.error("postComment: \(error)")
             notifyTask(.error,
                        title:    task.title,
                        subtitle: "Falha ao enviar comentário",
@@ -2897,7 +2897,7 @@ final class AppState: ObservableObject {
             try await cuSvc.deleteTaskComment(commentId: comment.id)
             notify(.info, title: "Comentário excluído")
         } catch {
-            print("[DayPanel] deleteComment: \(error)")
+            Log.error("deleteComment: \(error)")
             notify(.error, title: "Falha ao excluir comentário")
         }
     }
@@ -2928,7 +2928,7 @@ final class AppState: ObservableObject {
                        taskId:   task.id)
             return true
         } catch {
-            print("[DayPanel] uploadCommentAttachment: \(error)")
+            Log.error("uploadCommentAttachment: \(error)")
             notifyTask(.error,
                        title:    task.title,
                        subtitle: "Falha no anexo",
@@ -2948,7 +2948,7 @@ final class AppState: ObservableObject {
             }
             // Reactions are silent — too noisy to surface as toasts.
         } catch {
-            print("[DayPanel] toggleReaction: \(error)")
+            Log.error("toggleReaction: \(error)")
             notify(.error, title: "Falha ao reagir", message: emoji)
         }
     }
@@ -2956,7 +2956,7 @@ final class AppState: ObservableObject {
     func loadReplies(to commentId: String) async -> [CUComment] {
         do { return try await cuSvc.getCommentReplies(commentId: commentId) }
         catch {
-            print("[DayPanel] loadReplies: \(error)")
+            Log.error("loadReplies: \(error)")
             return []
         }
     }
@@ -2969,7 +2969,7 @@ final class AppState: ObservableObject {
             notify(.success, title: "Resposta enviada")
             return result
         } catch {
-            print("[DayPanel] postReply: \(error)")
+            Log.error("postReply: \(error)")
             notify(.error, title: "Falha ao enviar resposta")
             return nil
         }
@@ -3001,7 +3001,7 @@ final class AppState: ObservableObject {
             }
             notify(.success, title: "Evento excluído", message: event.title)
         } catch {
-            print("[DayPanel] deleteEvent: \(error)")
+            Log.error("deleteEvent: \(error)")
             notify(.error,
                    title: "Não foi possível excluir o evento",
                    message: error.localizedDescription)
@@ -3070,7 +3070,7 @@ final class AppState: ObservableObject {
                 await self?.sync()
             }
         } catch {
-            print("[DayPanel] updateEvent: \(error)")
+            Log.error("updateEvent: \(error)")
             notify(.error,
                    title: "Não foi possível salvar",
                    message: error.localizedDescription)
@@ -3248,7 +3248,7 @@ final class AppState: ObservableObject {
             }
             return placeholder
         } catch {
-            print("[DayPanel] createEvent: \(error)")
+            Log.error("createEvent: \(error)")
             notify(.error,
                    title: title,
                    subtitle: "Falha ao criar evento",
@@ -3299,7 +3299,7 @@ final class AppState: ObservableObject {
                        taskId:   task.id)
             return task
         } catch {
-            print("[DayPanel] createTask: \(error)")
+            Log.error("createTask: \(error)")
             notify(.error,
                    title:    title,
                    subtitle: "Falha ao criar tarefa")
@@ -3357,7 +3357,7 @@ final class AppState: ObservableObject {
                        message:  sub.notificationDetails,
                        taskId:   sub.id)
         } catch {
-            print("[DayPanel] createSubtask: \(error)")
+            Log.error("createSubtask: \(error)")
             notify(.error,
                    title:    title,
                    subtitle: "Falha ao criar subtarefa")

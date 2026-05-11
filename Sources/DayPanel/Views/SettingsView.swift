@@ -105,11 +105,13 @@ private struct ClickUpSection: View {
     private var waitingForTokenView: some View {
         VStack(alignment: .leading, spacing: 8) {
             GlassFormRow {
-                ProgressView().controlSize(.small)
+                Image(systemName: "key.viewfinder")
+                    .font(.callout)
+                    .foregroundStyle(Color.accentColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Aguardando token do ClickUp…")
+                    Text("Cole seu token do ClickUp")
                         .font(.subheadline.weight(.medium))
-                    Text("No browser, clique em **Copiar** ao lado do seu token.")
+                    Text("No browser, clique em **Copiar** ao lado do seu token e cole abaixo.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -117,6 +119,39 @@ private struct ClickUpSection: View {
                     .buttonStyle(.plain).focusEffectDisabled()
                     .font(.caption.weight(.medium)).foregroundStyle(.red)
             }
+
+            // Explicit paste field replaces the previous
+            // clipboard-polling flow — Apollo only ever sees the
+            // token the user deliberately pastes here, never
+            // anything else copied during a 2-minute window.
+            HStack(spacing: 8) {
+                SecureField("pk_…", text: $pastedClickUpToken)
+                    .textFieldStyle(.roundedBorder)
+                    .focusEffectDisabled()
+                    .onSubmit { confirmPastedClickUpToken() }
+                Button("Conectar") { confirmPastedClickUpToken() }
+                    .keyboardShortcut(.return, modifiers: [])
+                    .disabled(pastedClickUpToken
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty)
+            }
+
+            if let err = appState.clickUpAuthService.connectionError {
+                GlassWarningRow(err, tint: .red)
+            }
+        }
+    }
+
+    /// Local buffer for the pasted token while the user is
+    /// confirming. Kept here (not in the service) so SwiftUI
+    /// owns the binding and the field clears as soon as the
+    /// submission succeeds.
+    @State private var pastedClickUpToken: String = ""
+
+    private func confirmPastedClickUpToken() {
+        let raw = pastedClickUpToken
+        if appState.clickUpAuthService.submitToken(raw) {
+            pastedClickUpToken = ""
         }
     }
 

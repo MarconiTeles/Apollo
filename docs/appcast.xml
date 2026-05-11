@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.4.8</title>
-      <pubDate>Mon, 11 May 2026 12:04:38 +0000</pubDate>
-      <sparkle:version>19</sparkle:version>
-      <sparkle:shortVersionString>1.4.8</sparkle:shortVersionString>
+      <title>Apollo 1.4.9</title>
+      <pubDate>Mon, 11 May 2026 12:54:37 +0000</pubDate>
+      <sparkle:version>20</sparkle:version>
+      <sparkle:shortVersionString>1.4.9</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Fix comentário com @ aparecia duplicado (ClickUp concatenava comment_text + segments no storage — agora envia só segments). Fix anexos enviados com comentário continuavam aparecendo como linhas separadas — agora agrupados por proximidade temporal (mesmo autor, até 90s após o comentário) já que ClickUp v2 não honra comment_id no upload.]]></description>
+      <description><![CDATA[Endurecimento de segurança: (1) sanitiza filename no multipart de upload contra header injection. (2) OAuth do Google agora valida state nonce no callback (anti-CSRF). (3) Fluxo ClickUp não pollia mais a pasteboard — usuário cola o token explicitamente em campo SecureField. (4) Logs de erro passam por redactor que oculta Bearer/pk_/GOCSPX/access_token antes de chegarem ao Console.app.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.8/Apollo-1.4.8.zip"
-        sparkle:edSignature="368T5p7ZzXsGSLRLcUikip50hwzErVHM1fR2DKQV3zZmsCMp7AfojCHJdxmTGOHd1fEIXhm//dUBBW576+HnDA=="
-        length="37534776"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.9/Apollo-1.4.9.zip"
+        sparkle:edSignature="5c53cPGvCF3QBSS5Euph6EdLCf60y1OyrkgKbaZOz2PfWuEeez8j/7i/xEqCTVO+SHnEnwC9hgvqb/s6diFwBg=="
+        length="37563355"
         type="application/octet-stream" />
     </item>
   </channel>

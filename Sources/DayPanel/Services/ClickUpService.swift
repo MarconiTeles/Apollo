@@ -957,7 +957,21 @@ final class ClickUpService {
         defer { fileURL.stopAccessingSecurityScopedResource() }
 
         let fileData = try Data(contentsOf: fileURL)
-        let filename = fileURL.lastPathComponent
+        // Sanitize the filename before injecting into the
+        // Content-Disposition header. ClickUp lets users name a
+        // file whatever they want, including bytes that would
+        // terminate the header (`\r\n`) or break the parameter
+        // quoting (`"`). Without scrubbing, a filename like
+        // `foo.txt"\r\nX-Injected: 1\r\n` would emit two extra
+        // headers in the multipart body — a textbook
+        // header-injection primitive. We:
+        //   1. Strip all line terminators (\r, \n, \r\n).
+        //   2. Escape inner double-quotes so the parameter
+        //      stays correctly quoted.
+        //   3. Trim leading/trailing whitespace + control bytes.
+        // Same treatment is documented by RFC 7578 for
+        // `Content-Disposition` form-data fields.
+        let filename = Self.safeMultipartFilename(fileURL.lastPathComponent)
         let mime     = mimeType(for: fileURL)
 
         let boundary = "PainelLunar-\(UUID().uuidString)"
@@ -1001,6 +1015,33 @@ final class ClickUpService {
         if let s = json["url"]         as? String, let u = URL(string: s) { return u }
         if let s = json["url_w_query"] as? String, let u = URL(string: s) { return u }
         return nil
+    }
+
+    /// Strip / escape any byte in a filename that could break
+    /// out of the `Content-Disposition: form-data; name="…";
+    /// filename="…"` header. Used by every multipart upload site
+    /// so the same hardening covers task attachments AND any
+    /// future comment-anchored uploads.
+    private static func safeMultipartFilename(_ raw: String) -> String {
+        // 1. Drop CR / LF (and any other Unicode line terminator).
+        let noNewlines = raw.components(separatedBy: .newlines).joined()
+        // 2. Drop ASCII control bytes (0x00..0x1F, 0x7F) that
+        //    would otherwise smuggle through as raw bytes in the
+        //    header. `.controlCharacters` is the Unicode
+        //    category covering exactly these.
+        let noControls = String(
+            noNewlines.unicodeScalars.filter {
+                !CharacterSet.controlCharacters.contains($0)
+            }
+        )
+        // 3. Backslash-escape any remaining double-quote so the
+        //    parameter's surrounding quotes stay balanced.
+        let escaped = noControls.replacingOccurrences(of: "\"", with: "\\\"")
+        // 4. Don't let an empty result happen — most servers
+        //    reject empty filenames anyway, but a defensive
+        //    fallback keeps the multipart well-formed.
+        let trimmed = escaped.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "attachment" : trimmed
     }
 
     private func mimeType(for url: URL) -> String {
