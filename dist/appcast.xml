@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.4.3</title>
-      <pubDate>Mon, 11 May 2026 04:48:29 +0000</pubDate>
-      <sparkle:version>14</sparkle:version>
-      <sparkle:shortVersionString>1.4.3</sparkle:shortVersionString>
+      <title>Apollo 1.4.4</title>
+      <pubDate>Mon, 11 May 2026 10:57:01 +0000</pubDate>
+      <sparkle:version>15</sparkle:version>
+      <sparkle:shortVersionString>1.4.4</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Status picker agora abre para baixo por padrão (macOS auto-flipa para cima só quando a linha tá no fim da janela).]]></description>
+      <description><![CDATA[Spotlight: tarefas indexadas no ⌘Espaço do macOS, click abre direto na detail. Drop de arquivos: arraste do Finder/Mail/Safari pra dentro do form Nova Tarefa para anexar. Fila offline: mudanças feitas sem internet (status, conclusão, título, descrição, prioridade, datas) ficam em fila persistente e sincronizam automaticamente quando a conexão volta — funciona até através de relaunches. Pill 'N pendentes' na toolbar. Mensagens de erro semânticas (auth expirado vs rate limit vs servidor instável).]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.3/Apollo-1.4.3.zip"
-        sparkle:edSignature="RK9q6X0s3vvF/b9k2oid5W5Lb7JCqcUTwewBCgeHQ1JBlYVKXBdAXmEFjfhQ6sPdxvi04jPJRdD/QL+eY6ooCQ=="
-        length="37331877"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.4/Apollo-1.4.4.zip"
+        sparkle:edSignature="rifaQ8ckeM5KK2FQ4FEIgC3x3PKLaDI7iwwT0U6HWVMmJHBWai/ofLswva73W5BcRiwQxbiZa7IMpbr8DKc3Bg=="
+        length="37488414"
         type="application/octet-stream" />
     </item>
   </channel>

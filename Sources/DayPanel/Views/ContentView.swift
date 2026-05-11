@@ -1093,6 +1093,13 @@ struct ContentView: View {
                     .overlay(Capsule().strokeBorder(.orange.opacity(0.3), lineWidth: 0.5))
             }
 
+            // ── Offline queue indicator ──────────────────────────
+            // Renders only when there are pending mutations
+            // waiting on connectivity. Self-hides when empty —
+            // doesn't add toolbar chrome for users who are
+            // always online.
+            OfflineQueueIndicator()
+
             // ── Filtros ───────────────────────────────────────────────────
             // Visible only when ClickUp is connected — otherwise there are
             // no tasks to filter and the button would be a dead end.

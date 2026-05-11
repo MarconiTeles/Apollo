@@ -912,6 +912,21 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Surface a task popup from outside the dashboard — used by
+    /// the Spotlight deep-link, AI agent CREATE_TASK echoes, and
+    /// any other "show task X now" trigger. No-op if the id is
+    /// unknown (the task may not have been fetched yet on a fresh
+    /// launch; the caller can retry after the next sync).
+    func openTask(id: String) {
+        Task { @MainActor in
+            guard let task = tasksById[id] else { return }
+            detailTaskOrigin = .zero
+            withAnimation(.spring(duration: 0.45, bounce: 0.30)) {
+                detailTask = task
+            }
+        }
+    }
+
     func markNotificationRead(_ id: UUID) {
         Task { @MainActor in
             if let idx = notifications.firstIndex(where: { $0.id == id }) {
@@ -1336,7 +1351,23 @@ final class AppState: ObservableObject {
                                 message: "Apollo está offline.")
                 } else if !wasOnline {
                     self.notify(.success, title: "De volta ao online")
-                    Task { await self.sync() }
+                    // Drain the offline queue first so any pending
+                    // mutations land BEFORE the sync fetches fresh
+                    // state — otherwise the sync would overwrite
+                    // the user's local edits with pre-mutation
+                    // server data. Permanent failures fall out via
+                    // the `onPermanentFailure` callback.
+                    Task { @MainActor in
+                        OfflineQueue.shared.drain(
+                            executor: { [weak self] op in
+                                try await self?.replayOfflineOp(op)
+                            },
+                            onPermanentFailure: { [weak self] mut, error in
+                                self?.handleOfflineDrainFailure(mut, error: error)
+                            }
+                        )
+                        await self.sync()
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -1943,6 +1974,42 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Replays a queued offline op against the real services. The
+    /// queue's drain loop hands ops back here in FIFO order and
+    /// expects the call to throw `APIError` on transient failures
+    /// (so the op stays at the head) or any other error on
+    /// permanent failures (so the op is dropped + reported).
+    private func replayOfflineOp(_ op: PendingMutation.Op) async throws {
+        switch op {
+        case .updateTaskStatus(let id, let status):
+            try await cuSvc.updateTaskStatus(id: id, to: status)
+            await MainActor.run { bumpTaskSnapshot(for: id) }
+        case .completeTask(let id):
+            try await cuSvc.completeTask(id: id)
+            await MainActor.run { bumpTaskSnapshot(for: id) }
+        case .patchTaskFields(let id, let fields):
+            let json = fields.mapValues(\.jsonValue)
+            try await cuSvc.updateTask(id: id, fields: json)
+            await MainActor.run { bumpTaskSnapshot(for: id) }
+        }
+    }
+
+    /// Surfaces a queued mutation that the drain loop decided is
+    /// unrecoverable — usually a 401 (the token rotted while
+    /// offline) or a 404 (the task was deleted on another device).
+    /// We notify the user with the underlying APIError's
+    /// human-readable copy so they know which mutation got dropped.
+    private func handleOfflineDrainFailure(_ mut: PendingMutation,
+                                           error: Error) {
+        Task { @MainActor in
+            let api = (error as? APIError)
+            let title = api?.userFacingTitle ?? "Operação descartada"
+            let msg   = api?.userFacingMessage
+                        ?? "Uma mudança em fila foi rejeitada pelo servidor."
+            notify(.warning, title: title, message: msg)
+        }
+    }
+
     /// Patches a task snapshot after a local mutation so the next sync
     /// doesn't fire diff-detection for the user's own change.
     private func bumpTaskSnapshot(for taskId: String) {
@@ -1959,83 +2026,164 @@ final class AppState: ObservableObject {
                            field: String = "alteração",
                            apply local: @escaping (inout CUTask) -> Void,
                            remote:  @escaping () async throws -> Void) async {
-        let online = await MainActor.run { isOnline }
-        guard online else {
-            notify(.warning,
-                   title: "Sem conexão",
-                   message: "A \(field) será aplicada quando a internet voltar.")
-            return
-        }
-
+        // Apply the optimistic mutation unconditionally — the UI
+        // should reflect the user's intent even if the server hop
+        // can't happen yet. We then either fire the remote call
+        // immediately (online), or queue it via `OfflineQueue` so
+        // it replays when connectivity returns.
         let original = task
         await MainActor.run {
             if let idx = tasks.firstIndex(where: { $0.id == task.id }) { local(&tasks[idx]) }
         }
+
+        let online = await MainActor.run { isOnline }
+        guard online else {
+            // Caller must use `patchTaskFields` to get true offline
+            // queueing — `patchTask` with an opaque closure can't
+            // be serialized for replay. We keep the optimistic
+            // mutation visible and flag the limitation so the user
+            // knows the change won't sync until they're back online
+            // AND the app is running.
+            notifyTask(.warning,
+                       title:    task.title,
+                       subtitle: "Salva localmente",
+                       message:  "Reabra com internet pra sincronizar a \(field).",
+                       taskId:   task.id)
+            return
+        }
         do {
             try await remote()
             await MainActor.run { bumpTaskSnapshot(for: task.id) }
+        } catch let api as APIError where api.isTransient {
+            // Transient → keep the optimistic state and surface
+            // the offline-style toast (the actual queue replay is
+            // done by callers that route through `patchTaskFields`).
+            notifyTask(.info,
+                       title:    task.title,
+                       subtitle: api.userFacingTitle,
+                       message:  api.userFacingMessage,
+                       taskId:   task.id)
         } catch {
             print("[DayPanel] patchTask: \(error)")
             await MainActor.run {
                 if let idx = tasks.firstIndex(where: { $0.id == task.id }) { tasks[idx] = original }
             }
+            let title = (error as? APIError)?.userFacingTitle ?? "Falha ao salvar \(field)"
+            let msg   = (error as? APIError)?.userFacingMessage ?? task.notificationDetails
             notifyTask(.error,
                        title:    task.title,
-                       subtitle: "Falha ao salvar \(field)",
-                       message:  task.notificationDetails,
+                       subtitle: title,
+                       message:  msg,
+                       taskId:   task.id)
+        }
+    }
+
+    /// Offline-aware structured variant of `patchTask`. Use this
+    /// whenever the patch can be expressed as a flat `[String: Any]`
+    /// payload against `cuSvc.updateTask(id:fields:)` — it lets the
+    /// OfflineQueue serialize and replay the mutation when
+    /// connectivity returns, even across app restarts.
+    private func patchTaskFields(_ task: CUTask,
+                                 field: String,
+                                 fields: [String: Any],
+                                 apply local: @escaping (inout CUTask) -> Void) async {
+        let original = task
+        await MainActor.run {
+            if let idx = tasks.firstIndex(where: { $0.id == task.id }) { local(&tasks[idx]) }
+        }
+
+        let online = await MainActor.run { isOnline }
+        let queuePayload = fields.mapValues(PlainValue.from)
+
+        guard online else {
+            await OfflineQueue.shared.enqueue(
+                .patchTaskFields(taskId: task.id, fields: queuePayload),
+                originatingFromOfflineState: true
+            )
+            notifyTask(.info,
+                       title:    task.title,
+                       subtitle: "Na fila offline",
+                       message:  "A \(field) sincroniza quando a internet voltar.",
+                       taskId:   task.id)
+            return
+        }
+        do {
+            try await cuSvc.updateTask(id: task.id, fields: fields)
+            await MainActor.run { bumpTaskSnapshot(for: task.id) }
+        } catch let api as APIError where api.isTransient {
+            // Server-flaky or rate-limited → push onto queue and
+            // let the next reconnect drain attempt it again.
+            await OfflineQueue.shared.enqueue(
+                .patchTaskFields(taskId: task.id, fields: queuePayload)
+            )
+            notifyTask(.info,
+                       title:    task.title,
+                       subtitle: api.userFacingTitle,
+                       message:  api.userFacingMessage,
+                       taskId:   task.id)
+        } catch {
+            await MainActor.run {
+                if let idx = tasks.firstIndex(where: { $0.id == task.id }) { tasks[idx] = original }
+            }
+            let title = (error as? APIError)?.userFacingTitle ?? "Falha ao salvar \(field)"
+            let msg   = (error as? APIError)?.userFacingMessage ?? task.notificationDetails
+            notifyTask(.error,
+                       title:    task.title,
+                       subtitle: title,
+                       message:  msg,
                        taskId:   task.id)
         }
     }
 
     func updateTaskTitle(_ task: CUTask, to title: String) async {
         guard title != task.title, !title.isEmpty else { return }
-        await patchTask(task, field: "título",
-            apply: { $0.title = title },
-            remote: { try await self.cuSvc.updateTask(id: task.id, fields: ["name": title]) })
+        // `patchTaskFields` (vs `patchTask`) routes through the
+        // offline queue when there's no connectivity, so a title
+        // edit made on the subway survives all the way to the
+        // server once we're back online.
+        await patchTaskFields(task, field: "título",
+            fields: ["name": title],
+            apply: { $0.title = title })
     }
 
     func updateTaskDescription(_ task: CUTask, to description: String) async {
         guard description != (task.description ?? "") else { return }
-        await patchTask(task, field: "descrição",
-            apply: { $0.description = description.isEmpty ? nil : description },
-            remote: { try await self.cuSvc.updateTask(id: task.id, fields: ["description": description]) })
+        await patchTaskFields(task, field: "descrição",
+            fields: ["description": description],
+            apply: { $0.description = description.isEmpty ? nil : description })
     }
 
     func updateTaskPriority(_ task: CUTask, to priority: Int) async {
         guard priority != task.priority else { return }
-        await patchTask(task, field: "prioridade",
-            apply: { $0.priority = priority },
-            remote: { try await self.cuSvc.updateTask(id: task.id, fields: ["priority": priority]) })
+        await patchTaskFields(task, field: "prioridade",
+            fields: ["priority": priority],
+            apply: { $0.priority = priority })
     }
 
     func updateTaskStartDate(_ task: CUTask, to date: Date?) async {
-        await patchTask(task, field: "data de início",
-            apply: { $0.startDate = date },
-            remote: {
-                var fields: [String: Any] = [:]
-                if let date {
-                    fields["start_date"] = Int(date.timeIntervalSince1970 * 1000)
-                    fields["start_date_time"] = true
-                } else {
-                    fields["start_date"] = NSNull()
-                }
-                try await self.cuSvc.updateTask(id: task.id, fields: fields)
-            })
+        var fields: [String: Any] = [:]
+        if let date {
+            fields["start_date"] = Int(date.timeIntervalSince1970 * 1000)
+            fields["start_date_time"] = true
+        } else {
+            fields["start_date"] = NSNull()
+        }
+        await patchTaskFields(task, field: "data de início",
+            fields: fields,
+            apply: { $0.startDate = date })
     }
 
     func updateTaskDueDate(_ task: CUTask, to date: Date?) async {
-        await patchTask(task, field: "data de vencimento",
-            apply: { $0.dueDate = date },
-            remote: {
-                var fields: [String: Any] = [:]
-                if let date {
-                    fields["due_date"] = Int(date.timeIntervalSince1970 * 1000)
-                    fields["due_date_time"] = true
-                } else {
-                    fields["due_date"] = NSNull()
-                }
-                try await self.cuSvc.updateTask(id: task.id, fields: fields)
-            })
+        var fields: [String: Any] = [:]
+        if let date {
+            fields["due_date"] = Int(date.timeIntervalSince1970 * 1000)
+            fields["due_date_time"] = true
+        } else {
+            fields["due_date"] = NSNull()
+        }
+        await patchTaskFields(task, field: "data de vencimento",
+            fields: fields,
+            apply: { $0.dueDate = date })
     }
 
     func updateTaskAssignees(_ task: CUTask, to newIds: Set<Int>) async {
@@ -2077,14 +2225,9 @@ final class AppState: ObservableObject {
     }
 
     func updateTaskStatus(_ task: CUTask, to status: CUStatus) async {
-        let online = await MainActor.run { isOnline }
-        guard online else {
-            notify(.warning, title: "Sem conexão",
-                   message: "A mudança de status será aplicada quando a internet voltar.")
-            return
-        }
-
-        // Optimistic update
+        // Optimistic state lands immediately — the UI shouldn't
+        // wait for the server even when we're online.
+        let original = task
         await MainActor.run {
             if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
                 tasks[idx].status      = status.status
@@ -2093,61 +2236,119 @@ final class AppState: ObservableObject {
             }
         }
 
+        let online = await MainActor.run { isOnline }
+        guard online else {
+            // No network → push onto durable queue (survives
+            // relaunch). When `NetworkMonitor.isOnline` flips back,
+            // the reconnect handler drains every queued op in FIFO
+            // order via `OfflineQueue.shared.drain(executor:)`.
+            await OfflineQueue.shared.enqueue(
+                .updateTaskStatus(taskId: task.id, status: status.status),
+                originatingFromOfflineState: true
+            )
+            notifyTask(.info,
+                       title:    task.title,
+                       subtitle: "Status na fila offline",
+                       message:  "\(original.status.uppercased()) → \(status.status.uppercased()) sincroniza quando a internet voltar.",
+                       taskId:   task.id)
+            return
+        }
+
         do {
             try await cuSvc.updateTaskStatus(id: task.id, to: status.status)
             await MainActor.run { bumpTaskSnapshot(for: task.id) }
             notifyTask(.success,
                        title:    task.title,
                        subtitle: "Status atualizado",
-                       message:  "\(task.status.uppercased()) → \(status.status.uppercased())"
+                       message:  "\(original.status.uppercased()) → \(status.status.uppercased())"
                                  + ((1...4).contains(task.priority) ? " · \(task.priorityLabel)" : ""),
+                       taskId:   task.id)
+        } catch let api as APIError where api.isTransient {
+            // Transient — keep the optimistic state and queue.
+            await OfflineQueue.shared.enqueue(
+                .updateTaskStatus(taskId: task.id, status: status.status)
+            )
+            notifyTask(.info,
+                       title:    task.title,
+                       subtitle: api.userFacingTitle,
+                       message:  api.userFacingMessage,
                        taskId:   task.id)
         } catch {
             print("[DayPanel] updateTaskStatus: \(error)")
-            // Rollback on error
+            // Permanent — roll back the optimistic state.
             await MainActor.run {
                 if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
-                    tasks[idx].status      = task.status
-                    tasks[idx].statusColor = task.statusColor
-                    tasks[idx].isCompleted = task.isCompleted
+                    tasks[idx].status      = original.status
+                    tasks[idx].statusColor = original.statusColor
+                    tasks[idx].isCompleted = original.isCompleted
                 }
             }
+            let title = (error as? APIError)?.userFacingTitle ?? "Falha ao mudar status"
+            let msg   = (error as? APIError)?.userFacingMessage ?? original.notificationDetails
             notifyTask(.error,
                        title:    task.title,
-                       subtitle: "Falha ao mudar status",
-                       message:  task.notificationDetails,
+                       subtitle: title,
+                       message:  msg,
                        taskId:   task.id)
         }
     }
 
     func completeTask(_ task: CUTask) async {
+        // Optimistic mark-complete lands first, independent of
+        // connectivity.
+        await MainActor.run {
+            if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
+                tasks[idx].isCompleted = true
+                tasks[idx].status      = "complete"
+                tasks[idx].statusColor = "#6BC950"
+            }
+        }
+
         let online = await MainActor.run { isOnline }
         guard online else {
-            notify(.warning, title: "Sem conexão",
-                   message: "A conclusão será aplicada quando a internet voltar.")
+            await OfflineQueue.shared.enqueue(
+                .completeTask(taskId: task.id),
+                originatingFromOfflineState: true
+            )
+            notifyTask(.info,
+                       title:    task.title,
+                       subtitle: "Conclusão na fila offline",
+                       message:  "Sincroniza quando a internet voltar.",
+                       taskId:   task.id)
             return
         }
+
         do {
             try await cuSvc.completeTask(id: task.id)
-            await MainActor.run {
-                if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
-                    tasks[idx].isCompleted = true
-                    tasks[idx].status      = "complete"
-                    tasks[idx].statusColor = "#6BC950"
-                }
-                bumpTaskSnapshot(for: task.id)
-            }
+            await MainActor.run { bumpTaskSnapshot(for: task.id) }
             notifyTask(.success,
                        title:    task.title,
                        subtitle: "Tarefa concluída",
                        message:  task.notificationDetails,
                        taskId:   task.id)
+        } catch let api as APIError where api.isTransient {
+            await OfflineQueue.shared.enqueue(.completeTask(taskId: task.id))
+            notifyTask(.info,
+                       title:    task.title,
+                       subtitle: api.userFacingTitle,
+                       message:  api.userFacingMessage,
+                       taskId:   task.id)
         } catch {
             print("[DayPanel] completeTask: \(error)")
+            // Roll back optimistic conclusion.
+            await MainActor.run {
+                if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
+                    tasks[idx].isCompleted = task.isCompleted
+                    tasks[idx].status      = task.status
+                    tasks[idx].statusColor = task.statusColor
+                }
+            }
+            let title = (error as? APIError)?.userFacingTitle ?? "Falha ao concluir tarefa"
+            let msg   = (error as? APIError)?.userFacingMessage ?? task.notificationDetails
             notifyTask(.error,
                        title:    task.title,
-                       subtitle: "Falha ao concluir tarefa",
-                       message:  task.notificationDetails,
+                       subtitle: title,
+                       message:  msg,
                        taskId:   task.id)
         }
     }

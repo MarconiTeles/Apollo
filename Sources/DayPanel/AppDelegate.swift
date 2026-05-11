@@ -3,6 +3,7 @@ import SwiftUI
 import Combine
 import Sparkle
 import UserNotifications
+import CoreSpotlight
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -100,6 +101,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover:    NSPopover?
     private var cancellables = Set<AnyCancellable>()
 
+    /// Mirrors `AppState.tasksById` into the macOS Spotlight index
+    /// so Cmd+Space hits surface tasks as first-class results.
+    /// Attached on launch, debounces 600ms internally to coalesce
+    /// optimistic-update bursts.
+    private lazy var spotlightIndexer = SpotlightIndexer()
+
     // MARK: - Launch
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -128,6 +135,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Task { await appState.initialize() }
+
+        // Subscribe the Spotlight indexer to tasks. Has to happen
+        // after AppState exists; the indexer debounces internally
+        // so it's safe to attach before the first sync completes.
+        spotlightIndexer.attach(to: appState)
 
         // Dev / "ative o onboarding" hook: when this
         // UserDefaults flag is set on the next launch, fire
@@ -180,6 +192,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         !appState.menuBarMode
+    }
+
+    // MARK: - Spotlight handoff
+
+    /// Called when macOS hands off an `NSUserActivity` to Apollo —
+    /// the path Spotlight uses when the user clicks a task in the
+    /// Cmd+Space results, and the same channel Handoff /
+    /// Continuity would use. We only act on
+    /// `CSSearchableItemActionType`; the unique identifier is the
+    /// task id, which we hand to `AppState.openTask(id:)` to pop
+    /// the task detail.
+    func application(_ application: NSApplication,
+                     continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([NSUserActivityRestoring]) -> Void)
+    -> Bool {
+        guard userActivity.activityType == CSSearchableItemActionType,
+              let taskId = userActivity.userInfo?[CSSearchableItemActivityIdentifier]
+                as? String
+        else {
+            return false
+        }
+        // Ensure the window is visible — if the user clicked the
+        // Spotlight hit while Apollo was in menu-bar mode the
+        // popup needs to actually appear. `enableWindowMode()` is
+        // safe to call whether or not the window already exists.
+        if appState.menuBarMode {
+            popover?.performClose(nil)
+        } else {
+            window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        appState.openTask(id: taskId)
+        return true
     }
 
     // MARK: - Main menu

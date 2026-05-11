@@ -156,7 +156,7 @@ final class ClickUpService {
     }
 
     func completeTask(id: String) async throws {
-        guard let token else { throw CUError.notConfigured }
+        guard let token else { throw APIError.notConfigured }
 
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)")!)
         req.httpMethod = "PUT"
@@ -164,7 +164,7 @@ final class ClickUpService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["status": "complete"])
 
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await sendClassified(req)
     }
 
     func updateTaskStatus(id: String, to status: String) async throws {
@@ -671,13 +671,20 @@ final class ClickUpService {
     //   start_date, due_date (+ start_date_time / due_date_time),
     //   assignees: { add: [Int], rem: [Int] }
     func updateTask(id: String, fields: [String: Any]) async throws {
-        guard let token else { throw CUError.notConfigured }
+        guard let token else { throw APIError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)")!)
         req.httpMethod = "PUT"
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: fields)
-        _ = try await URLSession.shared.data(for: req)
+        // Routes through `sendClassified` so the offline queue + UI
+        // recovery layer see a typed `APIError` for status changes,
+        // title/description/priority/date edits, and any other
+        // patch the dashboard sends through here. The other API
+        // methods below still throw `CUError` until they're
+        // migrated; the queue only drains operations that flow
+        // through this path.
+        _ = try await sendClassified(req)
     }
 
     // Tags use a separate endpoint per add/remove
@@ -1580,6 +1587,37 @@ final class ClickUpService {
     }
 
     enum CUError: Error { case notConfigured, parse }
+
+    /// Send a request and classify the response into the semantic
+    /// `APIError` taxonomy. Use for mutations that benefit from the
+    /// offline queue / recovery banner — the queue inspects the
+    /// thrown error and decides whether to retry or surface to the
+    /// user. Existing methods that just `_ = try await URLSession`
+    /// can be migrated incrementally; throwing `CUError` from them
+    /// remains the legacy path until they're refactored.
+    func sendClassified(_ req: URLRequest) async throws -> Data {
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            if let err = APIError.classify(response: response,
+                                           data: data,
+                                           thrown: nil) {
+                throw err
+            }
+            return data
+        } catch let apiErr as APIError {
+            throw apiErr
+        } catch {
+            // Anything URLSession threw — likely a URLError. Hand
+            // off to the classifier which puts URLErrors into
+            // `.offline(...)`.
+            if let cls = APIError.classify(response: nil,
+                                           data: nil,
+                                           thrown: error) {
+                throw cls
+            }
+            throw error
+        }
+    }
 }
 
 /// Streams URLSession upload progress (0.0 → 1.0) back to the caller.

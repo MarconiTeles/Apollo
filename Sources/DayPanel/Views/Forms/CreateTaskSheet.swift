@@ -128,6 +128,26 @@ struct CreateTaskSheet: View {
         .frame(width: 460)
         .fixedSize(horizontal: false, vertical: true)
         .popupGlass(shape)
+        // Drop target — accepts any file dragged from Finder /
+        // Mail / Safari / iMessage. URLs are queued exactly the
+        // same way the "Adicionar" button feeds `pickedAttachments`,
+        // so the user can mix the two flows freely. `isTargeted`
+        // drives a subtle accent ring so it's obvious the form
+        // accepted the drag before the drop.
+        .onDrop(
+            of: [.fileURL],
+            isTargeted: $isDropTargeted
+        ) { providers in
+            handleDroppedProviders(providers)
+        }
+        .overlay(
+            shape.strokeBorder(
+                Color.accentColor.opacity(isDropTargeted ? 0.7 : 0),
+                lineWidth: isDropTargeted ? 2 : 0
+            )
+            .animation(.easeOut(duration: 0.15), value: isDropTargeted)
+            .allowsHitTesting(false)
+        )
         .onAppear {
             if statusName == nil {
                 statusName = appState.availableStatuses.first?.status
@@ -136,6 +156,34 @@ struct CreateTaskSheet: View {
                 titleFocused = true
             }
         }
+    }
+
+    // MARK: - Drop handling
+
+    /// True while a Finder drag is hovering anywhere over the
+    /// sheet. Drives the accent ring overlay so the user knows
+    /// the drop will be accepted.
+    @State private var isDropTargeted: Bool = false
+
+    /// Drains every `NSItemProvider` reported by the drop, loading
+    /// the file URL representation off the main thread (some
+    /// providers — Mail attachments, screenshots from Continuity —
+    /// do the materialisation lazily and can block briefly).
+    /// Hops back to main to mutate `pickedAttachments` so SwiftUI
+    /// re-evaluates the chip list.
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        guard !providers.isEmpty else { return false }
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                DispatchQueue.main.async {
+                    if !pickedAttachments.contains(url) {
+                        pickedAttachments.append(url)
+                    }
+                }
+            }
+        }
+        return true
     }
 
     // MARK: - Detail-row helper (matches TaskDetailView)
