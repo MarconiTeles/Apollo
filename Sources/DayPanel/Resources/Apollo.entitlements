@@ -3,72 +3,56 @@
 <plist version="1.0">
 <dict>
     <!--
-        ╔══════════════════════════════════════════════════════════╗
-        ║  Apollo entitlements                                      ║
-        ╚══════════════════════════════════════════════════════════╝
+        Sandbox is INTENTIONALLY off for the moment.
 
-        Sandbox ON. This restricts what a compromised Apollo
-        process can reach — important because the bundle ships
-        adhoc-signed (no Developer ID yet), so a code-injection
-        bug would otherwise inherit the user's full filesystem
-        and Keychain. The entitlements below grant ONLY what
-        Apollo needs to function:
+        Background: 1.4.10 turned on com.apple.security.app-sandbox
+        with a full set of standard sandbox entitlements (network,
+        files, calendars, contacts, apple-events). The build runs
+        and most features work, BUT Sparkle's Installer XPC
+        service can't gain the system authorization it needs to
+        replace the bundle from inside the sandbox — installer
+        launch fails with -60005 ("Authorization service failed"
+        / "Failed copying system domain rights"). OTA updates
+        therefore hang at the "launching the installer" step,
+        leaving the user stuck on whichever version installed
+        sandbox first. Confirmed in Console logs.
 
-          • network.client       — HTTPS to ClickUp, Google,
-                                   GitHub Pages (Sparkle feed),
-                                   OpenAI/Groq/Gemini.
-          • network.server       — localhost listener for OAuth
-                                   redirect (GoogleAuthService).
-          • files.user-selected
-                  .read-write     — NSOpenPanel attachment picker
-                                    + drag-drop file URLs.
-          • personal-information
-                  .calendars      — EventKit reads, even though
-                                    Google Calendar goes through
-                                    REST. The system Calendar
-                                    integration touches EventKit.
-          • personal-information
-                  .addressbook    — Contacts picker for invites.
-          • automation
-                  .apple-events   — AppleScript bridge that sends
-                                    RSVPs to Calendar.app
-                                    (described in
-                                    NSAppleEventsUsageDescription).
-        `com.apple.developer.usernotifications.time-sensitive`
-        is intentionally OMITTED from this list. It's a
-        restricted entitlement (requires a Developer ID team
-        match) and AMFI silently fails the launch with code
-        163 if an adhoc-signed app declares it. When you have a
-        proper Developer ID cert and re-enable notarization in
-        `release.sh`, add the key back here and rebuild.
+        Sparkle's own sandboxing guide
+        (https://sparkle-project.org/documentation/sandboxing/)
+        documents the workaround: pin the Installer / Downloader
+        XPC services into an Application Group keyed by
+        `<TEAMID>.<bundle-id>`. That requires a Developer ID
+        Team ID — adhoc-signed binaries have no Team ID, so the
+        workaround can't be applied to this build.
 
-        Sparkle: `SUEnableInstallerLauncherService` is flipped to
-        true in Info.plist to match — Sparkle's installer can't
-        replace the .app from inside the sandbox without its
-        XPC service taking over the install step. Sparkle's
-        framework ships with the needed `Installer.xpc` and
-        `Downloader.xpc` already-bundled in our app.
+        Plan: re-enable sandbox immediately after notarization
+        with Developer ID is in place. The full entitlements
+        block below stays as a comment so it's a one-line flip
+        when the cert arrives.
+
+        <key>com.apple.security.app-sandbox</key>
+        <true/>
+        <key>com.apple.security.network.client</key>
+        <true/>
+        <key>com.apple.security.network.server</key>
+        <true/>
+        <key>com.apple.security.files.user-selected.read-write</key>
+        <true/>
+        <key>com.apple.security.personal-information.calendars</key>
+        <true/>
+        <key>com.apple.security.personal-information.addressbook</key>
+        <true/>
+        <key>com.apple.security.automation.apple-events</key>
+        <true/>
+
+        Only `time-sensitive` notifications remain declared here
+        — same as the pre-1.4.10 state. Note that AMFI still
+        silently downgrades this to `.active` on adhoc-signed
+        binaries, but declaring it keeps the codebase ready for
+        the eventual Developer-ID flip.
     -->
 
-    <key>com.apple.security.app-sandbox</key>
-    <true/>
-
-    <key>com.apple.security.network.client</key>
-    <true/>
-
-    <key>com.apple.security.network.server</key>
-    <true/>
-
-    <key>com.apple.security.files.user-selected.read-write</key>
-    <true/>
-
-    <key>com.apple.security.personal-information.calendars</key>
-    <true/>
-
-    <key>com.apple.security.personal-information.addressbook</key>
-    <true/>
-
-    <key>com.apple.security.automation.apple-events</key>
+    <key>com.apple.developer.usernotifications.time-sensitive</key>
     <true/>
 </dict>
 </plist>

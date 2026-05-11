@@ -124,20 +124,16 @@ xattr -dr com.apple.quarantine "$OLLAMA_BUNDLE" 2>/dev/null || true
 #   ~/Library/Application Support/Apollo/Models/apollo-ia.gguf
 # managed by `EmbeddedRuntimeManager.downloadModel()`.
 
-# Apply the entitlements file. As of the sandbox transition the
-# file no longer carries `com.apple.developer.usernotifications
-# .time-sensitive` (AMFI rejects restricted entitlements on
-# adhoc-signed binaries with code 163, silently failing launch).
-# Everything else in `Apollo.entitlements` is standard
-# sandbox-permission territory and works fine with adhoc.
-ENTITLEMENTS_PATH="Sources/DayPanel/Resources/Apollo.entitlements"
-if [ -f "$ENTITLEMENTS_PATH" ]; then
-    codesign --force --deep --sign - \
-        --entitlements "$ENTITLEMENTS_PATH" \
-        "$APP" > /dev/null 2>&1
-else
-    codesign --force --deep --sign - "$APP" > /dev/null 2>&1
-fi
+# Sandbox is OFF for adhoc builds (Sparkle's installer XPC
+# can't gain authorization without a Developer ID Team ID,
+# breaking OTA updates — see Apollo.entitlements for the full
+# rationale). We also skip --entitlements entirely on adhoc:
+# the only key currently declared in the file is
+# `time-sensitive`, which AMFI rejects on adhoc binaries with
+# code 163, silently failing launch. Re-enable both
+# (--entitlements + the sandbox block in the .entitlements
+# file) AFTER notarization with Developer ID.
+codesign --force --deep --sign - "$APP" > /dev/null 2>&1
 
 # Clean up any stale build/DayPanel.app from previous runs.
 rm -rf build/DayPanel.app

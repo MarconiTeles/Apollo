@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.4.11</title>
-      <pubDate>Mon, 11 May 2026 13:46:09 +0000</pubDate>
-      <sparkle:version>22</sparkle:version>
-      <sparkle:shortVersionString>1.4.11</sparkle:shortVersionString>
+      <title>Apollo 1.4.12</title>
+      <pubDate>Mon, 11 May 2026 13:56:07 +0000</pubDate>
+      <sparkle:version>23</sparkle:version>
+      <sparkle:shortVersionString>1.4.12</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[KeychainHelper agora usa o macOS Keychain de verdade via SecItem*, kSecAttrAccessibleWhenUnlockedThisDeviceOnly. Migração automática: tokens existentes no JSON legado são lidos uma única vez e copiados pro Keychain. Espelho híbrido no JSON mantido como fallback até notarização (signature estável).]]></description>
+      <description><![CDATA[Revert sandbox (1.4.10/1.4.11 quebravam OTA porque Sparkle Installer XPC não consegue autorização em sandbox+adhoc, erro -60005). Sandbox volta quando notarização com Developer ID estiver no lugar. Keychain refactor (1.4.11) preservado.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.11/Apollo-1.4.11.zip"
-        sparkle:edSignature="eT+S32XAw4I+pTcqJnUJFgMjdJs3X9ND6FSQwpLPsQYLYSceUUThRlKNc4bZ1ZM7Y0b96COS93h3gjL+snLgAA=="
-        length="37564285"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.12/Apollo-1.4.12.zip"
+        sparkle:edSignature="JZ0n+hC3DvwOYuLiu0Rait5VtvIw7agLbHx/swL8AEV6xa7g4njmKd3E4WAvzJ5UN1Tzw5KBlyZ4/NW3LejfBQ=="
+        length="37551317"
         type="application/octet-stream" />
     </item>
   </channel>

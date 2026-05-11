@@ -13,7 +13,7 @@
 	<key>CFBundleName</key>
 	<string>Apollo</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.4.11</string>
+	<string>1.4.12</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -26,7 +26,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>22</string>
+	<string>23</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSAppTransportSecurity</key>
@@ -55,7 +55,7 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUEnableInstallerLauncherService</key>
-	<true/>
+	<false/>
 	<key>SUFeedURL</key>
 	<string>https://marconiteles.github.io/Apollo/appcast.xml</string>
 	<key>SUPublicEDKey</key>
