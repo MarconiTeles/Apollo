@@ -3,13 +3,72 @@
 <plist version="1.0">
 <dict>
     <!--
-        Lets Apollo deliver notifications with `.timeSensitive`
-        interruption level — the banner pierces Focus modes when the
-        user enables "Time Sensitive Notifications" for the app in
-        System Settings → Notifications → Apollo. Without this
-        entitlement, macOS silently downgrades the level to .active.
+        ╔══════════════════════════════════════════════════════════╗
+        ║  Apollo entitlements                                      ║
+        ╚══════════════════════════════════════════════════════════╝
+
+        Sandbox ON. This restricts what a compromised Apollo
+        process can reach — important because the bundle ships
+        adhoc-signed (no Developer ID yet), so a code-injection
+        bug would otherwise inherit the user's full filesystem
+        and Keychain. The entitlements below grant ONLY what
+        Apollo needs to function:
+
+          • network.client       — HTTPS to ClickUp, Google,
+                                   GitHub Pages (Sparkle feed),
+                                   OpenAI/Groq/Gemini.
+          • network.server       — localhost listener for OAuth
+                                   redirect (GoogleAuthService).
+          • files.user-selected
+                  .read-write     — NSOpenPanel attachment picker
+                                    + drag-drop file URLs.
+          • personal-information
+                  .calendars      — EventKit reads, even though
+                                    Google Calendar goes through
+                                    REST. The system Calendar
+                                    integration touches EventKit.
+          • personal-information
+                  .addressbook    — Contacts picker for invites.
+          • automation
+                  .apple-events   — AppleScript bridge that sends
+                                    RSVPs to Calendar.app
+                                    (described in
+                                    NSAppleEventsUsageDescription).
+        `com.apple.developer.usernotifications.time-sensitive`
+        is intentionally OMITTED from this list. It's a
+        restricted entitlement (requires a Developer ID team
+        match) and AMFI silently fails the launch with code
+        163 if an adhoc-signed app declares it. When you have a
+        proper Developer ID cert and re-enable notarization in
+        `release.sh`, add the key back here and rebuild.
+
+        Sparkle: `SUEnableInstallerLauncherService` is flipped to
+        true in Info.plist to match — Sparkle's installer can't
+        replace the .app from inside the sandbox without its
+        XPC service taking over the install step. Sparkle's
+        framework ships with the needed `Installer.xpc` and
+        `Downloader.xpc` already-bundled in our app.
     -->
-    <key>com.apple.developer.usernotifications.time-sensitive</key>
+
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+
+    <key>com.apple.security.personal-information.addressbook</key>
+    <true/>
+
+    <key>com.apple.security.automation.apple-events</key>
     <true/>
 </dict>
 </plist>

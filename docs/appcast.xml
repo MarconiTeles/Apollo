@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.4.9</title>
-      <pubDate>Mon, 11 May 2026 12:54:37 +0000</pubDate>
-      <sparkle:version>20</sparkle:version>
-      <sparkle:shortVersionString>1.4.9</sparkle:shortVersionString>
+      <title>Apollo 1.4.10</title>
+      <pubDate>Mon, 11 May 2026 13:08:20 +0000</pubDate>
+      <sparkle:version>21</sparkle:version>
+      <sparkle:shortVersionString>1.4.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Endurecimento de segurança: (1) sanitiza filename no multipart de upload contra header injection. (2) OAuth do Google agora valida state nonce no callback (anti-CSRF). (3) Fluxo ClickUp não pollia mais a pasteboard — usuário cola o token explicitamente em campo SecureField. (4) Logs de erro passam por redactor que oculta Bearer/pk_/GOCSPX/access_token antes de chegarem ao Console.app.]]></description>
+      <description><![CDATA[Endurecimento de segurança: (1) prompt-injection guard no agente IA — títulos/descrições/status/tags de tarefas externas sanitizados, brackets ASCII de markers neutralizados, regra explícita no system prompt. (2) URLs do ClickUp agora percent-encoded (defense-in-depth contra IDs com /, ?, # vindos do servidor). (3) Sandbox ATIVADO — Apollo agora roda confinado às permissões declaradas (rede client+server, file picker, EventKit, Contatos, AppleScript). Reduz drasticamente o blast radius de qualquer code injection.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.9/Apollo-1.4.9.zip"
-        sparkle:edSignature="5c53cPGvCF3QBSS5Euph6EdLCf60y1OyrkgKbaZOz2PfWuEeez8j/7i/xEqCTVO+SHnEnwC9hgvqb/s6diFwBg=="
-        length="37563355"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.10/Apollo-1.4.10.zip"
+        sparkle:edSignature="Q5Eqk/lRTlnL1Lr8g3BwtNf2xzSP0/2I9BOdmyUHB3lAkwrkYtc4a/bOnUL15Spqez+6jx632VWGqWGSgFFiDQ=="
+        length="37585392"
         type="application/octet-stream" />
     </item>
   </channel>

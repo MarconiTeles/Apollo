@@ -124,14 +124,20 @@ xattr -dr com.apple.quarantine "$OLLAMA_BUNDLE" 2>/dev/null || true
 #   ~/Library/Application Support/Apollo/Models/apollo-ia.gguf
 # managed by `EmbeddedRuntimeManager.downloadModel()`.
 
-# Note: time-sensitive notifications require a Developer ID Apple
-# refuses to honor on ad-hoc signed apps (AMFI rejects "restricted
-# entitlements" without a valid TeamIdentifier and the launch fails
-# silently with code 163). Skip the entitlements file on local
-# builds — `interruptionLevel = .timeSensitive` set in Swift will be
-# silently downgraded to `.active` by macOS, which still renders a
-# banner with sound. Re-enable when shipping a notarized build.
-codesign --force --deep --sign - "$APP" > /dev/null 2>&1
+# Apply the entitlements file. As of the sandbox transition the
+# file no longer carries `com.apple.developer.usernotifications
+# .time-sensitive` (AMFI rejects restricted entitlements on
+# adhoc-signed binaries with code 163, silently failing launch).
+# Everything else in `Apollo.entitlements` is standard
+# sandbox-permission territory and works fine with adhoc.
+ENTITLEMENTS_PATH="Sources/DayPanel/Resources/Apollo.entitlements"
+if [ -f "$ENTITLEMENTS_PATH" ]; then
+    codesign --force --deep --sign - \
+        --entitlements "$ENTITLEMENTS_PATH" \
+        "$APP" > /dev/null 2>&1
+else
+    codesign --force --deep --sign - "$APP" > /dev/null 2>&1
+fi
 
 # Clean up any stale build/DayPanel.app from previous runs.
 rm -rf build/DayPanel.app

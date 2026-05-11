@@ -21,7 +21,7 @@ final class ClickUpService {
     func listTasks() async throws -> [CUTask] {
         guard let token, let listId else { throw CUError.notConfigured }
 
-        var comps = URLComponents(string: "https://api.clickup.com/api/v2/list/\(listId)/task")!
+        var comps = URLComponents(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))/task")!
         comps.queryItems = [
             URLQueryItem(name: "include_closed", value: "true"),
             // `subtasks=true` makes ClickUp include child tasks in
@@ -66,7 +66,7 @@ final class ClickUpService {
         if !assigneeIds.isEmpty { body["assignees"] = assigneeIds }
         if !tagNames.isEmpty    { body["tags"]      = tagNames }
 
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(listId)/task")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))/task")!)
         req.httpMethod = "POST"
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -114,7 +114,7 @@ final class ClickUpService {
         if !assigneeIds.isEmpty { body["assignees"] = assigneeIds }
         if !tagNames.isEmpty    { body["tags"]      = tagNames }
 
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(listId)/task")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))/task")!)
         req.httpMethod = "POST"
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -142,7 +142,7 @@ final class ClickUpService {
         // single-task GET respects the same flag and is the
         // ClickUp-documented way to ensure full child data.
         // Doesn't affect `attachments`, which is always returned.
-        var comps = URLComponents(string: "https://api.clickup.com/api/v2/task/\(id)")!
+        var comps = URLComponents(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))")!
         comps.queryItems = [
             URLQueryItem(name: "include_subtasks", value: "true"),
         ]
@@ -158,7 +158,7 @@ final class ClickUpService {
     func completeTask(id: String) async throws {
         guard let token else { throw APIError.notConfigured }
 
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))")!)
         req.httpMethod = "PUT"
         req.setValue(token,            forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -176,7 +176,7 @@ final class ClickUpService {
     /// can't be recovered after this.
     func deleteTask(id: String) async throws {
         guard let token else { throw CUError.notConfigured }
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
         let (_, response) = try await URLSession.shared.data(for: req)
@@ -203,7 +203,7 @@ final class ClickUpService {
     func moveTask(id: String, toListId: String) async throws {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(
-            string: "https://api.clickup.com/api/v2/list/\(toListId)/task/\(id)"
+            string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(toListId))/task/\(Self.cuPathSafe(id))"
         )!)
         req.httpMethod = "POST"
         req.setValue(token, forHTTPHeaderField: "Authorization")
@@ -222,7 +222,7 @@ final class ClickUpService {
     /// by event type.
     func getTaskHistory(id: String) async throws -> [(date: Date, who: String, what: String)] {
         guard let token else { throw CUError.notConfigured }
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)?include_subtasks=false&custom_task_ids=false")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))?include_subtasks=false&custom_task_ids=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
         let (data, _) = try await URLSession.shared.data(for: req)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -241,7 +241,7 @@ final class ClickUpService {
         }
 
         // Try the dedicated activity endpoint.
-        var actReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)/history")!)
+        var actReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/history")!)
         actReq.setValue(token, forHTTPHeaderField: "Authorization")
         if let (actData, _) = try? await URLSession.shared.data(for: actReq),
            let actJson = try? JSONSerialization.jsonObject(with: actData) as? [String: Any],
@@ -296,7 +296,7 @@ final class ClickUpService {
 
         // 1) Fetch the task itself for `date_created` + `creator`
         //    so we always have a "task created" anchor.
-        var taskReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)?include_subtasks=false&custom_task_ids=false")!)
+        var taskReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))?include_subtasks=false&custom_task_ids=false")!)
         taskReq.setValue(token, forHTTPHeaderField: "Authorization")
         let (taskData, _) = try await URLSession.shared.data(for: taskReq)
         let taskJson = (try? JSONSerialization.jsonObject(with: taskData)) as? [String: Any]
@@ -352,7 +352,7 @@ final class ClickUpService {
         //    /api/v1/...` endpoint that requires session-cookie
         //    auth (not a Personal API token), so a third-party
         //    client like ours can't reach it.
-        var actReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)/history")!)
+        var actReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/history")!)
         actReq.setValue(token, forHTTPHeaderField: "Authorization")
         if let (actData, _) = try? await URLSession.shared.data(for: actReq),
            let actJson = try? JSONSerialization.jsonObject(with: actData) as? [String: Any],
@@ -640,7 +640,7 @@ final class ClickUpService {
     /// — formatted by the executor for the agent's reply.
     func getTaskTimeEntries(id: String) async throws -> [(start: Date, end: Date?, durationMs: Int, who: String, note: String)] {
         guard let token else { throw CUError.notConfigured }
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)/time")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/time")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
         let (data, _) = try await URLSession.shared.data(for: req)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -672,7 +672,7 @@ final class ClickUpService {
     //   assignees: { add: [Int], rem: [Int] }
     func updateTask(id: String, fields: [String: Any]) async throws {
         guard let token else { throw APIError.notConfigured }
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))")!)
         req.httpMethod = "PUT"
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -691,7 +691,7 @@ final class ClickUpService {
     func addTaskTag(id: String, tag: String) async throws {
         guard let token else { throw CUError.notConfigured }
         let encoded = tag.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tag
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)/tag/\(encoded)")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/tag/\(encoded)")!)
         req.httpMethod = "POST"
         req.setValue(token, forHTTPHeaderField: "Authorization")
         _ = try await URLSession.shared.data(for: req)
@@ -700,7 +700,7 @@ final class ClickUpService {
     func removeTaskTag(id: String, tag: String) async throws {
         guard let token else { throw CUError.notConfigured }
         let encoded = tag.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tag
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(id)/tag/\(encoded)")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/tag/\(encoded)")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
         _ = try await URLSession.shared.data(for: req)
@@ -710,7 +710,7 @@ final class ClickUpService {
 
     func getTaskComments(taskId: String) async throws -> [CUComment] {
         guard let token else { throw CUError.notConfigured }
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(taskId)/comment")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(taskId))/comment")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
         let (data, _) = try await URLSession.shared.data(for: req)
         return parseComments(data)
@@ -786,7 +786,7 @@ final class ClickUpService {
             body["assignee"] = assignee
         }
 
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(taskId)/comment")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(taskId))/comment")!)
         req.httpMethod = "POST"
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -878,7 +878,7 @@ final class ClickUpService {
 
     func deleteTaskComment(commentId: String) async throws {
         guard let token else { throw CUError.notConfigured }
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(commentId)")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
         _ = try await URLSession.shared.data(for: req)
@@ -888,7 +888,7 @@ final class ClickUpService {
 
     func addCommentReaction(commentId: String, emoji: String) async throws {
         guard let token else { throw CUError.notConfigured }
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(commentId)/reaction")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))/reaction")!)
         req.httpMethod = "POST"
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -899,7 +899,7 @@ final class ClickUpService {
     func removeCommentReaction(commentId: String, emoji: String) async throws {
         guard let token else { throw CUError.notConfigured }
         let encoded = emoji.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? emoji
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(commentId)/reaction/\(encoded)")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))/reaction/\(encoded)")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
         _ = try await URLSession.shared.data(for: req)
@@ -909,7 +909,7 @@ final class ClickUpService {
 
     func getCommentReplies(commentId: String) async throws -> [CUComment] {
         guard let token else { throw CUError.notConfigured }
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(commentId)/reply")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))/reply")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
         let (data, _) = try await URLSession.shared.data(for: req)
         return parseComments(data)
@@ -918,7 +918,7 @@ final class ClickUpService {
     @discardableResult
     func addCommentReply(commentId: String, text: String) async throws -> CUComment? {
         guard let token else { throw CUError.notConfigured }
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(commentId)/reply")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))/reply")!)
         req.httpMethod = "POST"
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -975,7 +975,7 @@ final class ClickUpService {
         let mime     = mimeType(for: fileURL)
 
         let boundary = "PainelLunar-\(UUID().uuidString)"
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(taskId)/attachment")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(taskId))/attachment")!)
         req.httpMethod = "POST"
         req.setValue(token, forHTTPHeaderField: "Authorization")
         req.setValue("multipart/form-data; boundary=\(boundary)",
@@ -1015,6 +1015,19 @@ final class ClickUpService {
         if let s = json["url"]         as? String, let u = URL(string: s) { return u }
         if let s = json["url_w_query"] as? String, let u = URL(string: s) { return u }
         return nil
+    }
+
+    /// Percent-encodes ID-shaped strings before they're spliced
+    /// into a URL path. ClickUp task / list / comment IDs are
+    /// usually plain alphanumerics, BUT they're server-supplied
+    /// — a buggy or hostile upstream could return one
+    /// containing `/`, `?`, `#`, or `..`, which would pivot the
+    /// request to a different endpoint than the caller intended.
+    /// Defensive percent-encoding closes that vector; it's a
+    /// no-op for legitimate IDs (the allowed-character set
+    /// includes all alphanumerics + safe URL-path bytes).
+    private static func cuPathSafe(_ raw: String) -> String {
+        raw.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? raw
     }
 
     /// Strip / escape any byte in a filename that could break
@@ -1087,7 +1100,7 @@ final class ClickUpService {
         guard let token, let listId else { throw CUError.notConfigured }
 
         // 1) Resolve list → space ID
-        var listReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(listId)")!)
+        var listReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))")!)
         listReq.setValue(token, forHTTPHeaderField: "Authorization")
         let (listData, _) = try await URLSession.shared.data(for: listReq)
         guard let listJson = try? JSONSerialization.jsonObject(with: listData) as? [String: Any],
@@ -1095,7 +1108,7 @@ final class ClickUpService {
               let spaceId  = space["id"] as? String else { throw CUError.parse }
 
         // 2) Fetch tags for that space
-        var tagsReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(spaceId)/tag")!)
+        var tagsReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(Self.cuPathSafe(spaceId))/tag")!)
         tagsReq.setValue(token, forHTTPHeaderField: "Authorization")
         let (tagsData, _) = try await URLSession.shared.data(for: tagsReq)
         guard let json = try? JSONSerialization.jsonObject(with: tagsData) as? [String: Any],
@@ -1116,7 +1129,7 @@ final class ClickUpService {
     func getListStatuses() async throws -> [CUStatus] {
         guard let token, let listId else { throw CUError.notConfigured }
 
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(listId)")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
 
         let (data, _) = try await URLSession.shared.data(for: req)
@@ -1150,7 +1163,7 @@ final class ClickUpService {
 
     func getSpaces(workspaceId: String) async throws -> [CUSpace] {
         guard let token else { throw CUError.notConfigured }
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/team/\(workspaceId)/space?archived=false")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/space?archived=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
         let (data, _) = try await URLSession.shared.data(for: req)
         guard let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -1170,7 +1183,7 @@ final class ClickUpService {
     }
 
     private func fetchFolderlessLists(spaceId: String, token: String) async throws -> [CUList] {
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(spaceId)/list?archived=false")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(Self.cuPathSafe(spaceId))/list?archived=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
         let (data, _) = try await URLSession.shared.data(for: req)
         guard let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -1182,7 +1195,7 @@ final class ClickUpService {
     }
 
     private func fetchFolderLists(spaceId: String, token: String) async throws -> [CUList] {
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(spaceId)/folder?archived=false")!)
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(Self.cuPathSafe(spaceId))/folder?archived=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
         let (data, _) = try await URLSession.shared.data(for: req)
         guard let json    = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
