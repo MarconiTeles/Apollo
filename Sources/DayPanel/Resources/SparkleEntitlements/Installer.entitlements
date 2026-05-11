@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Sparkle Installer.xpc — does the bundle replacement
+        once the downloaded ZIP has been verified. INTENTIONALLY
+        NOT SANDBOXED: the installer needs to write to
+        /Applications (or wherever Apollo lives) and that path
+        is outside any reasonable sandbox container. Hardened
+        runtime + Application Group is the security posture
+        Sparkle's docs prescribe for this service.
+
+        Group ID matches the main app + Downloader so all three
+        share the same Mach service namespace and the
+        sandboxed main app can hand the installer a file URL.
+    -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>CU544M36UD.com.painellunar.app</string>
+    </array>
+</dict>
+</plist>

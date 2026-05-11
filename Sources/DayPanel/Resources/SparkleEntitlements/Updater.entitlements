@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Sparkle Updater.app — the user-facing "Apollo is
+        installing the update…" progress window that shows up
+        between download and relaunch. Lives inside
+        Sparkle.framework/Versions/B/Updater.app. Must share the
+        Application Group with the main app so its XPC
+        connections to Installer/Downloader stay routable; not
+        sandboxed itself because it bridges the unsandboxed
+        installer.
+    -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>CU544M36UD.com.painellunar.app</string>
+    </array>
+</dict>
+</plist>

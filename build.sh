@@ -147,25 +147,53 @@ ENTITLEMENTS_PATH="Sources/DayPanel/Resources/Apollo.entitlements"
 # Sign the inner Frameworks FIRST (deepest dependency first).
 # Sparkle's framework ships with its own XPC services
 # (Installer.xpc, Downloader.xpc) and the Autoupdate helper +
-# Updater.app — each needs to be signed individually so the
-# outer-bundle signature is valid.
+# Updater.app — each needs to be signed individually with its
+# OWN entitlements so the outer-bundle signature is valid AND
+# the Application Group membership lines up with the sandboxed
+# main app. Without per-XPC entitlements, the install step times
+# out with "installation data was never received" because the
+# main app and the installer can't find each other's Mach
+# service inside the sandbox.
 SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
+SPARKLE_ENT_DIR="Sources/DayPanel/Resources/SparkleEntitlements"
+
 if [ -d "$SPARKLE_FW" ]; then
-    for SUB in \
-        "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc" \
-        "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc" \
-        "$SPARKLE_FW/Versions/B/Updater.app" \
-        "$SPARKLE_FW/Versions/B/Autoupdate"
-    do
-        if [ -e "$SUB" ]; then
+    # Pairs of (path, entitlements-file). When the entitlements
+    # file is empty / "-", sign without --entitlements.
+    sparkle_sign() {
+        local target="$1"
+        local entitlements="$2"
+        if [ -z "$entitlements" ] || [ "$entitlements" = "-" ]; then
             codesign --force --options runtime --timestamp \
                 --sign "$SIGNING_ID" \
-                "$SUB" > /dev/null
+                "$target" > /dev/null
+        else
+            codesign --force --options runtime --timestamp \
+                --sign "$SIGNING_ID" \
+                --entitlements "$entitlements" \
+                "$target" > /dev/null
         fi
-    done
-    codesign --force --options runtime --timestamp \
-        --sign "$SIGNING_ID" \
-        "$SPARKLE_FW" > /dev/null
+    }
+
+    if [ -e "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc" ]; then
+        sparkle_sign "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc" \
+                     "$SPARKLE_ENT_DIR/Installer.entitlements"
+    fi
+    if [ -e "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc" ]; then
+        sparkle_sign "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc" \
+                     "$SPARKLE_ENT_DIR/Downloader.entitlements"
+    fi
+    if [ -e "$SPARKLE_FW/Versions/B/Updater.app" ]; then
+        sparkle_sign "$SPARKLE_FW/Versions/B/Updater.app" \
+                     "$SPARKLE_ENT_DIR/Updater.entitlements"
+    fi
+    if [ -e "$SPARKLE_FW/Versions/B/Autoupdate" ]; then
+        # Autoupdate is a plain Mach-O helper, no entitlements
+        # needed beyond the framework's own.
+        sparkle_sign "$SPARKLE_FW/Versions/B/Autoupdate" "-"
+    fi
+
+    sparkle_sign "$SPARKLE_FW" "-"
 fi
 
 # Embedded Ollama runtime — needs its own signature otherwise

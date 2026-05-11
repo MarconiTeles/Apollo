@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.5.2</title>
-      <pubDate>Mon, 11 May 2026 21:30:58 +0000</pubDate>
-      <sparkle:version>26</sparkle:version>
-      <sparkle:shortVersionString>1.5.2</sparkle:shortVersionString>
+      <title>Apollo 1.5.3</title>
+      <pubDate>Mon, 11 May 2026 22:09:13 +0000</pubDate>
+      <sparkle:version>27</sparkle:version>
+      <sparkle:shortVersionString>1.5.3</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Anexos embedded na descrição (Google Drive, Docs etc) agora aparecem clicáveis no app. ClickUp omitia silenciosamente esses links no campo description padrão; Apollo agora pede include_markdown_description=true e achata [url](url) -> url pra o detector de links inline renderizar como clicável.]]></description>
+      <description><![CDATA[Fix OTA quebrada na sandbox: Sparkle Installer.xpc + Downloader.xpc + Updater.app agora carregam suas próprias entitlements com o Application Group certo (CU544M36UD.com.painellunar.app). Antes só o app principal tinha o group → XPC services não conseguiam achar o canal Mach do main app → install timeout 'installation data was never received'.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.2/Apollo-1.5.2.zip"
-        sparkle:edSignature="Bw8eVVgMfQYzlYoC8ce+gz5LP1qO//w/wighOTBIwArPH+BwXtgJ/gH64zL7qWdBXdHAAJyT5OgHLwATG51gDw=="
-        length="37610193"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.3/Apollo-1.5.3.zip"
+        sparkle:edSignature="v59sj8c5GCKzWNqGj1TIAMvFOWU1NjIxq+vEMyg3Wc7EpA+CWkojLlm1301d0KQ4E+Ag9g2G0zQ5o+ASTwO3AQ=="
+        length="37613106"
         type="application/octet-stream" />
     </item>
   </channel>
