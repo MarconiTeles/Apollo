@@ -246,7 +246,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //    of its title string). Provides Quit + Hide.
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
-        let appName = ProcessInfo.processInfo.processName
+        // Use the human-facing bundle name ("Apollo") for menu
+        // copy, NOT `ProcessInfo.processInfo.processName` which
+        // returns the executable name ("DayPanel") — that was
+        // leaking the internal codename into "Sobre DayPanel",
+        // "Ocultar DayPanel", "Encerrar DayPanel". The bundle
+        // already sets CFBundleName / CFBundleDisplayName to
+        // "Apollo"; reading those is the canonical fix.
+        let appName: String = AppDelegate.infoString("CFBundleDisplayName")
+            ?? AppDelegate.infoString("CFBundleName")
+            ?? "Apollo"
 
         // Custom "About" — the system's standard panel reads
         // CFBundleShortVersionString + CFBundleVersion from

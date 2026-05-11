@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.4.6</title>
-      <pubDate>Mon, 11 May 2026 11:25:32 +0000</pubDate>
-      <sparkle:version>17</sparkle:version>
-      <sparkle:shortVersionString>1.4.6</sparkle:shortVersionString>
+      <title>Apollo 1.4.7</title>
+      <pubDate>Mon, 11 May 2026 11:30:17 +0000</pubDate>
+      <sparkle:version>18</sparkle:version>
+      <sparkle:shortVersionString>1.4.7</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Fix: anexos enviados junto com um comentário agora aparecem dentro do balão dele em vez de criarem eventos 'Você anexou X' separados na timeline. A duplicidade vinha de ClickUp surfacing o mesmo arquivo no /comment (inline) e no /history (evento) — Apollo agora filtra o evento quando o id já está no comentário irmão.]]></description>
+      <description><![CDATA[Menu da barra de menus agora usa 'Apollo' em vez de 'DayPanel' (nome interno do executável). 'Sobre Apollo', 'Ocultar Apollo', 'Encerrar Apollo'.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.6/Apollo-1.4.6.zip"
-        sparkle:edSignature="N20yamHlpDhPF7FdNydrW+fbJgVWZA6KkWg6pR3gGwkte1xAhV7KcX6xIDckfXt0NchsErZWz4iRJ/QNfTBFDg=="
-        length="37529411"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.4.7/Apollo-1.4.7.zip"
+        sparkle:edSignature="NKyiGV5AzdqHDWlQpQ+VPkOGEIjug3mWuqYgNWtzrlOWWr21vUXZE8Vu3fx0SeLQOkQWgZHPhcMC15V80FZCAg=="
+        length="37529649"
         type="application/octet-stream" />
     </item>
   </channel>
