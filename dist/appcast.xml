@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.5.4</title>
-      <pubDate>Tue, 12 May 2026 17:26:42 +0000</pubDate>
-      <sparkle:version>29</sparkle:version>
-      <sparkle:shortVersionString>1.5.4</sparkle:shortVersionString>
+      <title>Apollo 1.5.5</title>
+      <pubDate>Tue, 12 May 2026 17:42:31 +0000</pubDate>
+      <sparkle:version>30</sparkle:version>
+      <sparkle:shortVersionString>1.5.5</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Anexos embedded na descrição agora renderizam como cards verdes (estilo ClickUp web) em vez de links soltos. Botão pencil/eye à direita do separador da descrição alterna entre modo de leitura (cards clicáveis) e edição (markdown bruto).]]></description>
+      <description><![CDATA[Hotfix OTA: adiciona entitlements 'temporary-exception.mach-lookup.global-name' (spki/spks) e 'shared-preference.read-write' que o Sparkle precisa pra falar com os XPC services em sandbox. Sem eles a OTA falhava com 'failed to probe status service'. Também: novo self-check em build.sh que falha o build se qualquer entitlement crítico estiver ausente — pra essa categoria de bug não chegar mais em produção.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.4/Apollo-1.5.4.zip"
-        sparkle:edSignature="OQQfzmeq8QgteQhjON8M6+tH1XrS7DRY1oPmJ0t2x0cw2MuXBNC3k5fTizjKCOM9vSY+IXC+pBI8wxbnORXJCQ=="
-        length="37645261"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.5/Apollo-1.5.5.zip"
+        sparkle:edSignature="l04AT7dbd5MWlAQX5Cy5+G/c1jC/Ep2vRJVH3yJqBLN8DTKVDh179rR7u0Rkv6eDNdlQ57VLO5Z7/jRlnwXiDw=="
+        length="37646520"
         type="application/octet-stream" />
     </item>
   </channel>

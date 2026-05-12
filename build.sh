@@ -215,6 +215,59 @@ codesign --force --options runtime --timestamp \
 # the notary would reject silently.
 codesign --verify --deep --strict "$APP" 2>&1 | head -3
 
+# ── Self-check: required entitlements on the main app ─────────
+#
+# Hard-fails the build BEFORE notarization if any of the
+# Sparkle-required entitlements is missing on the codesigned
+# bundle. Each missed entitlement in past releases produced a
+# version-bricking OTA error days later:
+#
+#   • Missing app-sandbox → app launches but the rest of the
+#     security audit assumed sandboxing.
+#   • Missing application-groups → "installation data was
+#     never received" timeout (1.5.1 → 1.5.2).
+#   • Missing mach-lookup spki/spks names → "failed to probe
+#     status service / An error occurred while running the
+#     updater" (1.5.3 → 1.5.4).
+#
+# `codesign -d --entitlements -` dumps the signed entitlements;
+# we grep for the literal keys. Catching the regression here
+# means the user gets a build failure instead of a broken
+# OTA that requires a manual DMG reinstall to recover.
+echo "→ Verifying required entitlements on signed bundle…"
+ENT_DUMP="$(codesign -d --entitlements - "$APP" 2>&1)"
+REQUIRED_KEYS=(
+    "com.apple.security.app-sandbox"
+    "com.apple.security.network.client"
+    "com.apple.security.network.server"
+    "com.apple.security.application-groups"
+    "com.apple.security.temporary-exception.mach-lookup.global-name"
+)
+MISSING=()
+for key in "${REQUIRED_KEYS[@]}"; do
+    if ! echo "$ENT_DUMP" | grep -q "$key"; then
+        MISSING+=("$key")
+    fi
+done
+# Both Sparkle mach-lookup names must be present, not just the
+# parent key. The previous regression had the key but missing
+# values.
+for name in "com.painellunar.app-spki" "com.painellunar.app-spks"; do
+    if ! echo "$ENT_DUMP" | grep -q "$name"; then
+        MISSING+=("mach-lookup name: $name")
+    fi
+done
+if [ ${#MISSING[@]} -gt 0 ]; then
+    echo "✗ BUILD FAILED — missing required entitlements:" >&2
+    for m in "${MISSING[@]}"; do
+        echo "    - $m" >&2
+    done
+    echo "" >&2
+    echo "  Fix Sources/DayPanel/Resources/Apollo.entitlements then rebuild." >&2
+    exit 1
+fi
+echo "  ✓ All required entitlements present"
+
 # Clean up any stale build/DayPanel.app from previous runs.
 rm -rf build/DayPanel.app
 

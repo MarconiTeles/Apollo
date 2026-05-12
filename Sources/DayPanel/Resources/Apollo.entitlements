@@ -86,6 +86,52 @@
     </array>
 
     <!--
+        Sparkle uses two Mach services to coordinate between the
+        sandboxed main app and its installer/status XPCs:
+
+          • `<bundle>-spki` — the Installer service. The main
+            app calls into it to hand off the new bundle for
+            replacement.
+          • `<bundle>-spks` — the Status/progress service. The
+            updater UI uses it to push progress events back into
+            the app.
+
+        Both names are concatenations of the host bundle id and
+        Sparkle's internal tags (see Sparkle's
+        `Autoupdate/SPUMessageTypes.m` —
+        `SPARKLE_INSTALLER_TAG = @"-spki"`,
+        `SPARKLE_STATUS_TAG = @"-spks"`).
+
+        Without these mach-lookup exceptions the sandboxed app
+        gets `failed to probe status service for
+        com.painellunar.app from the framework` followed by
+        `An error occurred while running the updater. Please try
+        again later.` and the OTA install dies before any bytes
+        are written. We hit this on the 1.5.3 → 1.5.4 OTA.
+
+        Templated after Sparkle's own
+        `TestApplication/Sparkle-Test-App.entitlements`.
+    -->
+    <key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+    <array>
+        <string>com.painellunar.app-spki</string>
+        <string>com.painellunar.app-spks</string>
+    </array>
+
+    <!--
+        Sparkle stores its update-state preferences under the
+        host bundle id. In sandbox mode the main app needs an
+        explicit shared-preference exception to read/write
+        them; without it Sparkle silently falls back to in-
+        memory defaults and OTA cadence / "skip this version"
+        state resets on every launch.
+    -->
+    <key>com.apple.security.temporary-exception.shared-preference.read-write</key>
+    <array>
+        <string>com.painellunar.app</string>
+    </array>
+
+    <!--
         `com.apple.developer.usernotifications.time-sensitive` is
         REMOVED for now. It's a "restricted entitlement" — even
         with Developer ID Application signing, AMFI demands a
