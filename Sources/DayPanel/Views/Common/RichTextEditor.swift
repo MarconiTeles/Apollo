@@ -47,6 +47,15 @@ struct RichTextEditor: NSViewRepresentable {
     /// keystroke.
     var onCommit: () -> Void = {}
 
+    /// When true, the editor renders ClickUp-style attachment
+    /// cards (teal pills) in place of `Filename.ext (URL)`
+    /// patterns whose URL is a ClickUp attachment. Cards only
+    /// appear in display mode (when `isFocused` is false); the
+    /// user always sees raw markdown text while editing. Off by
+    /// default so chat composers and other plain-text uses of
+    /// the editor stay unchanged.
+    var renderAttachmentCards: Bool = false
+
     // MARK: - NSViewRepresentable
 
     func makeNSView(context: Context) -> IntrinsicTextScrollView {
@@ -80,6 +89,15 @@ struct RichTextEditor: NSViewRepresentable {
         let textView = LinkifiedTextView(frame: NSRect(origin: .zero, size: contentSize),
                                          textContainer: textContainer)
         textView.delegate = context.coordinator
+        // Note: there is NO `onBecomeFirstResponder` hook flipping
+        // `isFocused` on click. Doing that caused the description
+        // editor to swap from card-display mode to plain-text
+        // edit mode the moment a user clicked an attachment card,
+        // which made the card "vanish into a plain link" the
+        // instant the click opened the file. The
+        // display→edit transition now happens through
+        // `textDidBeginEditing` only — i.e. the user has to
+        // actually start typing for the swap to fire.
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: .greatestFiniteMagnitude,
                                   height: CGFloat.greatestFiniteMagnitude)
@@ -107,9 +125,10 @@ struct RichTextEditor: NSViewRepresentable {
 
         scrollView.documentView = textView
 
-        // Initial content + link styling.
-        textView.string = text
-        Self.applyLinks(to: textView)
+        // Initial content. `renderDisplayedContent` handles both
+        // the plain (focused / no-card) path and the
+        // attributed-with-cards path.
+        renderDisplayedContent(into: textView, focused: isFocused)
         scrollView.invalidateIntrinsicContentSize()
 
         context.coordinator.textView = textView
@@ -121,21 +140,27 @@ struct RichTextEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: IntrinsicTextScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
-        // Pull the text from the binding only if it diverged — typing
-        // already pushes through `textDidChange`, so re-setting the
-        // string here would clobber the cursor and selection on every
-        // keystroke.
-        if textView.string != text {
+        // Decide whether the displayed content is currently in
+        // edit mode (plain text, raw markdown visible) or display
+        // mode (attachment cards rendered). The "is displaying
+        // cards" state is tracked on the coordinator so we re-
+        // render only when the bound text changes OR focus
+        // transitions between the two modes.
+        let wantsCards = renderAttachmentCards && !isFocused
+        let needsRender = textView.string != text
+            || context.coordinator.isShowingCards != wantsCards
+
+        if needsRender {
             let oldRange = textView.selectedRange()
-            textView.string = text
-            let newLength = (text as NSString).length
+            renderDisplayedContent(into: textView, focused: isFocused)
+            let newLength = (textView.string as NSString).length
             let restored = NSRange(
                 location: min(oldRange.location, newLength),
                 length: 0
             )
             textView.selectedRange = restored
-            Self.applyLinks(to: textView)
             scrollView.invalidateIntrinsicContentSize()
+            context.coordinator.isShowingCards = wantsCards
         }
         // Note: previously we re-ran `applyLinks` on every
         // updateNSView call even when `text` matched. This
@@ -151,10 +176,53 @@ struct RichTextEditor: NSViewRepresentable {
         }
 
         // Sync focus state from outer SwiftUI binding.
+        // - isFocused = true and we're not yet first responder
+        //   → promote the textView to first responder so the
+        //     user can type immediately (covers the toggle
+        //     button case + programmatic focus elsewhere).
+        // - isFocused = false and we ARE first responder
+        //   → resign so the user doesn't see a blinking caret
+        //     hovering over the card-render mode. The
+        //     `endEditing` text-system call also flushes
+        //     pending input + invalidates the marked text.
         if isFocused, textView.window?.firstResponder !== textView {
             DispatchQueue.main.async {
                 textView.window?.makeFirstResponder(textView)
             }
+        } else if !isFocused, textView.window?.firstResponder === textView {
+            DispatchQueue.main.async {
+                textView.window?.makeFirstResponder(nil)
+            }
+        }
+    }
+
+    /// Push the current `text` into the NSTextView, choosing
+    /// between the plain edit-mode rendering and the attributed
+    /// display-mode rendering with attachment cards. Editable
+    /// flag also flips so a click inside the card area doesn't
+    /// land a caret inside the attachment glyph.
+    private func renderDisplayedContent(into textView: NSTextView,
+                                        focused: Bool) {
+        let wantsCards = renderAttachmentCards && !focused
+        if wantsCards {
+            let attributed = DescriptionAttachmentRenderer.render(
+                text,
+                font: NSFont.systemFont(ofSize: fontSize),
+                textColor: NSColor.labelColor
+            )
+            textView.textStorage?.setAttributedString(attributed)
+            // In display mode the user can't accidentally type
+            // between cards or delete one — flips back to
+            // editable the moment they click in.
+            textView.isEditable = false
+            textView.isSelectable = true
+        } else {
+            textView.string = text
+            // Re-apply data-detector links so plain URLs in the
+            // raw markdown still come back as clickable.
+            Self.applyLinks(to: textView)
+            textView.isEditable = true
+            textView.isSelectable = true
         }
     }
 
@@ -167,6 +235,12 @@ struct RichTextEditor: NSViewRepresentable {
         weak var textView: NSTextView?
         weak var scrollView: IntrinsicTextScrollView?
         private var lastCommittedText: String
+        /// True when the editor is currently displaying the
+        /// attachment-card attributed string. `updateNSView` reads
+        /// this to decide whether to re-render — without it, every
+        /// focus transition would needlessly rebuild the
+        /// NSAttributedString.
+        var isShowingCards: Bool = false
 
         init(_ parent: RichTextEditor) {
             self.parent = parent
@@ -199,8 +273,16 @@ struct RichTextEditor: NSViewRepresentable {
         // chat apps / Notes — easier than hunting for Cmd.
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             let url: URL? = {
+                // NSURL FIRST. Attachment-card links are stored
+                // as `NSURL` (see `DescriptionAttachmentRenderer`)
+                // — Swift bridging from a stored `URL` value type
+                // crashes inside `swift_unknownObjectRetain`
+                // because the bridged NSObject's lifetime isn't
+                // anchored by the attribute store.
+                if let n = link as? NSURL { return n as URL }
                 if let u = link as? URL { return u }
                 if let s = link as? String { return URL(string: s) }
+                if let n = link as? NSString { return URL(string: n as String) }
                 return nil
             }()
             guard let url else { return false }
@@ -265,8 +347,81 @@ final class IntrinsicTextScrollView: NSScrollView {
 /// Plain NSTextView subclass that we can extend later if we need
 /// keyboard-shortcut hooks (e.g. cmd+enter to send). Keeping it as
 /// a named type also makes the runtime hierarchy easier to inspect.
+///
+/// Also exposes a `onBecomeFirstResponder` callback that fires
+/// the instant focus moves into the editor — used by
+/// `RichTextEditor` to swap from the attachment-card display
+/// rendering to a plain raw-markdown rendering BEFORE the user
+/// starts typing, so the first keystroke lands in the editable
+/// string and not on a card glyph.
 final class LinkifiedTextView: NSTextView {
+    /// Optional callback fired on `becomeFirstResponder`. Left in
+    /// place for future use (e.g. a keyboard-driven focus path)
+    /// but currently NOT wired by `RichTextEditor` — having
+    /// `becomeFirstResponder` flip the SwiftUI `isFocused`
+    /// binding caused the description editor to swap from card
+    /// display mode to plain-text edit mode the moment the user
+    /// clicked an attachment card, which made the card "vanish
+    /// into plain text" right after the click opened the file.
+    /// The display→edit swap now flows through
+    /// `textDidBeginEditing` only.
+    var onBecomeFirstResponder: (() -> Void)?
+
     override func mouseDown(with event: NSEvent) {
+        // Description-attachment cards carry a custom URL via
+        // `.descriptionAttachmentURL` instead of `.link` because
+        // the standard `clickedOnLink:` path crashes on
+        // attachment glyphs in TextKit 1 (see comments on
+        // `DescriptionAttachmentRenderer.render`). Handle the
+        // click here by mapping the cursor to a character index,
+        // verifying the glyph at that index IS our attachment
+        // (not just the nearest glyph to an off-target click),
+        // reading our attribute, and opening the URL ourselves.
+        if let storage = self.textStorage,
+           let layoutManager = self.layoutManager,
+           let container = self.textContainer,
+           storage.length > 0 {
+            let pointInView = convert(event.locationInWindow, from: nil)
+            let pointInContainer = NSPoint(
+                x: pointInView.x - textContainerInset.width,
+                y: pointInView.y - textContainerInset.height
+            )
+            // `glyphIndex(for:in:fractionOfDistanceThroughGlyph:)`
+            // tells us how far into the glyph the click landed.
+            // `glyphIndex(for:in:)` (no fraction) silently snaps
+            // to the nearest glyph, which would fire the URL
+            // open on a click anywhere NEAR a card — not what
+            // we want. Use the fraction-aware variant and bail
+            // when it's at the leading edge of an off-target
+            // glyph (fraction ≈ 0) or trailing edge (fraction
+            // ≈ 1) so a click in whitespace just below the card
+            // doesn't open the URL.
+            var fraction: CGFloat = 0
+            let glyphIndex = layoutManager.glyphIndex(
+                for: pointInContainer,
+                in: container,
+                fractionOfDistanceThroughGlyph: &fraction
+            )
+            let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+            // Verify the click really lands inside the glyph's
+            // bounding rect — not just near it.
+            let glyphRect = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: glyphIndex, length: 1),
+                in: container
+            )
+            let hitsGlyph = glyphRect.insetBy(dx: -1, dy: -1)
+                .contains(pointInContainer)
+            if hitsGlyph,
+               charIndex < storage.length,
+               let urlString = storage.attribute(
+                    .descriptionAttachmentURL,
+                    at: charIndex,
+                    effectiveRange: nil) as? String,
+               let url = URL(string: urlString) {
+                NSWorkspace.shared.open(url)
+                return
+            }
+        }
         super.mouseDown(with: event)
     }
 }

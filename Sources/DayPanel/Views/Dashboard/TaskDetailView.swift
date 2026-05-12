@@ -657,11 +657,50 @@ struct TaskDetailView: View, Equatable {
         // 12pt of breathing room between the separator and the
         // first line of the editor — without it the line's top
         // sits right under the separator and gets visually clipped.
-        VStack(alignment: .leading, spacing: 12) {
-            Rectangle()
-                .fill(.separator.opacity(0.4))
-                .frame(height: 0.5)
-                .padding(.horizontal, -12)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Rectangle()
+                    .fill(.separator.opacity(0.4))
+                    .frame(height: 0.5)
+                Spacer(minLength: 6)
+                // Display / edit toggle. In display mode the
+                // RichTextEditor renders ClickUp-attachment URLs
+                // as inline pill cards; in edit mode it shows the
+                // raw markdown so the user can rewrite the body.
+                // Wired to the same `descriptionFocused` focus
+                // state the rest of the system already tracks —
+                // flipping it programmatically swaps the mode AND
+                // routes a final commit through the existing
+                // `onCommit` path when the user toggles back to
+                // display.
+                Button {
+                    descriptionFocused.toggle()
+                } label: {
+                    Image(systemName: descriptionFocused
+                          ? "eye.fill" : "pencil")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(Color.primary.opacity(
+                                    descriptionFocused ? 0.10 : 0.05
+                                ))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.10),
+                                              lineWidth: 0.5)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help(descriptionFocused
+                      ? "Voltar para o modo de leitura (anexos como cards)"
+                      : "Editar texto da descrição (markdown bruto)")
+            }
+            .padding(.horizontal, -12)
 
             ZStack(alignment: .topLeading) {
                 if descriptionDraft.isEmpty && !descriptionFocused {
@@ -693,7 +732,8 @@ struct TaskDetailView: View, Equatable {
                         if descriptionDraft != (task.description ?? "") {
                             Task { await appState.updateTaskDescription(task, to: descriptionDraft) }
                         }
-                    }
+                    },
+                    renderAttachmentCards: true
                 )
                 // Frame: bounded min + max in both layout modes.
                 // For the popup (`!scrollsInternally`) we let
