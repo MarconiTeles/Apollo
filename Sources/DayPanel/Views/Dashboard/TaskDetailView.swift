@@ -838,7 +838,8 @@ struct TaskDetailView: View, Equatable {
             // user scrolls them into view.
             LazyVStack(alignment: .leading, spacing: 6) {
                 ForEach(task.attachments) { att in
-                    AttachmentChip(attachment: att)
+                    AttachmentChip(attachment: att,
+                                   taskURL: task.url)
                         .equatable()
                 }
             }
@@ -1456,12 +1457,54 @@ struct SubtaskRow: View, Equatable {
 /// in the user's default browser.
 private struct AttachmentChip: View, Equatable {
     let attachment: CUTask.Attachment
+    /// Parent task's ClickUp URL (e.g.
+    /// `https://app.clickup.com/t/86ahdjh3b`). Used as the
+    /// destination of the "💬 N" annotation-count badge —
+    /// clicking it opens the task in ClickUp's web client where
+    /// the proofing/video annotations ARE visible (Apollo can't
+    /// fetch the annotation bodies because they require a JWT
+    /// session cookie, but at least the user has 1 click to
+    /// reach them). Optional because some call paths (e.g.
+    /// description-derived attachments outside a real task
+    /// context) don't carry a task URL.
+    var taskURL: String? = nil
 
     static func == (lhs: AttachmentChip, rhs: AttachmentChip) -> Bool {
-        lhs.attachment == rhs.attachment
+        lhs.attachment == rhs.attachment && lhs.taskURL == rhs.taskURL
     }
 
     @State private var isHovered: Bool = false
+
+    /// Count of unresolved annotation comments on this
+    /// attachment, or `nil` when there are none / the field
+    /// wasn't returned by the API. Computed once because the
+    /// chip body references it three times.
+    private var unresolvedAnnotations: Int? {
+        guard let total = attachment.totalComments, total > 0 else { return nil }
+        let resolved = attachment.resolvedComments ?? 0
+        let unresolved = max(0, total - resolved)
+        return unresolved > 0 ? unresolved : nil
+    }
+
+    /// Builds the URL that opens the attachment's proofing /
+    /// annotation viewer directly — the video player with the
+    /// commented timestamps + threaded annotations. Format is
+    /// the raw attachment CDN URL with `?view=open` appended;
+    /// ClickUp's web app recognises that query and renders the
+    /// proofing UI instead of just streaming the file. Confirmed
+    /// by inspecting what the address bar shows once the
+    /// proofing pane is open.
+    private func proofingDeepLink() -> URL? {
+        guard var comps = URLComponents(string: attachment.url) else { return nil }
+        var items = comps.queryItems ?? []
+        // Don't duplicate `view=open` if the URL the API gave us
+        // already had it.
+        if !items.contains(where: { $0.name == "view" }) {
+            items.append(URLQueryItem(name: "view", value: "open"))
+        }
+        comps.queryItems = items
+        return comps.url
+    }
 
     private var accent: Color { Color(hex: attachment.accentHex) }
 
@@ -1522,10 +1565,66 @@ private struct AttachmentChip: View, Equatable {
                                 .font(.system(size: 9))
                                 .foregroundStyle(.secondary)
                         }
+                        // Annotation-comment badge. ClickUp keeps
+                        // per-attachment proofing comments in a
+                        // separate internal store we can't reach,
+                        // but the COUNT comes back on the
+                        // attachment payload — surface it so the
+                        // user knows the annotations exist and
+                        // can jump to them.
+                        if let unresolved = unresolvedAnnotations {
+                            Text("·")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.tertiary)
+                            HStack(spacing: 3) {
+                                Image(systemName: "bubble.left.and.bubble.right.fill")
+                                    .font(.system(size: 8, weight: .semibold))
+                                Text("\(unresolved)")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .monospacedDigit()
+                            }
+                            .foregroundStyle(Color.orange)
+                            .help("\(unresolved) " +
+                                  (unresolved == 1 ? "comentário de revisão"
+                                                   : "comentários de revisão") +
+                                  " neste anexo. Abra no ClickUp pra ver.")
+                        }
                     }
                 }
 
                 Spacer(minLength: 0)
+
+                // When the attachment has unresolved annotations
+                // AND we know the parent task's ClickUp URL, show
+                // a dedicated "Abrir no ClickUp" button as the
+                // primary trailing affordance. Click bypasses the
+                // outer chip's file-download path and routes
+                // straight to the web UI where annotations are
+                // visible.
+                if unresolvedAnnotations != nil,
+                   let proofingURL = proofingDeepLink() {
+                    Button {
+                        NSWorkspace.shared.open(proofingURL)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "bubble.left.fill")
+                                .font(.system(size: 9, weight: .semibold))
+                            Text("Ver no ClickUp")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(Color.orange)
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Abrir a interface de revisão deste anexo no ClickUp web (timestamps + anotações de vídeo).")
+                }
 
                 Image(systemName: "arrow.up.right.square")
                     .font(.caption2.weight(.semibold))

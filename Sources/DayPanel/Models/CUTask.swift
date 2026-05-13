@@ -85,6 +85,31 @@ struct CUTask: Identifiable, Codable, Equatable {
         /// have no size info).
         let sizeString: String?
 
+        /// Count of proofing / video-annotation comments tied
+        /// to this attachment. ClickUp returns this in the task
+        /// payload as `total_comments`. The proofing comments
+        /// themselves aren't exposed by the public API (they
+        /// require a JWT session cookie reachable only from the
+        /// web client), but surfacing the count + a direct
+        /// "open in ClickUp" path tells the user the
+        /// annotations exist instead of silently hiding them.
+        /// Optional so cached snapshots written before this
+        /// field existed still decode.
+        let totalComments: Int?
+        /// Subset of `totalComments` already marked resolved.
+        /// Used to render the badge in a calmer state when
+        /// every annotation has been addressed.
+        let resolvedComments: Int?
+
+        /// ClickUp user id of whoever uploaded this attachment.
+        /// Used by the diff-based notifier to fire a toast only
+        /// when proofing comments accrue on files the CURRENT
+        /// user uploaded — strangers leaving annotations on
+        /// teammates' uploads shouldn't ping the wrong inbox.
+        /// Optional because some attachment shapes (description-
+        /// derived links) don't carry an uploader.
+        let uploaderId: Int?
+
         /// SF Symbol that best represents this file type.
         var icon: String {
             switch ext {

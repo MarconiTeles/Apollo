@@ -340,6 +340,21 @@ final class AppState: ObservableObject {
     // reopens the app — the latest-seen id was captured the
     // last time the app ran, and any post LATER than that is
     // genuinely new.
+    /// Per-attachment last-seen `total_comments` count. Drives
+    /// the proofing-comment notifier — every sync diffs the
+    /// current `attachment.totalComments` against this baseline
+    /// and fires a banner only when the number went UP on an
+    /// attachment that the CURRENT user uploaded (we don't want
+    /// to ping the user about strangers leaving comments on
+    /// teammates' uploads). The map is rebuilt at the end of
+    /// each sync so the next pass only catches genuinely new
+    /// comments. Lives in-memory only — a stale entry surviving
+    /// across launches just means the first sync after a
+    /// restart re-baselines without notifications, which is
+    /// the right call (the user already saw or missed those
+    /// comments before quitting).
+    private var lastSeenProofingCounts: [String: Int] = [:]
+
     private var lastSeenCommentByTask: [String: String] = [:]
     /// Cooldown timestamp per task. Without this, the 30s
     /// fast-sync would refetch every assigned/created task's
@@ -1971,6 +1986,48 @@ final class AppState: ObservableObject {
                                 eventId:  event.id)
                 }
             }
+        }
+
+        // ── Proofing comments diff ────────────────────────
+        //
+        // For every attachment uploaded by the connected user,
+        // compare current `total_comments` against the
+        // last-seen baseline. Strictly greater → fire a "novos
+        // comentários de revisão" notification deep-linked
+        // straight at the proofing view.
+        //
+        // We only re-baseline AFTER scanning so the first sync
+        // post-launch doesn't notify for comments that were
+        // already there (the baseline is empty → the strict-
+        // greater check skips everything on the first pass).
+        // From the second sync onwards, only genuinely new
+        // counts trigger.
+        if let me = me {
+            var freshCounts: [String: Int] = [:]
+            for task in newTasks {
+                for att in task.attachments {
+                    guard let total = att.totalComments,
+                          let uploader = att.uploaderId,
+                          uploader == me
+                    else { continue }
+                    freshCounts[att.id] = total
+                    let prev = lastSeenProofingCounts[att.id]
+                    if let prev, total > prev {
+                        let delta = total - prev
+                        notifyTask(
+                            .info,
+                            title:    task.title,
+                            subtitle: "Novos comentários de revisão",
+                            message:  "\(delta) " +
+                                (delta == 1 ? "comentário novo no anexo "
+                                            : "comentários novos no anexo ") +
+                                "\(att.title). Clique pra abrir a tarefa e ir pro proofing.",
+                            taskId:   task.id
+                        )
+                    }
+                }
+            }
+            lastSeenProofingCounts = freshCounts
         }
     }
 

@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.5.6</title>
-      <pubDate>Wed, 13 May 2026 02:01:28 +0000</pubDate>
-      <sparkle:version>31</sparkle:version>
-      <sparkle:shortVersionString>1.5.6</sparkle:shortVersionString>
+      <title>Apollo 1.5.7</title>
+      <pubDate>Wed, 13 May 2026 12:22:06 +0000</pubDate>
+      <sparkle:version>32</sparkle:version>
+      <sparkle:shortVersionString>1.5.7</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[URLs não-anexo (Google Docs, etc) agora aparecem clicáveis em modo de visualização — antes só viravam linkáveis em modo de edição. Fix auxiliar: ClickUp escapa caracteres especiais (\_, \*) em labels de markdown links, então label != url e Apollo mostrava 'URL (URL)' duplicada. Agora unescape o label antes de comparar.]]></description>
+      <description><![CDATA[Comentários de revisão (proofing/anotações de vídeo) do ClickUp: badge laranja com a contagem nos chips de anexo, botão 'Ver no ClickUp' que abre direto o player de proofing, e notificação quando alguém comenta em um anexo que VOCÊ enviou.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.6/Apollo-1.5.6.zip"
-        sparkle:edSignature="4WyraTc/zInyFlIdbZ9G9ctiegCCPUtx7YGR2K0vrQ8FANnc2SaXkat7d1+2bmRZllpTU2UIlAdZnZf36lkCBA=="
-        length="37647983"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.7/Apollo-1.5.7.zip"
+        sparkle:edSignature="TvoAu0yigMQbzLlbz9JD0rm3nGEwk76iDLt48+YEzbJBe71Vnb77R9ku9+P3rIRqte3DrN31RkV93etHX1QoBw=="
+        length="37676084"
         type="application/octet-stream" />
     </item>
   </channel>

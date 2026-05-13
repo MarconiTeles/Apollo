@@ -582,8 +582,14 @@ final class ClickUpService {
             if let s = obj["size"] as? Double { return ByteCountFormatter.string(fromByteCount: Int64(s), countStyle: .file) }
             return nil
         }()
+        let totalComments    = obj["total_comments"]    as? Int
+        let resolvedComments = obj["resolved_comments"] as? Int
+        let uploaderId       = (obj["user"] as? [String: Any])?["id"] as? Int
         return CUTask.Attachment(id: id, title: title, url: url,
-                                 ext: ext, sizeString: size)
+                                 ext: ext, sizeString: size,
+                                 totalComments: totalComments,
+                                 resolvedComments: resolvedComments,
+                                 uploaderId: uploaderId)
     }
 
     /// Status payloads come in two shapes: `{status, color,
@@ -1496,12 +1502,30 @@ final class ClickUpService {
             let sizeBytes = raw["size"] as? Int
             let sizeStr   = sizeBytes.flatMap(humanSize(_:))
 
+            // ClickUp's task payload exposes proofing /
+            // video-annotation comment counts directly on each
+            // attachment (`total_comments`, `resolved_comments`).
+            // The annotation BODIES require a session JWT and
+            // aren't reachable from the public API — but the
+            // count IS, so the UI can at least surface
+            // "💬 6" on the chip and offer an "open in ClickUp"
+            // button. Fall back gracefully when the keys are
+            // absent (older endpoints / cached payloads).
+            let totalComments    = raw["total_comments"]    as? Int
+            let resolvedComments = raw["resolved_comments"] as? Int
+            // Uploader id lives under `user.id` on the
+            // structured attachment payload.
+            let uploaderId = (raw["user"] as? [String: Any])?["id"] as? Int
+
             byURL[url] = CUTask.Attachment(
-                id:         id,
-                title:      title,
-                url:        url,
-                ext:        ext,
-                sizeString: sizeStr
+                id:               id,
+                title:            title,
+                url:              url,
+                ext:              ext,
+                sizeString:       sizeStr,
+                totalComments:    totalComments,
+                resolvedComments: resolvedComments,
+                uploaderId:       uploaderId
             )
         }
 
@@ -1526,11 +1550,14 @@ final class ClickUpService {
                 guard looksLikeFile else { continue }
 
                 byURL[url] = CUTask.Attachment(
-                    id:         url,
-                    title:      label.isEmpty ? deriveFilename(from: url) : label,
-                    url:        url,
-                    ext:        ext,
-                    sizeString: nil
+                    id:               url,
+                    title:            label.isEmpty ? deriveFilename(from: url) : label,
+                    url:              url,
+                    ext:              ext,
+                    sizeString:       nil,
+                    totalComments:    nil,
+                    resolvedComments: nil,
+                    uploaderId:       nil
                 )
             }
         }
