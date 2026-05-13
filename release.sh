@@ -70,6 +70,16 @@ GH_SLUG="${APOLLO_GITHUB_SLUG:-MarconiTeles/Apollo}"
 BUMP=""
 EXPLICIT_VERSION=""
 NOTES=""
+# Optional Sparkle channel. Default = "" (public stream; every
+# install on the default channel gets a scheduled-check banner).
+# Pass `--silent` to tag the new item with
+# `<sparkle:channel>silent</sparkle:channel>`. Apollo's
+# `UpdateService` discovers silent items so a manual check
+# (`⌘ → Verificar Atualizações…`) can install them, but the
+# `SPUStandardUserDriver` delegate refuses to show the
+# scheduled-check banner — release stays available without
+# pinging every tester.
+CHANNEL=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --bump-patch|--bump-minor|--bump-major)
@@ -78,6 +88,10 @@ while [[ $# -gt 0 ]]; do
             EXPLICIT_VERSION="$2"; shift 2 ;;
         --notes)
             NOTES="$2"; shift 2 ;;
+        --silent)
+            CHANNEL="silent"; shift ;;
+        --channel)
+            CHANNEL="$2"; shift 2 ;;
         *)
             echo "Unknown option: $1" >&2; exit 2 ;;
     esac
@@ -293,6 +307,10 @@ ITEM_XML="    <item>
       <sparkle:version>$NEW_BUILD</sparkle:version>
       <sparkle:shortVersionString>$NEW_VERSION</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>"
+if [[ -n "$CHANNEL" ]]; then
+    ITEM_XML+="
+      <sparkle:channel>$CHANNEL</sparkle:channel>"
+fi
 if [[ -n "$NOTES" ]]; then
     ITEM_XML+="
       <description><![CDATA[$NOTES]]></description>"

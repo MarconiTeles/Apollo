@@ -97,6 +97,21 @@ final class UpdateService: NSObject, ObservableObject {
 
 extension UpdateService: SPUUpdaterDelegate {
 
+    /// Channels Apollo subscribes to. Empty string is the
+    /// default "everyone gets this" stream. `"silent"` is
+    /// Apollo-specific: items tagged
+    /// `<sparkle:channel>silent</sparkle:channel>` in the
+    /// appcast are still DISCOVERED by the updater (so a
+    /// manual `⌘ → Verificar Atualizações…` finds them and
+    /// can install them) — but the `SPUStandardUserDriver`
+    /// delegate below refuses to show the scheduled-check
+    /// banner for them. Net effect: dev can ship a release
+    /// that's available on demand but doesn't spam every
+    /// running install with a notification.
+    nonisolated func allowedChannels(for updater: SPUUpdater) -> Set<String> {
+        ["", "silent"]
+    }
+
     /// Sparkle calls this on whatever thread it parsed the
     /// appcast on. We hop to main to mutate `@Published`
     /// properties and touch UI-adjacent APIs.
@@ -106,6 +121,13 @@ extension UpdateService: SPUUpdaterDelegate {
         let build    = item.versionString
         let notesURL = item.releaseNotesURL
         let pubDate  = item.date
+        // Items in the `silent` channel are discovered AND
+        // installable via the menu, but we suppress every
+        // in-app announcement surface (persistent banner,
+        // system notification, in-app notification center).
+        // The user only encounters the update by explicitly
+        // clicking `⌘ → Verificar Atualizações…`.
+        let isSilent = item.channel == "silent"
         Task { @MainActor in
             let info = AvailableUpdate(
                 version: version,
@@ -113,8 +135,14 @@ extension UpdateService: SPUUpdaterDelegate {
                 releaseNotesURL: notesURL,
                 pubDate: pubDate
             )
+            self.lastCheckedAt = Date()
+            if isSilent {
+                // Don't surface anywhere. `availableUpdate`
+                // also stays nil so the persistent banner
+                // doesn't appear.
+                return
+            }
             self.availableUpdate = info
-            self.lastCheckedAt   = Date()
 
             // Suppress duplicate announcements for the same version
             // within a single launch — Sparkle re-checks at the
@@ -144,6 +172,30 @@ extension UpdateService: SPUUpdaterDelegate {
             self.lastCheckedAt   = Date()
             self.availableUpdate = nil
         }
+    }
+}
+
+// MARK: - SPUStandardUserDriverDelegate
+
+extension UpdateService: SPUStandardUserDriverDelegate {
+
+    /// Sparkle calls this on every scheduled (background)
+    /// update discovery. Returning `false` tells the standard
+    /// user driver NOT to surface the "Apollo X is available"
+    /// modal for THIS particular discovery.
+    ///
+    /// We return false for items in the `silent` channel so
+    /// the scheduled check stays quiet. Manual checks via
+    /// `⌘ → Verificar Atualizações…` route through a
+    /// different code path (the standard user driver doesn't
+    /// consult this delegate for user-initiated checks) — so
+    /// the user sees the silent release the moment they click
+    /// the menu item, but never gets a surprise banner.
+    nonisolated func standardUserDriverShouldHandleShowingScheduledUpdate(
+        _ update: SUAppcastItem,
+        andInImmediateFocus immediateFocus: Bool
+    ) -> Bool {
+        return update.channel != "silent"
     }
 }
 

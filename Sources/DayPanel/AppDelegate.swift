@@ -37,7 +37,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: updateService,
-            userDriverDelegate: nil
+            // Same service also implements
+            // `SPUStandardUserDriverDelegate` — used to suppress
+            // the scheduled-check banner for updates tagged
+            // `<sparkle:channel>silent</sparkle:channel>` in the
+            // appcast. Manual checks ignore that suppression and
+            // show the install modal as usual.
+            userDriverDelegate: updateService
         )
         // The service exposes thin wrappers around `checkForUpdates`
         // / `checkForUpdatesInBackground`; hand it back the

@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.5.8</title>
-      <pubDate>Wed, 13 May 2026 14:17:44 +0000</pubDate>
-      <sparkle:version>33</sparkle:version>
-      <sparkle:shortVersionString>1.5.8</sparkle:shortVersionString>
+      <title>Apollo 1.5.9</title>
+      <pubDate>Wed, 13 May 2026 14:44:49 +0000</pubDate>
+      <sparkle:version>34</sparkle:version>
+      <sparkle:shortVersionString>1.5.9</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Toolbar da janela agora é arrastável em toda extensão (espaços entre os botões dragam a janela). Antes só a metade direita funcionava.]]></description>
+      <description><![CDATA[Infraestrutura de canal 'silent' do Sparkle: releases podem agora ser publicadas no feed sem disparar banner agendado — só aparecem quando o usuário clica 'Verificar Atualizações…'. Útil pra disponibilizar versões em teste pra quem quiser sem spam pros demais. Também inclui o fix da toolbar arrastável em toda extensão.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.8/Apollo-1.5.8.zip"
-        sparkle:edSignature="ybYXF1BuN2VaSA8DVt/ZM+ly5xWMY9V0c9IO4rc+Fnf7JWuX0DbLuOI8oH5lVAtFNqFWGHK2H5mxfIFZK2ZNBw=="
-        length="37683907"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.9/Apollo-1.5.9.zip"
+        sparkle:edSignature="yPn9TUrytx6ex3xoj5KKE0qH/2qdzW9uaS4ScWRZ75YiWs781hazq+34CEFZt1qYM8ARxxSp1l+NER5pZfIHBA=="
+        length="37685360"
         type="application/octet-stream" />
     </item>
   </channel>
