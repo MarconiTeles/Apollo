@@ -64,7 +64,11 @@ enum DescriptionAttachmentRenderer {
         let fullRange = NSRange(location: 0, length: nsText.length)
         let matches = regex.matches(in: text, range: fullRange)
         guard !matches.isEmpty else {
-            return NSAttributedString(string: text, attributes: baseAttributes)
+            // No attachment cards to splice in. Still need to
+            // linkify any plain URLs in the body so the user can
+            // click them in display mode (same behavior the
+            // editor's `applyLinks` gives in edit mode).
+            return linkifiedAttributed(text, attributes: baseAttributes)
         }
 
         let result = NSMutableAttributedString()
@@ -76,7 +80,14 @@ enum DescriptionAttachmentRenderer {
                     with: NSRange(location: cursor,
                                   length: match.range.location - cursor)
                 )
-                result.append(NSAttributedString(string: pre, attributes: baseAttributes))
+                // Linkify URLs inside the plain text segment.
+                // Without this, non-attachment URLs (Google Docs
+                // links, arbitrary clipboard pastes, etc.) showed
+                // as black plain text in display mode while edit
+                // mode rendered them as clickable blue — surprising
+                // mode mismatch the user reported. Matches the
+                // editor's NSDataDetector behavior.
+                result.append(linkifiedAttributed(pre, attributes: baseAttributes))
             }
 
             // Group 1: filename label; Group 2: URL.
@@ -132,15 +143,58 @@ enum DescriptionAttachmentRenderer {
             cursor = match.range.location + match.range.length
         }
 
-        // Tail after the last match.
+        // Tail after the last match — same linkification as the
+        // segments between attachment matches.
         if cursor < nsText.length {
             let tail = nsText.substring(
                 with: NSRange(location: cursor, length: nsText.length - cursor)
             )
-            result.append(NSAttributedString(string: tail, attributes: baseAttributes))
+            result.append(linkifiedAttributed(tail, attributes: baseAttributes))
         }
 
         return result
+    }
+
+    // MARK: - Plain-text linkification
+
+    /// `NSDataDetector` for URLs (same detector
+    /// `RichTextEditor.applyLinks` uses in edit mode). Compiled
+    /// once and reused — `NSDataDetector` initialization isn't
+    /// free.
+    private static let urlDetector: NSDataDetector? = {
+        try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    }()
+
+    /// Build an attributed string from the given plain `text`
+    /// with `.link` attributes applied over any URLs the data
+    /// detector finds. The link value is stored as `NSString`
+    /// (the URL's `absoluteString`) — NOT `URL` / `NSURL` —
+    /// because the same TextKit-1 retain bug that crashed
+    /// attachment-glyph clicks bites here too on attribute
+    /// ranges in attributed strings pushed to text storage via
+    /// `setAttributedString`. Strings are safe; the
+    /// `clickedOnLink:atIndex:` delegate already accepts
+    /// `String` / `NSString` (see `RichTextEditor.Coordinator
+    /// .textView(_:clickedOnLink:at:)`).
+    private static func linkifiedAttributed(
+        _ text: String,
+        attributes: [NSAttributedString.Key: Any]
+    ) -> NSAttributedString {
+        let attributed = NSMutableAttributedString(
+            string: text,
+            attributes: attributes
+        )
+        guard let detector = urlDetector, !text.isEmpty else { return attributed }
+        let range = NSRange(location: 0, length: (text as NSString).length)
+        let cursor = NSCursor.pointingHand
+        for match in detector.matches(in: text, range: range) {
+            guard let url = match.url else { continue }
+            attributed.addAttribute(.link,
+                                    value: url.absoluteString as NSString,
+                                    range: match.range)
+            attributed.addAttribute(.cursor, value: cursor, range: match.range)
+        }
+        return attributed
     }
 
     // MARK: - Regex

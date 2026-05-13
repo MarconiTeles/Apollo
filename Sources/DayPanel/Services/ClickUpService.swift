@@ -1042,6 +1042,15 @@ final class ClickUpService {
     ///     stays in the visible text (NSDataDetector picks it up)
     ///     without dropping the human-readable label.
     ///
+    /// Markdown escape handling: ClickUp's markdown_description
+    /// escapes special characters (`_`, `*`, `(`, `)`, etc.) in
+    /// the LABEL half of `[label](url)` so they don't get
+    /// re-parsed as markdown formatting. We unescape before
+    /// comparing label to URL; otherwise a label like
+    /// `https://x/foo\_bar` looks different from URL
+    /// `https://x/foo_bar` and we'd needlessly render both
+    /// halves of the duplicated link.
+    ///
     /// Idempotent on strings with no markdown links. Safe to apply
     /// every parse — runs once per task during the list/getTask path.
     private static func flattenMarkdownLinks(_ s: String) -> String {
@@ -1058,12 +1067,39 @@ final class ClickUpService {
         for m in matches.reversed() {
             let labelRange = m.range(at: 1)
             let urlRange   = m.range(at: 2)
-            let label = (s as NSString).substring(with: labelRange)
-            let url   = (s as NSString).substring(with: urlRange)
+            let rawLabel = (s as NSString).substring(with: labelRange)
+            let url      = (s as NSString).substring(with: urlRange)
+            let label = unescapeMarkdownEscapes(rawLabel)
             let replacement = (label == url) ? url : "\(label) (\(url))"
             nss.replaceCharacters(in: m.range, with: replacement)
         }
         return nss as String
+    }
+
+    /// Drops backslash-escapes ClickUp injects into the markdown
+    /// `label` half of a link (`\_`, `\*`, `\(`, `\)`, `\[`, `\]`,
+    /// `\\`). The rendered text shouldn't show the backslashes,
+    /// and comparing against the unescaped URL relies on label
+    /// having the literal chars. Anything else after `\` we leave
+    /// alone (no `\n`/`\t` interpretation in markdown links).
+    private static func unescapeMarkdownEscapes(_ s: String) -> String {
+        guard s.contains("\\") else { return s }
+        let escapables: Set<Character> = ["_", "*", "(", ")", "[", "]", "\\", "`", "#"]
+        var out = ""
+        out.reserveCapacity(s.count)
+        var iterator = s.makeIterator()
+        while let ch = iterator.next() {
+            if ch == "\\", let next = iterator.next() {
+                if escapables.contains(next) {
+                    out.append(next)
+                } else {
+                    out.append(ch); out.append(next)
+                }
+            } else {
+                out.append(ch)
+            }
+        }
+        return out
     }
 
     /// Percent-encodes ID-shaped strings before they're spliced

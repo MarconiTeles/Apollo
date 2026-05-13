@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.5.5</title>
-      <pubDate>Tue, 12 May 2026 17:42:31 +0000</pubDate>
-      <sparkle:version>30</sparkle:version>
-      <sparkle:shortVersionString>1.5.5</sparkle:shortVersionString>
+      <title>Apollo 1.5.6</title>
+      <pubDate>Wed, 13 May 2026 02:01:28 +0000</pubDate>
+      <sparkle:version>31</sparkle:version>
+      <sparkle:shortVersionString>1.5.6</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Hotfix OTA: adiciona entitlements 'temporary-exception.mach-lookup.global-name' (spki/spks) e 'shared-preference.read-write' que o Sparkle precisa pra falar com os XPC services em sandbox. Sem eles a OTA falhava com 'failed to probe status service'. Também: novo self-check em build.sh que falha o build se qualquer entitlement crítico estiver ausente — pra essa categoria de bug não chegar mais em produção.]]></description>
+      <description><![CDATA[URLs não-anexo (Google Docs, etc) agora aparecem clicáveis em modo de visualização — antes só viravam linkáveis em modo de edição. Fix auxiliar: ClickUp escapa caracteres especiais (\_, \*) em labels de markdown links, então label != url e Apollo mostrava 'URL (URL)' duplicada. Agora unescape o label antes de comparar.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.5/Apollo-1.5.5.zip"
-        sparkle:edSignature="l04AT7dbd5MWlAQX5Cy5+G/c1jC/Ep2vRJVH3yJqBLN8DTKVDh179rR7u0Rkv6eDNdlQ57VLO5Z7/jRlnwXiDw=="
-        length="37646520"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.6/Apollo-1.5.6.zip"
+        sparkle:edSignature="4WyraTc/zInyFlIdbZ9G9ctiegCCPUtx7YGR2K0vrQ8FANnc2SaXkat7d1+2bmRZllpTU2UIlAdZnZf36lkCBA=="
+        length="37647983"
         type="application/octet-stream" />
     </item>
   </channel>

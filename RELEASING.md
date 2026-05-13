@@ -209,6 +209,41 @@ errada / assinatura inválida / etc.
 
 ---
 
+## Limitação conhecida: adhoc → Developer ID não atualiza via Sparkle
+
+Sparkle **rejeita por design** o update quando o Team ID do app
+atual não bate com o da nova versão. Isso vale na transição
+one-time adhoc → Developer ID — qualquer usuário que ainda tem
+instalado um build pré-1.5.0 (sem certificado, sem Team ID) vai
+ver um erro do Sparkle ao tentar atualizar pra uma versão
+notarizada, mesmo que a nova esteja perfeitamente assinada.
+
+Pra eles, o fluxo é **instalação manual one-time**:
+
+1. Baixa o DMG da versão atual em
+   https://github.com/MarconiTeles/Apollo/releases/latest
+2. Apaga `/Applications/Apollo.app`
+3. Arrasta o `Apollo.app` do DMG pra `/Applications`
+4. Abre — Gatekeeper aceita sem prompt (notarizado)
+5. Reconecta ClickUp + Google Calendar (TCC + Keychain ACLs
+   resetam porque o macOS vê como "app diferente" pela mudança
+   de identidade de assinatura)
+
+A partir daí, OTA via Sparkle funciona normal entre releases.
+
+Se você ver "An error occurred while running the updater" ou
+"failed to probe status service" em um teste de OTA, primeira
+coisa a verificar é se o app instalado é adhoc ou Developer ID:
+
+```bash
+codesign -dv /Applications/Apollo.app 2>&1 | grep TeamIdentifier
+```
+
+Sem `TeamIdentifier` (= adhoc) → é esse caso, manda instalar o
+DMG manualmente.
+
+---
+
 ## Anatomia do appcast.xml
 
 Cada release vira um `<item>` no canal. O mais novo fica no topo:
