@@ -145,19 +145,42 @@ APOLLO_UPLOAD=1 ./release.sh --bump-patch --notes "Bug fixes"
 Faz `gh release create vX.Y.Z dist/Apollo-X.Y.Z.zip dist/Apollo-X.Y.Z.dmg`
 no repo definido por `APOLLO_GITHUB_SLUG`.
 
-### Publicar o appcast (parte que ainda é manual)
+### Publicar o appcast — ETAPA DE APROVAÇÃO MANUAL
 
-Depois do `release.sh`:
+O `release.sh` **não** atualiza o `docs/appcast.xml`. Ele faz o
+build, notariza, sobe pro GitHub Releases, e para por aí. Isso
+deixa uma **janela de aprovação** — você pode baixar o DMG da
+release page, testar localmente, e só depois liberar pros
+testadores.
+
+Quando estiver satisfeito com a build:
 
 ```bash
-cp dist/appcast.xml docs/appcast.xml
-git add docs/appcast.xml Sources/DayPanel/Resources/Info.plist
-git commit -m "Release vX.Y.Z"
-git push
+./promote.sh
 ```
 
-Em ~30 segundos o Pages re-serve o appcast e os usuários do Apollo já podem
-"Verificar Atualizações…" e baixar a nova versão.
+O script:
+
+1. Confere que `dist/appcast.xml` é mais novo que
+   `docs/appcast.xml` (não desce versão por acidente).
+2. Copia, commita e dá push.
+3. Pages re-serve em ~30s. A próxima `SUScheduledCheckInterval`
+   ou `⌘ → Verificar Atualizações…` mostra o update.
+
+Pra ver o diff antes de promover sem dar push:
+
+```bash
+./promote.sh --dry-run
+```
+
+Se uma release sair quebrada e você **ainda não promoveu**, é
+só rodar `./release.sh --bump-patch` de novo com o fix.
+Versão antiga continua na release page do GitHub (acessível
+via DMG manual), mas nenhum tester foi notificado via Sparkle.
+
+Se uma release sair quebrada e você **já promoveu**, não dá
+pra "desnotificar" — Sparkle não tem rollback. A saída é
+shippar uma patch nova com o fix o mais rápido possível.
 
 ---
 
