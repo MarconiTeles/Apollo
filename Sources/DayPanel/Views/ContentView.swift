@@ -172,6 +172,22 @@ struct ContentView: View {
                     toolbar
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .frame(height: 52, alignment: .center)
+                        // Make the toolbar band drag the window.
+                        // `WindowDragArea` is a transparent NSView
+                        // whose `mouseDownCanMoveWindow = true`
+                        // tells AppKit "treat clicks here as
+                        // window drag." Sits as a background so
+                        // the interactive pills (Evento / Hoje /
+                        // ListPicker / Filtros / Search / …)
+                        // catch their own clicks first; only the
+                        // gaps between them — which were
+                        // previously eating mouseDown into the
+                        // dashboard or doing nothing — now drag
+                        // the window. Fixes the symptom where
+                        // only the right portion of the bar
+                        // happened to drag (it had less SwiftUI
+                        // chrome covering the title-bar region).
+                        .background(WindowDragArea())
                 }
                 .allowsHitTesting(!anyPopupOpen)
 

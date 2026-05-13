@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.5.7</title>
-      <pubDate>Wed, 13 May 2026 12:22:06 +0000</pubDate>
-      <sparkle:version>32</sparkle:version>
-      <sparkle:shortVersionString>1.5.7</sparkle:shortVersionString>
+      <title>Apollo 1.5.8</title>
+      <pubDate>Wed, 13 May 2026 14:17:44 +0000</pubDate>
+      <sparkle:version>33</sparkle:version>
+      <sparkle:shortVersionString>1.5.8</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Comentários de revisão (proofing/anotações de vídeo) do ClickUp: badge laranja com a contagem nos chips de anexo, botão 'Ver no ClickUp' que abre direto o player de proofing, e notificação quando alguém comenta em um anexo que VOCÊ enviou.]]></description>
+      <description><![CDATA[Toolbar da janela agora é arrastável em toda extensão (espaços entre os botões dragam a janela). Antes só a metade direita funcionava.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.7/Apollo-1.5.7.zip"
-        sparkle:edSignature="TvoAu0yigMQbzLlbz9JD0rm3nGEwk76iDLt48+YEzbJBe71Vnb77R9ku9+P3rIRqte3DrN31RkV93etHX1QoBw=="
-        length="37676084"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.8/Apollo-1.5.8.zip"
+        sparkle:edSignature="ybYXF1BuN2VaSA8DVt/ZM+ly5xWMY9V0c9IO4rc+Fnf7JWuX0DbLuOI8oH5lVAtFNqFWGHK2H5mxfIFZK2ZNBw=="
+        length="37683907"
         type="application/octet-stream" />
     </item>
   </channel>
