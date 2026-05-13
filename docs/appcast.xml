@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.5.7</title>
-      <pubDate>Wed, 13 May 2026 12:22:06 +0000</pubDate>
-      <sparkle:version>32</sparkle:version>
-      <sparkle:shortVersionString>1.5.7</sparkle:shortVersionString>
+      <title>Apollo 1.5.9</title>
+      <pubDate>Wed, 13 May 2026 14:44:49 +0000</pubDate>
+      <sparkle:version>34</sparkle:version>
+      <sparkle:shortVersionString>1.5.9</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Comentários de revisão (proofing/anotações de vídeo) do ClickUp: badge laranja com a contagem nos chips de anexo, botão 'Ver no ClickUp' que abre direto o player de proofing, e notificação quando alguém comenta em um anexo que VOCÊ enviou.]]></description>
+      <description><![CDATA[Infraestrutura de canal 'silent' do Sparkle: releases podem agora ser publicadas no feed sem disparar banner agendado — só aparecem quando o usuário clica 'Verificar Atualizações…'. Útil pra disponibilizar versões em teste pra quem quiser sem spam pros demais. Também inclui o fix da toolbar arrastável em toda extensão.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.7/Apollo-1.5.7.zip"
-        sparkle:edSignature="TvoAu0yigMQbzLlbz9JD0rm3nGEwk76iDLt48+YEzbJBe71Vnb77R9ku9+P3rIRqte3DrN31RkV93etHX1QoBw=="
-        length="37676084"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.9/Apollo-1.5.9.zip"
+        sparkle:edSignature="yPn9TUrytx6ex3xoj5KKE0qH/2qdzW9uaS4ScWRZ75YiWs781hazq+34CEFZt1qYM8ARxxSp1l+NER5pZfIHBA=="
+        length="37685360"
         type="application/octet-stream" />
     </item>
   </channel>
