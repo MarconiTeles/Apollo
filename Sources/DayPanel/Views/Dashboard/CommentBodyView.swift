@@ -107,58 +107,54 @@ struct CommentBodyView: View, Equatable {
         let kind = Self.kind(for: url)
         let info = meta(for: url, kind: kind)
 
+        let accent = info.tint.editorialMuted
+        let ext = att.ext.isEmpty
+            ? (url.pathExtension.isEmpty ? "FILE" : url.pathExtension)
+            : att.ext
         return Button {
             NSWorkspace.shared.open(url)
         } label: {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(info.tint.opacity(0.18))
-                    Image(systemName: info.icon)
-                        .font(.title3)
-                        .foregroundStyle(info.tint)
-                }
-                .frame(width: 38, height: 44)
+            HStack(alignment: .center, spacing: 12) {
+                Text(ext.uppercased())
+                    .font(Editorial.sans(9, .semibold))
+                    .tracking(0.4)
+                    .foregroundStyle(accent)
+                    .frame(width: 38, height: 20)
+                    .background(RoundedRectangle(cornerRadius: 3)
+                        .fill(accent.opacity(0.12)))
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(att.title)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(Editorial.serif(13))
+                        .foregroundStyle(Editorial.ink)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    HStack(spacing: 4) {
+                    HStack(spacing: 5) {
                         Text(info.label)
                         if let size = att.sizeString {
                             Text("·")
-                            Text(size)
+                            Text(size).monospacedDigit()
                         }
                     }
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(Editorial.sans(10.5))
+                    .foregroundStyle(Editorial.inkMute)
                 }
 
-                Spacer()
+                Spacer(minLength: 0)
 
-                Image(systemName: "arrow.up.right.square")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Editorial.inkMute)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            // Was `.regularMaterial` — each material allocates a
-            // CABackdropFilter that recomputes per frame. With 10+
-            // comments × 5+ attachments visible in a TaskDetailSheet
-            // the backdrop-filter count compounded into noticeable
-            // GPU cost. Solid tinted background reads adequately
-            // for these compact cards and removes the per-frame
-            // backdrop work.
-            .background(Color.primary.opacity(0.06),
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Editorial.card))
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(Editorial.rule, lineWidth: 1)
             )
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -170,52 +166,46 @@ struct CommentBodyView: View, Equatable {
     private func attachmentCard(url: URL, kind: AttachmentKind) -> some View {
         let info = meta(for: url, kind: kind)
 
+        let accent = info.tint.editorialMuted
+        let ext = url.pathExtension.isEmpty ? "FILE" : url.pathExtension
         return Button {
             NSWorkspace.shared.open(url)
         } label: {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(info.tint.opacity(0.18))
-                    Image(systemName: info.icon)
-                        .font(.title3)
-                        .foregroundStyle(info.tint)
-                }
-                .frame(width: 38, height: 44)
+            HStack(alignment: .center, spacing: 12) {
+                Text(ext.uppercased())
+                    .font(Editorial.sans(9, .semibold))
+                    .tracking(0.4)
+                    .foregroundStyle(accent)
+                    .frame(width: 38, height: 20)
+                    .background(RoundedRectangle(cornerRadius: 3)
+                        .fill(accent.opacity(0.12)))
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(url.lastPathComponent)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(Editorial.serif(13))
+                        .foregroundStyle(Editorial.ink)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Text(info.label)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(Editorial.sans(10.5))
+                        .foregroundStyle(Editorial.inkMute)
                 }
 
-                Spacer()
+                Spacer(minLength: 0)
 
-                Image(systemName: "arrow.up.right.square")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Editorial.inkMute)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            // Was `.regularMaterial` — each material allocates a
-            // CABackdropFilter that recomputes per frame. With 10+
-            // comments × 5+ attachments visible in a TaskDetailSheet
-            // the backdrop-filter count compounded into noticeable
-            // GPU cost. Solid tinted background reads adequately
-            // for these compact cards and removes the per-frame
-            // backdrop work.
-            .background(Color.primary.opacity(0.06),
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Editorial.card))
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(Editorial.rule, lineWidth: 1)
             )
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -278,8 +268,9 @@ struct CommentBodyView: View, Equatable {
         // Style applied to whichever range a `@` consumes.
         func styled(_ range: Range<String.Index>) -> AttributedString {
             var a = AttributedString(String(s[range]))
-            a.foregroundColor = Color.accentColor
-            a.font = .caption.weight(.semibold)
+            // New York italic in the app's cinnabar accent.
+            a.foregroundColor = Editorial.accent
+            a.font = .system(.body, design: .serif).italic()
             return a
         }
 
@@ -384,7 +375,7 @@ struct CommentBodyView: View, Equatable {
     private func meta(for url: URL, kind: AttachmentKind) -> Meta {
         switch kind {
         case .image: return .init(icon: "photo.fill",       tint: .pink,         label: "Imagem")
-        case .video: return .init(icon: "video.fill",       tint: Color.accentColor, label: "Vídeo")
+        case .video: return .init(icon: "video.fill",       tint: Editorial.accent, label: "Vídeo")
         case .audio: return .init(icon: "waveform",         tint: .purple,       label: "Áudio")
         case .file:
             switch url.pathExtension.lowercased() {

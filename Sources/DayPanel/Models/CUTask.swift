@@ -11,6 +11,11 @@ struct TaskListRow: Identifiable, Equatable {
     let depth: Int
     let hasChildren: Bool
     let isExpanded: Bool
+    /// True for the last row of an expanded subtree (a subtask
+    /// whose next sibling in the flat list is a top-level mother
+    /// task, or the end of the list). Drives the single hairline
+    /// that closes the subtree off from the next mother task.
+    var isLastInSubtree: Bool = false
 
     /// Composite id so the same task at different depths
     /// (shouldn't happen in normal use, but safe) renders as
@@ -69,6 +74,130 @@ struct CUTask: Identifiable, Codable, Equatable {
     /// up as a single deduplicated list of pills below the
     /// description editor.
     var attachments: [Attachment] = []
+
+    /// ClickUp checklists on the task. ClickUp returns these in
+    /// the single-task GET payload as a top-level `checklists`
+    /// array, each with its own `items`. Only the full task
+    /// fetch (`getTask`) includes them — the list endpoint
+    /// omits checklists, so this stays empty until the detail
+    /// popup hydrates the task. Default keeps older cached
+    /// payloads decodable.
+    var checklists: [Checklist] = []
+
+    /// ClickUp custom fields on the task. Like checklists, only
+    /// the single-task GET payload carries usable `value`s — the
+    /// list endpoint returns the field definitions but typically
+    /// without per-task values, so this stays empty until the
+    /// detail popup hydrates the task. Default keeps older cached
+    /// payloads decodable.
+    ///
+    /// `displayValue` is pre-formatted by the parser per field
+    /// type (drop_down → option label, labels → joined labels,
+    /// date → localized date, etc.) so the view layer stays dumb.
+    /// `options` + `selectedOptionId` are only populated for
+    /// `drop_down` fields so the detail view can offer an inline
+    /// menu to change them; every other type is read-only.
+    var customFields: [CustomField] = []
+
+    struct CustomField: Codable, Hashable, Identifiable {
+        let id: String
+        var name: String
+        /// Raw ClickUp type string (`drop_down`, `labels`,
+        /// `text`, `number`, `url`, `date`, `users`, `checkbox`,
+        /// …). Drives the icon and whether the row is editable.
+        var type: String
+        /// Human-readable, already-formatted value. Empty string
+        /// means "no value set".
+        var displayValue: String
+        /// Drop-down options (empty for non-dropdown fields).
+        var options: [Option] = []
+        /// Currently-selected option id for a drop_down, when set.
+        var selectedOptionId: String? = nil
+
+        var hasValue: Bool { !displayValue.isEmpty }
+        /// Only single-select drop-downs are inline-editable for
+        /// now — the highest-value actionable type for the
+        /// content-production workflow ("Próxima Etapa",
+        /// "Empresa", "Produtos"). Everything else is read-only.
+        var isEditable: Bool { type == "drop_down" && !options.isEmpty }
+
+        struct Option: Codable, Hashable, Identifiable {
+            let id: String
+            var name: String
+            /// ClickUp `orderindex` — what the "set custom field"
+            /// endpoint expects as the value for a drop_down.
+            var orderIndex: Int
+            var color: String?
+        }
+
+        /// SF Symbol per field family — keeps the rows visually
+        /// scannable without a legend.
+        var icon: String {
+            switch type {
+            case "drop_down", "labels":   return "chevron.down.square"
+            case "users":                 return "person.crop.circle"
+            case "url":                   return "link"
+            case "email":                 return "envelope"
+            case "phone":                 return "phone"
+            case "date":                  return "calendar"
+            case "number", "currency",
+                 "money":                 return "number"
+            case "checkbox":              return "checkmark.square"
+            case "emoji", "rating":       return "star"
+            default:                       return "tag"
+            }
+        }
+    }
+
+    /// Blocking relationships from ClickUp's `dependencies`
+    /// array, already interpreted relative to THIS task
+    /// (waiting-on vs. blocking). Read-only — Apollo surfaces
+    /// them as visual blocks; editing the dependency graph is
+    /// out of scope. List-endpoint-omitted; hydrated via getTask.
+    var dependencies: [Dependency] = []
+    /// Task ids from ClickUp's `linked_tasks` (non-blocking
+    /// "related" links). Titles/status are resolved lazily by
+    /// AppState from the loaded set or a bounded getTask.
+    var linkedTaskIds: [String] = []
+
+    struct Dependency: Codable, Hashable, Identifiable {
+        enum Kind: String, Codable {
+            /// This task can't proceed until `otherTaskId` is done.
+            case waitingOn
+            /// `otherTaskId` can't proceed until this one is done.
+            case blocking
+        }
+        let otherTaskId: String
+        let kind: Kind
+        var id: String { "\(kind.rawValue):\(otherTaskId)" }
+    }
+
+    /// One ClickUp checklist (a named group of checkable items).
+    struct Checklist: Codable, Hashable, Identifiable {
+        let id: String
+        var name: String
+        /// `orderindex` from ClickUp — used to keep multiple
+        /// checklists in the order the user arranged them.
+        var orderIndex: Int
+        var items: [Item]
+
+        /// Convenience for the progress label
+        /// ("3/8 concluídos").
+        var resolvedCount: Int { items.filter(\.resolved).count }
+
+        struct Item: Codable, Hashable, Identifiable {
+            let id: String
+            var name: String
+            var resolved: Bool
+            var orderIndex: Int
+            /// Assignee user id, when ClickUp returns one. We
+            /// only render the presence of an assignee as a
+            /// small dot — full avatar resolution would need a
+            /// roster lookup the checklist payload doesn't
+            /// carry.
+            var assigneeId: Int?
+        }
+    }
 
     struct Attachment: Codable, Hashable, Identifiable {
         /// Unique identifier — uses ClickUp's `id` when
@@ -183,15 +312,16 @@ struct CUTask: Identifiable, Codable, Equatable {
         CUStatus(status: status, color: statusColor, type: isCompleted ? "closed" : "open").displayHex
     }
 
-    /// ClickUp's canonical priority palette (matches the flags shown in
-    /// ClickUp's own UI: Urgent red, High amber, Normal blue, Low grey).
+    /// Muted, denser editorial priority palette — desaturated
+    /// warm tones coherent with the "Editorial Calm" system
+    /// (not ClickUp's vivid red/amber/cyan web flags).
     var priorityHex: String {
         switch priority {
-        case 1: return "#F50000"   // Urgent
-        case 2: return "#FFCC00"   // High
-        case 3: return "#6FDDFF"   // Normal
-        case 4: return "#87909E"   // Low
-        default: return "#BFBFBF"  // None
+        case 1: return "#A8392A"   // Urgente — muted brick
+        case 2: return "#9A7B1F"   // Alta — muted ochre
+        case 3: return "#56708A"   // Normal — muted slate-blue
+        case 4: return "#7C7E84"   // Baixa — warm muted grey
+        default: return "#A8A39A"  // Nenhuma — pale warm grey
         }
     }
 

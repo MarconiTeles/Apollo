@@ -113,6 +113,7 @@ final class GoogleCalendarService {
     /// full event payload.
     func updateEvent(
         eventId: String,
+        calendarId: String = "primary",
         title: String? = nil,
         startDate: Date? = nil,
         endDate: Date? = nil,
@@ -123,8 +124,17 @@ final class GoogleCalendarService {
     ) async throws {
         let token = try await auth.validAccessToken()
 
+        // PATCH the event on ITS calendar, not a hardcoded
+        // `primary`. Events the user owns on a secondary
+        // calendar (calendarId = that calendar's address) were
+        // being patched against `primary`, so writes like
+        // `location` never stuck server-side — the optimistic
+        // local change showed, then the next sync reverted it.
+        let calRaw = calendarId.isEmpty ? "primary" : calendarId
+        let calPath = calRaw.addingPercentEncoding(
+            withAllowedCharacters: .urlHostAllowed) ?? calRaw
         var components = URLComponents(string:
-            "https://www.googleapis.com/calendar/v3/calendars/primary/events/\(eventId)")!
+            "https://www.googleapis.com/calendar/v3/calendars/\(calPath)/events/\(eventId)")!
         // sendUpdates=all → if attendees changed (added or
         // removed), Google emails the deltas. Even on a
         // no-attendee patch this is a safe default.

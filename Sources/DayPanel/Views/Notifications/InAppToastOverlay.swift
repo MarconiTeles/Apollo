@@ -18,15 +18,17 @@ struct InAppToastOverlay: View {
                 ToastCard(notification: n) {
                     dismiss(n.id)
                 }
+                // Prototype `pSlideIn`: rises 8pt + fades in.
                 .transition(.asymmetric(
-                    insertion: .move(edge: .top).combined(with: .opacity),
+                    insertion: .offset(y: 8).combined(with: .opacity),
                     removal:   .opacity
                 ))
             }
         }
-        .padding(.top, 60)         // clear the toolbar
-        .padding(.trailing, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        // Prototype `PToast`: anchored bottom-right.
+        .padding(.bottom, 24)
+        .padding(.trailing, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .allowsHitTesting(!visible.isEmpty)
         .onChange(of: appState.toastQueue) { _, queue in
             // Drain anything new into the visible stack
@@ -67,56 +69,56 @@ private struct ToastCard: View {
     let notification: AppNotification
     let onDismiss:    () -> Void
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: notification.kind.systemImage)
-                .font(.title3)
-                .foregroundStyle(notification.kind.tint)
-                .frame(width: 22)
+    /// Prototype `PToast` tone colours — the 3px left bar is the
+    /// only chromatic element; everything else is editorial paper +
+    /// ink. No saturated web hues.
+    private var toneColor: Color {
+        switch notification.kind {
+        case .success: return Color(hex: "#1F7A3A")   // muted forest
+        case .warning: return Color(hex: "#9C4A12")   // muted amber
+        case .error:   return Editorial.accent        // cinnabar
+        case .info:    return Editorial.ink
+        }
+    }
 
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(notification.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .font(Editorial.serif(13.5, .medium))
+                    .foregroundStyle(Editorial.ink)
                 if let s = notification.subtitle, !s.isEmpty {
                     Text(s)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.primary.opacity(0.85))
+                        .font(Editorial.serif(12.5).italic())
+                        .foregroundStyle(Editorial.inkSoft)
                         .lineLimit(1)
                 }
                 if let m = notification.message, !m.isEmpty {
                     // Same status-colour-aware rendering as the
                     // bell popup — see NotificationsCenterView.
                     Text(notification.attributedMessage ?? AttributedString(m))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(Editorial.serif(12.5).italic())
+                        .foregroundStyle(Editorial.inkSoft)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-
-            Spacer(minLength: 4)
-
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.tertiary)
-                    .padding(4)
-            }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(width: 320, alignment: .leading)
-        .background(.regularMaterial,
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(minWidth: 260, maxWidth: 380, alignment: .leading)
+        .background(Editorial.card)
+        .overlay(alignment: .leading) {
+            // 3px tone bar — the prototype's only chromatic cue.
+            Rectangle().fill(toneColor).frame(width: 3)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(notification.kind.tint.opacity(0.30), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
         )
-        .shadow(color: notification.kind.tint.opacity(0.15), radius: 4, x: 0, y: 2)
-        .shadow(color: .black.opacity(0.10), radius: 8, x: 0, y: 4)
+        .shadow(color: .black.opacity(0.18), radius: 24, x: 0, y: 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: onDismiss)
     }

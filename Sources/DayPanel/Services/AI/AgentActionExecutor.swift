@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+
 
 /// Routes parsed `AgentAction`s through `AppState`'s mutation
 /// API and reports back what actually happened. The executor
@@ -26,13 +28,21 @@ final class AgentActionExecutor {
         }
 
         switch action {
-        case let .createTask(title, priority, due, status, assignees):
+        case let .createTask(title, priority, due, status, assignees,
+                             description, start, tags, parent, links,
+                             attachments):
             return await runCreateTask(
                 title: title,
                 priority: priority,
                 due: due,
                 status: status,
                 assignees: assignees,
+                description: description,
+                start: start,
+                tags: tags,
+                parent: parent,
+                links: links,
+                attachments: attachments,
                 appState: appState
             )
 
@@ -70,7 +80,8 @@ final class AgentActionExecutor {
             let updated = appState.tasksById[task.id] ?? task
             return .updatedTask(updated)
 
-        case let .createEvent(title, start, end, dur, location, guests):
+        case let .createEvent(title, start, end, dur, location, guests,
+                              notes, meetingURL, color, availability, alarm):
             return await runCreateEvent(
                 title: title,
                 start: start,
@@ -78,6 +89,11 @@ final class AgentActionExecutor {
                 durationMinutes: dur,
                 location: location,
                 guests: guests,
+                notes: notes,
+                meetingURL: meetingURL,
+                color: color,
+                availability: availability,
+                alarm: alarm,
                 appState: appState
             )
 
@@ -96,6 +112,31 @@ final class AgentActionExecutor {
                 durationMinutes: dur,
                 appState: appState
             )
+
+        case let .convertEventToTask(ref):
+            guard let event = resolveEvent(ref: ref, in: appState) else {
+                return .failed(reason: "Evento '\(ref)' não encontrado")
+            }
+            guard let task = await appState
+                .convertEventToTask(event) else {
+                return .failed(
+                    reason: "Não foi possível transformar o evento em tarefa")
+            }
+            return .createdTask(task)
+
+        case let .convertTaskToEvent(ref, start, dur):
+            guard let task = resolveTask(ref: ref, in: appState) else {
+                return .failed(reason: "Tarefa '\(ref)' não encontrada")
+            }
+            let startDate = start.flatMap { Self.parseDateTime($0) }
+            let minutes   = dur.flatMap { Self.parseDurationMinutes($0) }
+            guard let event = await appState.convertTaskToEvent(
+                task, start: startDate,
+                durationMinutes: minutes) else {
+                return .failed(
+                    reason: "Não foi possível transformar a tarefa em evento")
+            }
+            return .createdEvent(event)
 
         // ── Read / fetch routing ───────────────────────────
 
@@ -139,11 +180,35 @@ final class AgentActionExecutor {
             await appState.updateTaskTitle(task, to: newTitle)
             return .updatedTask(appState.tasksById[task.id] ?? task)
 
-        case let .updateTaskDescription(ref, desc):
+        case let .updateTaskDescription(ref, desc, links, attachments):
             guard let task = resolveTask(ref: ref, in: appState) else {
                 return .failed(reason: "Tarefa '\(ref)' não encontrada")
             }
-            await appState.updateTaskDescription(task, to: desc)
+            let (localFiles, remoteLinks) = resolveAttachments(
+                links: links, attachments: attachments,
+                pickerMessage: "Escolha arquivos para anexar a \"\(task.title)\"",
+                appState: appState)
+            // New body if given; otherwise keep the current one
+            // so "anexa esse arquivo na descrição" doesn't wipe
+            // existing text. Links/remote files appended below.
+            var parts: [String] = []
+            if let d = desc?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !d.isEmpty {
+                parts.append(d)
+            } else if let cur = task.description?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                      !cur.isEmpty {
+                parts.append(cur)
+            }
+            if !remoteLinks.isEmpty {
+                parts.append(remoteLinks.joined(separator: "\n"))
+            }
+            let body = parts.joined(separator: "\n\n")
+            if !body.isEmpty {
+                await appState.updateTaskDescription(task, to: body)
+            }
+            await uploadAll(localFiles, to: task, appState: appState)
             return .updatedTask(appState.tasksById[task.id] ?? task)
 
         case let .updateTaskAssignees(ref, add, remove):
@@ -180,14 +245,66 @@ final class AgentActionExecutor {
             await appState.updateTaskTags(task, to: names)
             return .updatedTask(appState.tasksById[task.id] ?? task)
 
-        case let .addTaskComment(ref, text):
+        case let .addTaskComment(ref, text, attachments):
             guard let task = resolveTask(ref: ref, in: appState) else {
                 return .failed(reason: "Tarefa '\(ref)' não encontrada")
             }
-            _ = await appState.addComment(to: task, text: text)
+            let (localFiles, remoteLinks) = resolveAttachments(
+                links: nil, attachments: attachments,
+                pickerMessage: "Escolha arquivos para o comentário em \"\(task.title)\"",
+                appState: appState)
+            var commentParts: [String] = []
+            if let t = text?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !t.isEmpty {
+                commentParts.append(t)
+            }
+            if !remoteLinks.isEmpty {
+                commentParts.append(remoteLinks.joined(separator: "\n"))
+            }
+            // Comment text is required by ClickUp even when the
+            // point is the file — fall back to a short caption.
+            let commentText = commentParts.isEmpty
+                ? (localFiles.count == 1
+                   ? "📎 \(localFiles[0].lastPathComponent)"
+                   : "📎 \(localFiles.count) anexo(s)")
+                : commentParts.joined(separator: "\n\n")
+            let comment = await appState.addComment(
+                to: task, text: commentText)
+            await uploadAll(localFiles, to: task,
+                            commentId: comment?.id, appState: appState)
+            let fileNote = localFiles.isEmpty
+                ? "" : " · \(localFiles.count) arquivo(s) anexado(s)"
             return .fetchedContext(
                 label: "comment-posted",
-                body: "Comentário enviado em \"\(task.title)\": \"\(text)\""
+                body: "Comentário enviado em \"\(task.title)\": "
+                    + "\"\(commentText)\"\(fileNote)"
+            )
+
+        case let .addTaskAttachment(ref, files):
+            guard let task = resolveTask(ref: ref, in: appState) else {
+                return .failed(reason: "Tarefa '\(ref)' não encontrada")
+            }
+            let (localFiles, remoteLinks) = resolveAttachments(
+                links: nil, attachments: files,
+                pickerMessage: "Escolha arquivos para anexar a \"\(task.title)\"",
+                appState: appState)
+            if localFiles.isEmpty && remoteLinks.isEmpty {
+                return .failed(
+                    reason: "Nenhum arquivo selecionado para anexar")
+            }
+            await uploadAll(localFiles, to: task, appState: appState)
+            // Remote URLs can't be uploaded as files — record
+            // them as a link comment so they're not lost.
+            if !remoteLinks.isEmpty {
+                _ = await appState.addComment(
+                    to: task,
+                    text: "🔗 " + remoteLinks.joined(separator: "\n"))
+            }
+            let n = localFiles.count + remoteLinks.count
+            return .fetchedContext(
+                label: "attachment-added",
+                body: "\(n) anexo(s) adicionado(s) em \"\(task.title)\""
             )
 
         case let .createSubtask(parentRef, title, priority, due, assignees):
@@ -937,49 +1054,210 @@ final class AgentActionExecutor {
         due: String?,
         status: String?,
         assignees: String?,
+        description: String?,
+        start: String?,
+        tags: String?,
+        parent: String?,
+        links: String?,
+        attachments: String?,
         appState: AppState
     ) async -> AgentActionResult {
         let prio       = priority.flatMap(Self.priorityCode(from:)) ?? 0
         let dueDate    = due.flatMap(Self.parseDueDate(_:))
+        let startDate  = start.flatMap {
+            Self.parseDateTime($0) ?? Self.parseDueDate($0)
+        }
         let statusName = status?.isEmpty == false ? status : nil
+        let tagNames   = Self.splitList(tags)
 
-        // Resolve assignees against ClickUp roster. Two paths:
-        //   1. AI passed `assignees="João,Maria"` → resolve each
-        //      name against `appState.availableMembers`. Drop
-        //      any that don't match (don't fail — partial
-        //      success is better than rejecting the whole call).
-        //   2. AI didn't pass anything → default to the
-        //      connected user. Maintains the "tasks I dictate
-        //      belong to me" invariant the user asked for.
-        var resolvedAssignees: [Int]
+        // Links + attachments. http(s) entries become clickable
+        // links appended to the description (ClickUp linkifies
+        // raw URLs); local file paths are queued for a real
+        // attachment upload once the task exists.
+        let (localFiles, remoteLinks) = resolveAttachments(
+            links: links, attachments: attachments,
+            pickerMessage: "Escolha arquivos para anexar a \"\(title)\"",
+            appState: appState)
+        var descParts: [String] = []
+        if let d = description?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty {
+            descParts.append(d)
+        }
+        if !remoteLinks.isEmpty {
+            descParts.append(remoteLinks.joined(separator: "\n"))
+        }
+        let finalDescription = descParts.isEmpty
+            ? nil : descParts.joined(separator: "\n\n")
+
+        // Assignees: explicit `assignees` attr UNION any
+        // @mentions found in the title/description. The user's
+        // "@Marconi Reis" must become a real assignee, not sit
+        // as dead literal text (the reported bug).
+        var ids = Set<Int>()
         if let raw = assignees,
            !raw.trimmingCharacters(in: .whitespaces).isEmpty {
-            resolvedAssignees = resolveClickUpMemberIds(raw, in: appState)
-            if resolvedAssignees.isEmpty,
-               let me = appState.clickUpAuthService.userId {
-                // Nothing matched — fall back to "me" so the
-                // task is at least owned, not unassigned.
-                resolvedAssignees.append(me)
-            }
-        } else {
+            ids.formUnion(resolveClickUpMemberIds(raw, in: appState))
+        }
+        ids.formUnion(Self.mentionedMemberIds(
+            in: "\(title)\n\(description ?? "")", appState: appState))
+        var resolvedAssignees = Array(ids)
+        if resolvedAssignees.isEmpty {
+            // Nothing explicit/mentioned → default to me so the
+            // task is owned (the dictation invariant).
             resolvedAssignees = appState.clickUpAuthService.userId
                 .map { [$0] } ?? []
         }
 
+        // Subtask path — `parent` resolves to an existing task.
+        if let parentRef = parent?
+            .trimmingCharacters(in: .whitespaces), !parentRef.isEmpty,
+           let parentTask = resolveTask(ref: parentRef, in: appState) {
+            await appState.createSubtask(
+                parent: parentTask,
+                title: title,
+                description: finalDescription,
+                status: statusName,
+                priority: prio,
+                startDate: startDate,
+                dueDate: dueDate,
+                assigneeIds: resolvedAssignees,
+                tagNames: tagNames
+            )
+            if let created = appState.tasks.first(where: {
+                $0.parentId == parentTask.id && $0.title == title
+            }) {
+                await uploadAll(localFiles, to: created, appState: appState)
+                return .createdTask(created)
+            }
+            return .updatedTask(
+                appState.tasksById[parentTask.id] ?? parentTask)
+        }
+
         let task = await appState.createTask(
             title: title,
-            description: nil,
+            description: finalDescription,
             status: statusName,
             priority: prio,
-            startDate: nil,
+            startDate: startDate,
             dueDate: dueDate,
             assigneeIds: resolvedAssignees,
-            tagNames: []
+            tagNames: tagNames
         )
-        if let task {
-            return .createdTask(task)
+        guard let task else {
+            return .failed(reason: "Não foi possível criar a tarefa")
         }
-        return .failed(reason: "Não foi possível criar a tarefa")
+        await uploadAll(localFiles, to: task, appState: appState)
+        return .createdTask(task)
+    }
+
+    /// Comma/newline list → trimmed non-empty tokens.
+    private static func splitList(_ s: String?) -> [String] {
+        guard let s,
+              !s.trimmingCharacters(in: .whitespaces).isEmpty
+        else { return [] }
+        return s.split(whereSeparator: { $0 == "," || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Members whose username (or first name) is @-mentioned
+    /// anywhere in `text`. Substring (not token) match so
+    /// "@Marconi Reis" inside "@Marconi Reis testando" still
+    /// resolves the person.
+    private static func mentionedMemberIds(in text: String,
+                                           appState: AppState) -> [Int] {
+        guard text.contains("@") else { return [] }
+        let hay = text.lowercased()
+        var ids: [Int] = []
+        for m in appState.availableMembers {
+            let uname = m.username.lowercased()
+            let first = uname
+                .split(whereSeparator: { $0 == " " || $0 == "." })
+                .first.map(String.init) ?? uname
+            if hay.contains("@\(uname)") || hay.contains("@\(first)") {
+                ids.append(m.id)
+            }
+        }
+        return Array(Set(ids))
+    }
+
+    private func uploadAll(_ urls: [URL], to task: CUTask,
+                           commentId: String? = nil,
+                           appState: AppState) async {
+        for u in urls {
+            // Panel-vended URLs are security-scoped under the
+            // sandbox; opening the scope makes the read reliable
+            // (harmless no-op for already-accessible paths).
+            let scoped = u.startAccessingSecurityScopedResource()
+            _ = await appState.uploadCommentAttachment(
+                for: task, fileURL: u, commentId: commentId)
+            if scoped { u.stopAccessingSecurityScopedResource() }
+        }
+    }
+
+    /// Resolves the AI's `links` + `attachments` strings into
+    /// real local files (to upload) and remote URLs (to keep as
+    /// links). http(s) entries are links; an entry that's
+    /// already a sandbox-readable file is used as-is. Anything
+    /// else — an LLM-typed path the sandbox can't read, or a
+    /// keyword like "arquivo" — means "the user wants to send a
+    /// file": we open an `NSOpenPanel` so they pick it (the only
+    /// sandbox-correct way to grant read access), exactly like
+    /// the manual create-task sheet.
+    private func resolveAttachments(
+        links: String?, attachments: String?, pickerMessage: String,
+        appState: AppState
+    ) -> (local: [URL], links: [String]) {
+        var remote: [String] = Self.splitList(links)
+        var local:  [URL]    = []
+        var needsPicker = false
+        for a in Self.splitList(attachments) {
+            let scheme = URL(string: a)?.scheme?.lowercased()
+            if scheme == "http" || scheme == "https" {
+                remote.append(a)
+            } else {
+                let path = a.hasPrefix("file://")
+                    ? (URL(string: a)?.path ?? a) : a
+                if FileManager.default.fileExists(atPath: path) {
+                    local.append(URL(fileURLWithPath: path))
+                } else {
+                    // Sandbox can't read arbitrary LLM-typed
+                    // paths — need either composer-attached files
+                    // or a user file pick.
+                    needsPicker = true
+                }
+            }
+        }
+        // Files the user dropped / picked in the chat composer
+        // (identical UX to the task-comment box) take priority —
+        // one-shot: consumed by the action that needs them so a
+        // later message doesn't re-attach the same files.
+        let dropped = appState.aiAgent.pendingAttachments
+        if !dropped.isEmpty {
+            local.append(contentsOf: dropped)
+            appState.aiAgent.pendingAttachments = []
+            needsPicker = false
+        }
+        // Only fall back to the native picker when an attachment
+        // was clearly requested but nothing is available.
+        if needsPicker && local.isEmpty {
+            local.append(contentsOf: Self.promptForFiles(pickerMessage))
+        }
+        return (local, remote)
+    }
+
+    /// Sandbox-compatible file chooser (mirrors the manual
+    /// `CreateTaskSheet.pickAttachments`). NSOpenPanel-vended
+    /// URLs are readable by the sandboxed app.
+    private static func promptForFiles(_ message: String) -> [URL] {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles          = true
+        panel.canChooseDirectories    = false
+        panel.allowsMultipleSelection = true
+        panel.title                   = "Selecionar arquivos"
+        panel.message                 = message
+        panel.prompt                  = "Anexar"
+        return panel.runModal() == .OK ? panel.urls : []
     }
 
     // MARK: - Calendar event creation
@@ -991,6 +1269,11 @@ final class AgentActionExecutor {
         durationMinutes: String?,
         location: String?,
         guests: String?,
+        notes: String?,
+        meetingURL: String?,
+        color: String?,
+        availability: String?,
+        alarm: String?,
         appState: AppState
     ) async -> AgentActionResult {
         guard let startDate = Self.parseDateTime(start) else {
@@ -1017,17 +1300,51 @@ final class AgentActionExecutor {
             $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0
         }.map { resolveAttendeeEmails($0, in: appState) } ?? []
 
+        let notesValue = notes?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let meetURL: URL? = meetingURL.flatMap {
+            let t = $0.trimmingCharacters(in: .whitespaces)
+            guard !t.isEmpty else { return nil }
+            return URL(string: t.contains("://") ? t : "https://\(t)")
+        }
+        let colorId: String? = color.flatMap {
+            let t = $0.trimmingCharacters(in: .whitespaces)
+            return t.isEmpty ? nil : t
+        }
+        // Default busy; only "free"/"livre"/"disponível" flips it.
+        let busy: Bool = {
+            guard let a = availability?.lowercased() else { return true }
+            if a.contains("free") || a.contains("livre")
+                || a.contains("dispon") { return false }
+            return true
+        }()
+        // Alarm minutes → positive seconds offset (matches the
+        // manual sheet's `Double(alarmMinutes) * 60`). "none"/
+        // "sem"/0 → no alarm.
+        let alarmOffset: TimeInterval? = alarm.flatMap { raw in
+            let t = raw.lowercased().trimmingCharacters(in: .whitespaces)
+            if t.isEmpty || t == "none" || t == "sem"
+                || t == "nao" || t == "não" || t == "0" { return nil }
+            if let mins = Self.parseDurationMinutes(t) {
+                return TimeInterval(mins * 60)
+            }
+            let digits = t.filter { $0.isNumber }
+            if let n = Int(digits), n > 0 { return TimeInterval(n * 60) }
+            return nil
+        }
+
         let event = await appState.createEvent(
             title: title,
             startDate: startDate,
             endDate: endDate,
             calendarId: nil,
             location: location?.isEmpty == false ? location : nil,
-            notes: nil,
-            meetingURL: nil,
+            notes: (notesValue?.isEmpty == false) ? notesValue : nil,
+            meetingURL: meetURL,
             guestEmails: resolvedGuests,
-            availabilityBusy: true,
-            alarmOffset: nil
+            availabilityBusy: busy,
+            alarmOffset: alarmOffset,
+            colorId: colorId
         )
 
         if let event {

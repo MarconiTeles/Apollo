@@ -10,7 +10,7 @@ struct NotificationsCenterView: View {
     var onClose: () -> Void = {}
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
     }
 
     /// Cap the scrollable list relative to the window so the popup never
@@ -31,19 +31,17 @@ struct NotificationsCenterView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            Rectangle().fill(Editorial.rule).frame(height: 1)
 
-            // Body + footer share a solid surface; header is
-            // the only translucent area, matching the new
-            // popup design language.
             VStack(spacing: 0) {
                 if appState.notifications.isEmpty {
                     emptyState
                 } else {
                 ScrollablePopupContent(maxHeight: maxScrollHeight) {
-                    // Spacing 10pt — gives the coloured drop shadows
-                    // breathing room between rows so the halos read
-                    // as separate cards instead of bleeding together.
-                    VStack(spacing: 10) {
+                    // Flat editorial rows divided by hairlines
+                    // (prototype `PNotifRow`) — no spacing, no
+                    // coloured halos.
+                    VStack(spacing: 0) {
                         ForEach(appState.notifications) { n in
                             NotificationRow(notification: n,
                                             onDismiss: {
@@ -71,8 +69,6 @@ struct NotificationsCenterView: View {
                                 ))
                         }
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
                     // Animate the ForEach contents whenever the
                     // notifications array changes (new arrival or
                     // user-dismiss). `value:` is just `count` —
@@ -87,70 +83,77 @@ struct NotificationsCenterView: View {
             }
 
             if !appState.notifications.isEmpty {
-                Divider().opacity(0.5)
+                Rectangle().fill(Editorial.rule).frame(height: 1)
                 footer
             }
             }
-            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 380)
+        .frame(width: 360)
         .fixedSize(horizontal: false, vertical: true)
-        .popupGlass(shape)
+        // Editorial card (prototype `PNotifs` / `PPopup`).
+        .background(Editorial.popup, in: shape)
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
+        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
+        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
     }
 
     private var header: some View {
         HStack(spacing: 10) {
-            ZStack {
-                Circle().fill(Color.accentColor.opacity(0.15))
-                Image(systemName: "bell.fill")
-                    .foregroundStyle(Color.accentColor)
-                    .font(.callout)
+            Image(systemName: "bell")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Editorial.inkSoft)
+            Text("Notificações")
+                .font(Editorial.serif(16, .medium))
+                .foregroundStyle(Editorial.ink)
+            if appState.unreadNotifications > 0 {
+                Text(appState.unreadNotifications > 99
+                     ? "99+" : "\(appState.unreadNotifications)")
+                    .font(Editorial.sans(10.5, .bold))
+                    .foregroundStyle(Editorial.page)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Capsule().fill(Editorial.accent))
             }
-            .frame(width: 32, height: 32)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Notificações")
-                    .font(.headline.weight(.semibold))
-                if appState.unreadNotifications > 0 {
-                    Text("\(appState.unreadNotifications) não lida\(appState.unreadNotifications == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if !appState.notifications.isEmpty {
-                    Text("Todas lidas")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            Spacer()
-            Button { onClose() } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22, height: 22)
-                    .background(.regularMaterial, in: Circle())
+            Spacer(minLength: 0)
+            Button {
+                appState.markAllNotificationsRead()
+            } label: {
+                Text("Marcar lidas")
+                    .font(Editorial.sans(12, .medium))
+                    .foregroundStyle(appState.unreadNotifications == 0
+                                     ? Editorial.inkMute : Editorial.accent)
             }
             .buttonStyle(.plain).focusEffectDisabled()
+            .disabled(appState.unreadNotifications == 0)
+
+            Button { onClose() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(Editorial.inkSoft)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).focusEffectDisabled()
+            .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
     }
 
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "bell.slash")
-                .font(.title)
-                .foregroundStyle(.tertiary)
+                .font(.system(size: 26, weight: .regular))
+                .foregroundStyle(Editorial.inkMute)
             Text("Nenhuma notificação ainda")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Text("Atualizações de sincronização, eventos e tarefas vão aparecer aqui.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .font(Editorial.serif(15))
+                .foregroundStyle(Editorial.ink)
+            Caption("Atualizações de sincronização, eventos e tarefas vão aparecer aqui.",
+                    size: 12.5)
                 .multilineTextAlignment(.center)
         }
         .padding(.horizontal, 28)
-        .padding(.vertical, 36)
+        .padding(.vertical, 40)
         .frame(maxWidth: .infinity)
     }
 
@@ -159,26 +162,27 @@ struct NotificationsCenterView: View {
             Button {
                 appState.markAllNotificationsRead()
             } label: {
-                Label("Marcar como lidas", systemImage: "checkmark.circle")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(Color.accentColor)
+                Text("Marcar como lidas")
+                    .font(Editorial.sans(12, .medium))
+                    .foregroundStyle(appState.unreadNotifications == 0
+                                     ? Editorial.inkMute : Editorial.accent)
             }
             .buttonStyle(.plain).focusEffectDisabled()
             .disabled(appState.unreadNotifications == 0)
 
-            Spacer()
+            Spacer(minLength: 0)
 
             Button {
                 appState.clearAllNotifications()
             } label: {
-                Label("Limpar tudo", systemImage: "trash")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.red)
+                Text("Limpar tudo")
+                    .font(Editorial.sans(12, .medium))
+                    .foregroundStyle(Editorial.accent)
             }
             .buttonStyle(.plain).focusEffectDisabled()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
     }
 }
 
@@ -229,89 +233,77 @@ private struct NotificationRow: View, Equatable {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(alignment: .top, spacing: 10) {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: notification.kind.systemImage)
-                        .font(.title3)
-                        .foregroundStyle(cachedTargetTint)
-                        .frame(width: 24, height: 24)
-                    if !notification.read {
-                        Circle()
-                            .fill(Color.accentColor)
-                            .frame(width: 7, height: 7)
-                            .overlay(Circle().strokeBorder(.background, lineWidth: 1))
-                            .offset(x: 4, y: -2)
-                    }
-                }
+            HStack(alignment: .top, spacing: 12) {
+                // Tone dot (prototype `PNotifRow`): solid muted
+                // status/kind colour when unread, hollow ring when
+                // already read.
+                Circle()
+                    .fill(notification.read ? Color.clear
+                                            : cachedTargetTint.editorialMuted)
+                    .frame(width: 6, height: 6)
+                    .overlay(
+                        Circle().strokeBorder(
+                            notification.read ? Editorial.inkFaint : Color.clear,
+                            lineWidth: 1.5
+                        )
+                    )
+                    .padding(.top, 6)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(notification.title)
-                        .font(.subheadline.weight(notification.read ? .regular : .semibold))
-                        .foregroundStyle(.primary)
+                        .font(Editorial.serif(13.5, .medium))
+                        .foregroundStyle(notification.read
+                                         ? Editorial.inkSoft : Editorial.ink)
+                        .tracking(-0.1)
                         .lineLimit(2)
                     if let s = notification.subtitle, !s.isEmpty {
                         Text(s)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.primary.opacity(0.85))
+                            .font(Editorial.serif(12).italic())
+                            .foregroundStyle(Editorial.inkSoft)
                             .lineLimit(1)
                     }
                     if let m = notification.message, !m.isEmpty {
-                        // `attributedMessage` returns the message
-                        // with status-name highlights baked in
-                        // (each status pill colour applied to its
-                        // own substring). Falls back to the plain
-                        // string when no highlights were attached.
+                        // `attributedMessage` keeps the per-status
+                        // colour highlights baked into the substring.
                         Text(notification.attributedMessage ?? AttributedString(m))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(Editorial.serif(12).italic())
+                            .foregroundStyle(Editorial.inkSoft)
                             .lineLimit(3)
                     }
-                    HStack(spacing: 6) {
-                        Text(relative)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                        if notification.hasTarget {
-                            Label("abrir", systemImage: targetIcon)
-                                .labelStyle(CompactLabel())
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(Color.accentColor)
-                        }
+                    if notification.hasTarget {
+                        Label("abrir", systemImage: targetIcon)
+                            .labelStyle(CompactLabel())
+                            .font(Editorial.sans(10.5, .medium))
+                            .foregroundStyle(Editorial.accent)
+                            .padding(.top, 1)
                     }
                 }
+
                 Spacer(minLength: 0)
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.tertiary)
-                        .padding(4)
+
+                VStack(alignment: .trailing, spacing: 6) {
+                    Text(relative)
+                        .font(Editorial.sans(10.5))
+                        .foregroundStyle(Editorial.inkMute)
+                        .fixedSize()
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(Editorial.inkMute)
+                            .padding(4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).focusEffectDisabled()
                 }
-                .buttonStyle(.plain).focusEffectDisabled()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                notification.read
-                ? AnyShapeStyle(Color.clear)
-                : AnyShapeStyle(cachedTargetTint.opacity(0.06)),
-                in: RoundedRectangle(cornerRadius: 13.6, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 13.6, style: .continuous)
-                    .strokeBorder(cachedTargetTint.opacity(notification.read ? 0.05 : 0.20),
-                                  lineWidth: 0.5)
-            )
-            // Coloured ambient shadow — same pattern as the task row
-            // cards. Unread notifications get a stronger halo so the
-            // bell-popup reads at a glance even before the user
-            // starts scanning individual rows.
-            // `.compositingGroup()` flattens the row's bg+border
-            // into a single layer before the coloured shadow
-            // composites against it. Without this, every scroll-Y
-            // change forced the shadow's blur pass to re-render
-            // the row's layered content from scratch.
-            .compositingGroup()
-            .shadow(color: cachedTargetTint.opacity(notification.read ? 0.18 : 0.45),
-                    radius: 10, x: 0, y: 3)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(notification.read ? Color.clear
+                                          : cachedTargetTint.editorialMuted.opacity(0.05))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

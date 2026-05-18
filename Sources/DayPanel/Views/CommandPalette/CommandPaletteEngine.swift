@@ -420,7 +420,7 @@ enum CommandPaletteEngine {
         if cal.isDateInYesterday(d) { return "ontem" }
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "pt_BR")
-        fmt.dateFormat = "d 'de' MMM"
+        fmt.dateFormat = "d MMM"
         return fmt.string(from: d)
     }
 }

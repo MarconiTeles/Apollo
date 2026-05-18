@@ -47,6 +47,48 @@ final class ClickUpService {
         return parseTasks(data)
     }
 
+    /// Cross-list "My Work": every task in the workspace
+    /// assigned to a given user, regardless of which list it
+    /// lives in. Uses ClickUp's filtered team-tasks endpoint
+    /// (`GET /team/{team_id}/task`) which is the documented way
+    /// to query across lists in one call — far cheaper than
+    /// iterating every list.
+    ///
+    /// Pagination: ClickUp returns 100 tasks/page. We walk up
+    /// to `maxPages` (default 5 = 500 tasks) and stop early
+    /// when a page comes back short (last page). 500 is way
+    /// past any realistic "assigned to me right now" set; the
+    /// cap just bounds a pathological workspace.
+    func listMyTasks(workspaceId: String,
+                     userId: Int,
+                     maxPages: Int = 5) async throws -> [CUTask] {
+        guard let token else { throw CUError.notConfigured }
+        var all: [CUTask] = []
+        for page in 0..<maxPages {
+            var comps = URLComponents(string:
+                "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/task")!
+            comps.queryItems = [
+                URLQueryItem(name: "assignees[]",   value: String(userId)),
+                URLQueryItem(name: "include_closed", value: "true"),
+                URLQueryItem(name: "subtasks",       value: "true"),
+                URLQueryItem(name: "include_markdown_description", value: "true"),
+                URLQueryItem(name: "page",           value: String(page)),
+                // Newest-updated first so the most relevant work
+                // is at the top before Apollo's own grouping.
+                URLQueryItem(name: "order_by",       value: "updated"),
+            ]
+            var req = URLRequest(url: comps.url!)
+            req.setValue(token, forHTTPHeaderField: "Authorization")
+            let (data, _) = try await URLSession.shared.data(for: req)
+            let pageTasks = parseTasks(data)
+            all += pageTasks
+            // ClickUp's team endpoint pages at 100. A short page
+            // means we've reached the end.
+            if pageTasks.count < 100 { break }
+        }
+        return all
+    }
+
     func createTask(
         title:        String,
         description:  String? = nil,
@@ -1121,6 +1163,46 @@ final class ClickUpService {
         raw.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? raw
     }
 
+    /// ClickUp's comment API *returns* reaction emoji as hex
+    /// Unicode codepoints (e.g. "1f44d" → 👍, "2764 fe0f" → ❤️)
+    /// instead of the literal glyph, while the reaction *write*
+    /// endpoints — and our picker — speak literal emoji. Normalise
+    /// to the rendered glyph here so the model always holds a real
+    /// `String` and removal round-trips against the same value the
+    /// server stored.
+    ///
+    /// Anything that isn't a pure codepoint list (an already-decoded
+    /// glyph, or a future API that returns literals) is passed
+    /// through untouched, so this never double-decodes a real emoji.
+    private static func decodeReactionEmoji(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return raw }
+
+        let tokens = trimmed
+            .components(separatedBy: CharacterSet(charactersIn: " -_,+"))
+            .filter { !$0.isEmpty }
+        guard !tokens.isEmpty else { return raw }
+
+        var scalars: [Unicode.Scalar] = []
+        for token in tokens {
+            var hex = token.lowercased()
+            if hex.hasPrefix("u+") || hex.hasPrefix("0x") {
+                hex = String(hex.dropFirst(2))
+            }
+            guard hex.count <= 6,
+                  hex.allSatisfy({ $0.isHexDigit }),
+                  let value  = UInt32(hex, radix: 16),
+                  let scalar = Unicode.Scalar(value)
+            else {
+                // Not a codepoint list — assume it's already a
+                // literal emoji and hand it back untouched.
+                return raw
+            }
+            scalars.append(scalar)
+        }
+        return String(String.UnicodeScalarView(scalars))
+    }
+
     /// Strip / escape any byte in a filename that could break
     /// out of the `Content-Disposition: form-data; name="…";
     /// filename="…"` header. Used by every multipart upload site
@@ -1438,6 +1520,54 @@ final class ClickUpService {
                 description: description
             )
 
+            // Checklists — only present on the single-task GET
+            // payload (the list endpoint omits them). Parsed
+            // best-effort; an unparseable item is skipped rather
+            // than failing the whole task.
+            let checklists = Self.parseChecklists(
+                item["checklists"] as? [[String: Any]] ?? []
+            )
+
+            // Custom fields — same story as checklists: the
+            // single-task GET carries per-task `value`s; the list
+            // endpoint usually returns definitions without values,
+            // so this is meaningful mostly after hydration.
+            let customFields = Self.parseCustomFields(
+                item["custom_fields"] as? [[String: Any]] ?? []
+            )
+
+            // Dependencies — ClickUp returns ALL relations
+            // involving the task; each `{task_id, depends_on}`
+            // means task_id is blocked until depends_on is done.
+            // Interpreted relative to THIS task's id.
+            let dependencies: [CUTask.Dependency] = (item["dependencies"] as? [[String: Any]] ?? [])
+                .compactMap { dep in
+                    let taskId    = dep["task_id"]    as? String
+                    let dependsOn = dep["depends_on"] as? String
+                    if taskId == id, let other = dependsOn {
+                        return CUTask.Dependency(otherTaskId: other, kind: .waitingOn)
+                    }
+                    if dependsOn == id, let other = taskId {
+                        return CUTask.Dependency(otherTaskId: other, kind: .blocking)
+                    }
+                    return nil
+                }
+
+            // Linked ("related") tasks — non-blocking. Collect
+            // the id on the OTHER side of each link, deduped,
+            // excluding self.
+            var seenLinked = Set<String>()
+            let linkedTaskIds: [String] = (item["linked_tasks"] as? [[String: Any]] ?? [])
+                .compactMap { lt -> String? in
+                    let a = lt["task_id"] as? String
+                    let b = lt["link_id"] as? String
+                    let other = (a == id ? b : a) ?? a ?? b
+                    guard let other, other != id,
+                          !seenLinked.contains(other) else { return nil }
+                    seenLinked.insert(other)
+                    return other
+                }
+
             return CUTask(
                 id:                id,
                 title:             name,
@@ -1461,9 +1591,275 @@ final class ClickUpService {
                 lastEditorId:      lastEditorId,
                 parentId:          parentId,
                 topLevelParentId:  topLevelParentId,
-                attachments:       attachments
+                attachments:       attachments,
+                checklists:        checklists,
+                customFields:      customFields,
+                dependencies:      dependencies,
+                linkedTaskIds:     linkedTaskIds
             )
         }
+    }
+
+    /// Parses ClickUp's `custom_fields` array into display-ready
+    /// `CUTask.CustomField`s. ClickUp's value encoding is wildly
+    /// type-dependent — this normalizes each into a single
+    /// human-readable string, and additionally surfaces the
+    /// option list for `drop_down` so the detail view can offer
+    /// an inline picker. Best-effort: an unrecognized type still
+    /// renders its raw value rather than vanishing.
+    private static func parseCustomFields(
+        _ raw: [[String: Any]]
+    ) -> [CUTask.CustomField] {
+        func intIndex(_ any: Any?) -> Int {
+            if let i = any as? Int { return i }
+            if let d = any as? Double { return Int(d) }
+            if let s = any as? String { return Int(Double(s) ?? 0) }
+            return 0
+        }
+        func str(_ any: Any?) -> String {
+            if let s = any as? String { return s }
+            if let i = any as? Int { return String(i) }
+            if let d = any as? Double {
+                return d == d.rounded()
+                    ? String(Int(d)) : String(d)
+            }
+            return ""
+        }
+
+        return raw.compactMap { f -> CUTask.CustomField? in
+            guard let id = f["id"] as? String,
+                  let name = f["name"] as? String,
+                  let type = f["type"] as? String else { return nil }
+
+            let typeConfig = f["type_config"] as? [String: Any] ?? [:]
+            let rawOptions = typeConfig["options"] as? [[String: Any]] ?? []
+            let options: [CUTask.CustomField.Option] = rawOptions
+                .compactMap { o in
+                    guard let oid = o["id"] as? String else { return nil }
+                    let label = (o["name"] as? String)
+                        ?? (o["label"] as? String) ?? "—"
+                    return CUTask.CustomField.Option(
+                        id:         oid,
+                        name:       label,
+                        orderIndex: intIndex(o["orderindex"]),
+                        color:      o["color"] as? String
+                    )
+                }
+                .sorted { $0.orderIndex < $1.orderIndex }
+
+            let value = f["value"]
+            var display = ""
+            var selectedOptionId: String? = nil
+
+            switch type {
+            case "drop_down":
+                // value is the selected option's orderindex.
+                if value != nil, !(value is NSNull) {
+                    let idx = intIndex(value)
+                    if let opt = options.first(where: { $0.orderIndex == idx }) {
+                        display = opt.name
+                        selectedOptionId = opt.id
+                    }
+                }
+            case "labels":
+                // value is an array of option ids.
+                let ids = (value as? [String]) ?? []
+                let names = ids.compactMap { vid in
+                    options.first(where: { $0.id == vid })?.name
+                }
+                display = names.joined(separator: ", ")
+            case "users":
+                let arr = (value as? [[String: Any]]) ?? []
+                display = arr.compactMap {
+                    $0["username"] as? String
+                }.joined(separator: ", ")
+            case "checkbox":
+                if let b = value as? Bool { display = b ? "Sim" : "" }
+                else if let s = value as? String {
+                    display = (s == "true") ? "Sim" : ""
+                }
+            case "date":
+                if let ms = Double(str(value)), ms > 0 {
+                    let d = Date(timeIntervalSince1970: ms / 1000)
+                    let fmt = DateFormatter()
+                    fmt.locale = Locale(identifier: "pt_BR")
+                    fmt.dateFormat = "d MMM yyyy"
+                    display = fmt.string(from: d)
+                }
+            case "currency", "money":
+                let v = str(value)
+                if !v.isEmpty {
+                    let cur = typeConfig["currency_type"] as? String ?? "R$"
+                    display = "\(cur) \(v)"
+                }
+            default:
+                // text, short_text, number, url, email, phone,
+                // formula, and anything unrecognized: stringify.
+                display = str(value)
+            }
+
+            return CUTask.CustomField(
+                id:               id,
+                name:             name,
+                type:             type,
+                displayValue:     display,
+                options:          options,
+                selectedOptionId: selectedOptionId
+            )
+        }
+    }
+
+    /// Parses ClickUp's `checklists` array (single-task GET
+    /// payload only). Each checklist has `id`, `name`,
+    /// `orderindex`, and `items`; each item has `id`, `name`,
+    /// `resolved`, `orderindex`, optional `assignee`. ClickUp
+    /// returns `orderindex` as a string or number depending on
+    /// endpoint version — we coerce both. Items are sorted by
+    /// orderindex so the rendered order matches the web UI.
+    private static func parseChecklists(
+        _ raw: [[String: Any]]
+    ) -> [CUTask.Checklist] {
+        func intIndex(_ any: Any?) -> Int {
+            if let i = any as? Int { return i }
+            if let d = any as? Double { return Int(d) }
+            if let s = any as? String { return Int(Double(s) ?? 0) }
+            return 0
+        }
+        return raw.compactMap { cl -> CUTask.Checklist? in
+            guard let id = cl["id"] as? String else { return nil }
+            let name = cl["name"] as? String ?? "Checklist"
+            let order = intIndex(cl["orderindex"])
+            let rawItems = cl["items"] as? [[String: Any]] ?? []
+            let items: [CUTask.Checklist.Item] = rawItems
+                .compactMap { it -> CUTask.Checklist.Item? in
+                    guard let iid = it["id"] as? String else { return nil }
+                    // ClickUp marks resolved either via a bool
+                    // `resolved` or a non-null `resolved` date —
+                    // accept both shapes.
+                    let resolved: Bool = {
+                        if let b = it["resolved"] as? Bool { return b }
+                        if it["resolved"] is NSNull { return false }
+                        return it["resolved"] != nil
+                    }()
+                    let assignee = (it["assignee"] as? [String: Any])?["id"] as? Int
+                        ?? it["assignee"] as? Int
+                    return CUTask.Checklist.Item(
+                        id:         iid,
+                        name:       it["name"] as? String ?? "",
+                        resolved:   resolved,
+                        orderIndex: intIndex(it["orderindex"]),
+                        assigneeId: assignee
+                    )
+                }
+                .sorted { $0.orderIndex < $1.orderIndex }
+            return CUTask.Checklist(
+                id:         id,
+                name:       name,
+                orderIndex: order,
+                items:      items
+            )
+        }
+        .sorted { $0.orderIndex < $1.orderIndex }
+    }
+
+    /// Toggle a checklist item resolved/unresolved. ClickUp:
+    /// `PUT /checklist/{checklist_id}/checklist_item/{item_id}`
+    /// with `{ "resolved": Bool }`. Used by the detail popup's
+    /// optimistic checkbox.
+    func setChecklistItem(checklistId: String,
+                          itemId: String,
+                          resolved: Bool) async throws {
+        guard let token else { throw APIError.notConfigured }
+        let url = URL(string:
+            "https://api.clickup.com/api/v2/checklist/\(Self.cuPathSafe(checklistId))/checklist_item/\(Self.cuPathSafe(itemId))")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "PUT"
+        req.setValue(token,             forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(
+            withJSONObject: ["resolved": resolved]
+        )
+        _ = try await sendClassified(req)
+    }
+
+    /// Set a drop_down custom field. ClickUp:
+    /// `POST /task/{task_id}/field/{field_id}` with
+    /// `{ "value": <option orderindex Int> }`. Only drop_down is
+    /// wired for write — that's the actionable type for the
+    /// content-production workflow; other types stay read-only.
+    func setCustomField(taskId: String,
+                        fieldId: String,
+                        optionOrderIndex: Int) async throws {
+        guard let token else { throw APIError.notConfigured }
+        let url = URL(string:
+            "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(taskId))/field/\(Self.cuPathSafe(fieldId))")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(token,             forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(
+            withJSONObject: ["value": optionOrderIndex]
+        )
+        _ = try await sendClassified(req)
+    }
+
+    // MARK: - Time tracking (start / stop / running)
+
+    /// The currently-running timer for the connected user, if
+    /// any. ClickUp: `GET /team/{team}/time_entries/current` →
+    /// `{ data: { task: { id }, start } }` or `{ data: null }`.
+    func currentTimer(workspaceId: String)
+        async throws -> (taskId: String, startedAt: Date)? {
+        guard let token else { throw CUError.notConfigured }
+        let url = URL(string:
+            "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/time_entries/current")!
+        var req = URLRequest(url: url)
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        let (data, _) = try await URLSession.shared.data(for: req)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let d = json["data"] as? [String: Any],
+              let task = d["task"] as? [String: Any],
+              let tid = task["id"] as? String,
+              let startStr = d["start"] as? String,
+              let startMs = Double(startStr)
+        else { return nil }
+        return (tid, Date(timeIntervalSince1970: startMs / 1000))
+    }
+
+    /// Start a timer on a task. ClickUp implicitly stops any
+    /// other running timer for the user first.
+    /// `POST /team/{team}/time_entries/start` body `{ tid }`.
+    func startTimer(workspaceId: String, taskId: String) async throws {
+        guard let token else { throw APIError.notConfigured }
+        let url = URL(string:
+            "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/time_entries/start")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(token,             forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(
+            withJSONObject: ["tid": taskId]
+        )
+        _ = try await sendClassified(req)
+    }
+
+    /// Stop the connected user's running timer.
+    /// `POST /team/{team}/time_entries/stop`.
+    func stopTimer(workspaceId: String) async throws {
+        guard let token else { throw APIError.notConfigured }
+        let url = URL(string:
+            "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/time_entries/stop")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        _ = try await sendClassified(req)
+    }
+
+    /// Sum of all tracked durations on a task, in milliseconds.
+    /// Reuses the existing per-task entries endpoint.
+    func taskTrackedMs(id: String) async throws -> Int {
+        try await getTaskTimeEntries(id: id)
+            .reduce(0) { $0 + $1.durationMs }
     }
 
     // MARK: - Attachment extraction
@@ -1696,7 +2092,7 @@ final class ClickUpService {
             var grouped: [String: [Int]] = [:]
             if let raw = item["reactions"] as? [[String: Any]] {
                 for r in raw {
-                    let emoji = (r["reaction"] as? String) ?? "👍"
+                    let emoji = Self.decodeReactionEmoji((r["reaction"] as? String) ?? "👍")
                     if let u = r["user"] as? [String: Any], let uid = u["id"] as? Int {
                         grouped[emoji, default: []].append(uid)
                     } else if let uid = r["user_id"] as? Int {

@@ -134,31 +134,15 @@ struct SharedCalendarSearchBar: View {
             }
         } label: {
             Image(systemName: "person.crop.circle.badge.plus")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 42, height: 42)
-                .background(
-                    LinearGradient(
-                        colors: [
-                            Color.accentColor,
-                            Color.accentColor.opacity(0.85),
-                        ],
-                        startPoint: .top,
-                        endPoint:   .bottom
-                    ),
-                    in: Circle()
-                )
-                // Liquid-glass specular edge + ambient shadow,
-                // matching every other circular toolbar
-                // button in Apollo (settings, sync, bell).
-                .liquidGlassEdge(Circle())
-                // Stronger accent halo on top of the standard
-                // glass treatment so the floating button
-                // reads as a primary call-to-action.
-                .shadow(color: Color.accentColor.opacity(0.55),
-                        radius: 14, x: 0, y: 6)
-                .shadow(color: Color.accentColor.opacity(0.30),
-                        radius: 4,  x: 0, y: 2)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(Editorial.page)
+                .frame(width: 38, height: 38)
+                // Editorial primary action: solid ink disc, page
+                // glyph, one soft ambient shadow — no gradient,
+                // no glass, no accent halo.
+                .background(Editorial.ink, in: Circle())
+                .overlay(Circle().strokeBorder(Editorial.ink, lineWidth: 1))
+                .shadow(color: .black.opacity(0.20), radius: 12, x: 0, y: 5)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -179,25 +163,23 @@ struct SharedCalendarSearchBar: View {
         // and only the suggestions themselves animate.
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(query.isEmpty ? Editorial.inkMute : Editorial.accent)
                 .frame(height: 22)
             TextField("Adicionar pessoa por email ou nome",
                       text: $query)
                 .textFieldStyle(.plain)
                 .focused($fieldFocused)
                 .focusEffectDisabled()
-                .font(.subheadline)
-                // Explicit fixed height + middle-aligned
-                // baseline so the typed text sits dead-
-                // centre in the capsule.
+                .font(Editorial.sans(13))
+                .foregroundStyle(Editorial.ink)
                 .frame(height: 22)
                 .onSubmit { commitFreeformEmail() }
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Editorial.inkMute)
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
@@ -207,45 +189,30 @@ struct SharedCalendarSearchBar: View {
                 query = ""
             } label: {
                 Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(Editorial.inkSoft)
                     .frame(width: 24, height: 24)
-                    .background(.regularMaterial, in: Circle())
-                    .liquidGlassEdge(Circle())
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
             .help("Fechar")
         }
-        // Asymmetric padding so the X button hugs the
-        // capsule's right curve.
-        .padding(.leading, 14)
-        .padding(.trailing, 6)
-        .padding(.vertical, 8)
+        .padding(.leading, 16)
+        .padding(.trailing, 10)
+        .padding(.vertical, 9)
         .frame(maxWidth: .infinity)
-        // Liquid-glass backdrop. SwiftUI Materials bake blur
-        // and frost together — lowering their opacity dilutes
-        // both, killing the actual blur. `NSVisualEffectView`
-        // with `.withinWindow` blending produces a real
-        // backdrop blur of the sibling events column behind
-        // the bar; we then dial overall opacity to 0.4 (≈20%
-        // more translucent than the previous .5) so the
-        // bar reads as a soft pane of glass — events behind
-        // it stay legible and softened, not erased by frost.
-        // Text + icons sit in the foreground and remain crisp.
-        .background {
-            VisualEffectView(
-                material:     .hudWindow,
-                blendingMode: .withinWindow
-            )
-            .clipShape(Capsule(style: .continuous))
-            .opacity(0.4)
-        }
-        .liquidGlassEdge(Capsule(style: .continuous))
-        .shadow(color: Color.accentColor.opacity(0.35),
-                radius: 14, x: 0, y: 6)
-        .shadow(color: Color.accentColor.opacity(0.18),
-                radius: 4,  x: 0, y: 2)
+        // Editorial floating bar — near-neutral popup surface,
+        // hairline border, one soft ambient shadow. No glass.
+        .background(Editorial.popup, in: Capsule(style: .continuous))
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
+        )
+        // Calmer, untinted lift — matches the suggestions card so
+        // the bar + dropdown read as one editorial surface.
+        .shadow(color: .black.opacity(0.16), radius: 22, x: 0, y: 8)
+        .shadow(color: .black.opacity(0.06), radius: 7,  x: 0, y: 2)
         // Suggestions panel is an OVERLAY — it does not
         // participate in the bar's layout. We then nudge
         // it upward via `alignmentGuide(.top) { d.height + 6 }`
@@ -282,71 +249,90 @@ struct SharedCalendarSearchBar: View {
         }
     }
 
+    /// Pretty display name. Google often has no `displayName`, so
+    /// the contact's `name` IS the email — rendering it as both
+    /// the title and the subtitle was the biggest source of visual
+    /// noise. This title-cases the email's local part
+    /// ("ana.figueiredo" → "Ana Figueiredo") and the caller drops
+    /// the email subtitle when it would just repeat the title.
+    private func prettyName(_ rawName: String, email: String) -> String {
+        let raw = rawName.trimmingCharacters(in: .whitespaces)
+        let looksLikeEmail = raw.isEmpty || raw == email || raw.contains("@")
+        let token: String = looksLikeEmail
+            ? String((email.split(separator: "@").first ?? "").prefix(64))
+            : raw
+        return token
+            .split(whereSeparator: { $0 == "." || $0 == "_" || $0 == "-" })
+            .map { w in
+                guard let f = w.first else { return String(w) }
+                return String(f).uppercased() + w.dropFirst().lowercased()
+            }
+            .joined(separator: " ")
+    }
+
     private var suggestionsList: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(suggestions) { contact in
-                Button { add(email: contact.email, name: contact.name) } label: {
-                    HStack(spacing: 8) {
-                        ZStack {
-                            Circle()
-                                .fill(Color(hex: SharedCalendar.paletteColor(for: contact.email)))
-                                .frame(width: 22, height: 22)
-                            Text(initials(for: contact.name))
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(.white)
-                        }
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(contact.name)
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            Text(contact.email)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        Image(systemName: "plus.circle.fill")
-                            .font(.caption)
-                            .foregroundStyle(Color.accentColor)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .focusEffectDisabled()
-                if contact.email != suggestions.last?.email {
-                    Divider().opacity(0.30).padding(.leading, 38)
+        let items = suggestions
+        return VStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { idx, contact in
+                ContactSuggestionRow(
+                    name:  prettyName(contact.name, email: contact.email),
+                    email: contact.email,
+                    initials: initials(for: prettyName(contact.name, email: contact.email)),
+                    color: Color(hex: SharedCalendar.paletteColor(for: contact.email)).editorialMuted,
+                    showsDivider: idx < items.count - 1
+                ) {
+                    add(email: contact.email, name: contact.name)
                 }
             }
         }
         .frame(maxWidth: .infinity)
-        .background(.thickMaterial,
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // Cap the panel so a long roster scrolls instead of
+        // running off the top of the window.
+        .frame(maxHeight: 320)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(Editorial.popup,
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 4)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: 28, x: 0, y: 10)
+        .shadow(color: .black.opacity(0.07), radius: 8,  x: 0, y: 2)
     }
 
     private var addManualHint: some View {
         Button { commitFreeformEmail() } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "plus.circle.fill")
-                    .foregroundStyle(Color.accentColor)
-                Text("Adicionar “\(query.trimmingCharacters(in: .whitespaces))”")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.primary)
+            HStack(spacing: 10) {
+                Image(systemName: "envelope")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Editorial.accent)
+                    .frame(width: 24)
+                (Text("Convidar ")
+                    .font(Editorial.serif(13).italic())
+                    .foregroundStyle(Editorial.inkSoft)
+                 + Text(query.trimmingCharacters(in: .whitespaces))
+                    .font(Editorial.serif(14))
+                    .foregroundStyle(Editorial.ink))
                     .lineLimit(1)
-                Spacer()
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Editorial.accent)
+                    .frame(width: 22)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.thickMaterial,
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Editorial.popup,
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Editorial.rule, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.18), radius: 28, x: 0, y: 10)
+            .shadow(color: .black.opacity(0.07), radius: 8, x: 0, y: 2)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -386,57 +372,51 @@ struct SharedCalendarSearchBar: View {
         let limited = appState.sharedCalendarsLimitedAccess.contains(contact.email.lowercased())
         let chipColor = Color(hex: contact.colorHex)
         let name = displayName(for: contact)
-        return HStack(spacing: 6) {
+        return HStack(spacing: 7) {
             ZStack {
                 Circle()
-                    .fill(.white.opacity(0.25))
-                    .frame(width: 22, height: 22)
+                    .fill(chipColor.editorialMuted)
+                    .frame(width: 20, height: 20)
                 Text(initials(for: name))
-                    .font(.system(size: 9, weight: .heavy))
-                    .foregroundStyle(.white)
+                    .font(Editorial.sans(8, .bold))
+                    .foregroundStyle(Editorial.page)
             }
             VStack(alignment: .leading, spacing: 0) {
                 Text(name)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .font(Editorial.serif(12))
+                    .foregroundStyle(Editorial.ink)
                     .lineLimit(1)
                 if limited {
                     Text("disponibilidade")
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.75))
+                        .font(Editorial.sans(8.5))
+                        .foregroundStyle(Editorial.inkMute)
                 }
             }
             Button {
                 appState.removeSharedCalendar(email: contact.email)
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .heavy))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Editorial.inkMute)
                     .frame(width: 18, height: 18)
-                    .background(.white.opacity(0.20), in: Circle())
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
             .help("Remover \(name)")
         }
         .padding(.leading, 5)
-        .padding(.trailing, 5)
+        .padding(.trailing, 7)
         .padding(.vertical, 4)
-        // Solid tinted fill — was 0.18 alpha which left the
-        // text fighting whatever was rendered behind. Now the
-        // chip itself is the colour and white text reads
-        // cleanly at every scroll position.
-        .background(chipColor, in: Capsule())
+        // Editorial chip — card surface + hairline, the contact's
+        // identity colour carried only by the muted avatar disc.
+        // One whisper-soft shadow so it lifts off the timeline
+        // without the old tinted halo.
+        .background(Editorial.card, in: Capsule())
         .overlay(
-            Capsule().strokeBorder(
-                .white.opacity(0.20), lineWidth: 0.6
-            )
+            Capsule().strokeBorder(Editorial.rule, lineWidth: 1)
         )
-        // Same accent-family halo as the floating button —
-        // tinted by the contact's colour so each chip pops
-        // off the timeline without looking flat.
-        .shadow(color: chipColor.opacity(0.45), radius: 6, x: 0, y: 3)
-        .shadow(color: .black.opacity(0.12),    radius: 1, x: 0, y: 1)
+        .shadow(color: .black.opacity(0.08), radius: 5, x: 0, y: 2)
     }
 
     // MARK: - Helpers
@@ -462,5 +442,75 @@ struct SharedCalendarSearchBar: View {
             return "\(f)\(l)".uppercased()
         }
         return String(name.prefix(2)).uppercased()
+    }
+}
+
+// MARK: - Editorial contact-suggestion row
+
+/// One row in the people-search dropdown. Editorial: muted avatar
+/// disc, serif name, italic-caption email (only when it differs
+/// from the name so an email-only contact isn't printed twice),
+/// a quiet `+` that warms to cinnabar on hover, and a soft ink
+/// hover wash. Rows self-divide with a `ruleSoft` hairline.
+private struct ContactSuggestionRow: View {
+    let name: String
+    let email: String
+    let initials: String
+    let color: Color
+    let showsDivider: Bool
+    let onAdd: () -> Void
+
+    @State private var hover = false
+
+    private var showsEmail: Bool {
+        email.caseInsensitiveCompare(name) != .orderedSame
+    }
+
+    var body: some View {
+        Button(action: onAdd) {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle().fill(color).frame(width: 24, height: 24)
+                    Text(initials)
+                        .font(Editorial.sans(8.5, .bold))
+                        .foregroundStyle(Editorial.page)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name)
+                        .font(Editorial.serif(14))
+                        .foregroundStyle(Editorial.ink)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if showsEmail {
+                        Text(email)
+                            .font(Editorial.serif(11.5).italic())
+                            .foregroundStyle(Editorial.inkSoft)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(hover ? Editorial.accent : Editorial.inkMute)
+                    .frame(width: 22, height: 22)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(hover ? Editorial.ink.opacity(0.04) : Color.clear)
+            .overlay(alignment: .bottom) {
+                if showsDivider {
+                    Rectangle().fill(Editorial.ruleSoft)
+                        .frame(height: 1)
+                        .padding(.leading, 48)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
     }
 }

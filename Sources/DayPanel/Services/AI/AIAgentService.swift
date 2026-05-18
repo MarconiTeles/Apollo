@@ -48,6 +48,14 @@ final class AIAgentService: ObservableObject {
     /// model is working instead of staring at a blank bubble.
     @Published var liveThinking: String = ""
 
+    /// Files the user dropped / picked in the chat composer
+    /// (drag-and-drop, identical to the task-comment box). Set
+    /// on send; the action executor consumes them one-shot when
+    /// the AI emits a create/comment/attach/description action so
+    /// the dropped files become real ClickUp attachments without
+    /// a second native file panel.
+    @Published var pendingAttachments: [URL] = []
+
     /// Snapshot of the events/tasks that were exposed to the
     /// model in the most recent system prompt — keyed by
     /// lowercased title so the chat UI can recognise references
@@ -1816,12 +1824,18 @@ final class AIAgentService: ObservableObject {
 
         FORMATO DOS MARCADORES (siga EXATAMENTE — o parser é literal):
 
-        • Criar tarefa:
-          [[CREATE_TASK title="Texto do título" priority="urgent" due="YYYY-MM-DD" status="to do"]]
-          - Apenas `title` é obrigatório
-          - `priority` aceita: urgent, high, normal, low (em inglês — o parser também aceita pt-BR)
-          - `due` aceita: "YYYY-MM-DD" ou "today" / "tomorrow" / "hoje" / "amanhã"
+        • Criar tarefa (TODOS os campos da criação manual estão disponíveis):
+          [[CREATE_TASK title="Texto do título" priority="urgent" due="YYYY-MM-DD" status="to do" description="Detalhes…" start="YYYY-MM-DD" tags="design,urgente" assignees="João,maria@x.com" parent="Título da tarefa-mãe" links="https://figma.com/abc" attachments="/Users/.../brief.pdf"]]
+          - Apenas `title` é obrigatório. Use o MÁXIMO de campos que o usuário informar — não deixe nada de fora.
+          - `priority` aceita: urgent, high, normal, low (também pt-BR)
+          - `due` e `start` aceitam: "YYYY-MM-DD" / "today" / "tomorrow" / "hoje" / "amanhã" (start também aceita data-hora)
           - `status` é o nome literal do status no ClickUp (ex: "to do", "doing")
+          - `description` (alias `desc`/`notes`): texto livre; URLs viram clicáveis no ClickUp
+          - `tags`: lista separada por vírgula
+          - `assignees` (alias `assignee`): nomes ou e-mails separados por vírgula. Menções `@Nome` escritas na descrição ou no título TAMBÉM viram responsáveis automaticamente — sempre que o usuário marcar alguém com @, inclua essa pessoa.
+          - `parent` (alias `parent_task`): título/id de uma tarefa existente → cria como SUBTAREFA dela
+          - `links` (alias `link`/`url`): URLs separadas por vírgula, anexadas como links na descrição
+          - `attachments` (alias `files`/`file`): caminhos de arquivo locais (enviados como anexo real) ou URLs http(s) (viram links)
 
         • Concluir tarefa (referencia pelo título exato):
           [[COMPLETE_TASK title="Título exato"]]
@@ -1847,6 +1861,8 @@ final class AIAgentService: ObservableObject {
         - Prazo: nenhum
 
         Em outras palavras: ao receber "cria uma tarefa pra X", emita IMEDIATAMENTE `[[CREATE_TASK title="X"]]` sem perguntar lista, responsável ou prioridade.
+
+        ARQUIVOS — REGRA CRÍTICA: quando o usuário pedir para anexar/enviar um arquivo (em tarefa, comentário ou descrição) e NÃO fornecer um caminho, NUNCA pergunte "qual o caminho do arquivo?". O app abre automaticamente um seletor de arquivos nativo do macOS para o usuário escolher. Emita IMEDIATAMENTE a ação com um marcador de espaço, ex.: `[[ADD_TASK_ATTACHMENT title="X" attachments="selecionar"]]`, `[[ADD_TASK_COMMENT title="X" text="..." attachments="selecionar"]]` ou `[[UPDATE_TASK_DESCRIPTION title="X" attachments="selecionar"]]`. O valor de `attachments` pode ser qualquer texto quando não há caminho — o seletor cuida do resto. Só use um caminho real se o usuário literalmente digitou um.
 
         ───────────────────────────────────────────────────────
         MENÇÕES DE CONTATOS (`@Nome`)
@@ -1891,13 +1907,17 @@ final class AIAgentService: ObservableObject {
         • Mudar prazo:      [[UPDATE_TASK_DUE title="X" due="2026-05-08"]]   (use "" pra limpar)
         • Mudar início:     [[UPDATE_TASK_START title="X" start="amanhã 09:00"]]
         • Renomear:         [[UPDATE_TASK_TITLE title="X" new_title="Y"]]
-        • Mudar descrição:  [[UPDATE_TASK_DESCRIPTION title="X" description="..."]]
+        • Mudar descrição:  [[UPDATE_TASK_DESCRIPTION title="X" description="..." links="https://..." attachments="/Users/.../arquivo.pdf"]]
+                            (`description` opcional — sem ele o texto atual é mantido e só os links/arquivos são adicionados; `links` viram clicáveis; `attachments` aceita caminhos locais (anexo real) ou URLs http(s))
         • Atribuir/desatribuir:
                             [[UPDATE_TASK_ASSIGNEES title="X" add="Pedro,Ana" remove="João"]]
                             (qualquer um dos campos pode ser omitido)
         • Adicionar tag:    [[ADD_TASK_TAG title="X" tag="pitch"]]
         • Remover tag:      [[REMOVE_TASK_TAG title="X" tag="pitch"]]
-        • Comentar:         [[ADD_TASK_COMMENT title="X" text="texto do comentário"]]
+        • Comentar:         [[ADD_TASK_COMMENT title="X" text="texto do comentário" attachments="/Users/.../foto.png"]]
+                            (`text` OU `attachments` obrigatório; arquivos locais são enviados anexados ao comentário, URLs http(s) viram links no comentário)
+        • Anexar arquivo:   [[ADD_TASK_ATTACHMENT title="X" attachments="/Users/.../brief.pdf,/Users/.../ref.jpg"]]
+                            (anexa arquivos a uma tarefa existente — caminhos locais viram anexos reais; URLs http(s) viram um comentário-link)
         • Criar subtarefa:  [[CREATE_SUBTASK parent="X" title="Sub" priority="alta" due="amanhã" assignees="Pedro"]]
         • Apagar tarefa:    [[DELETE_TASK title="X"]]   ⚠️ destrutivo, confirme com o usuário antes
         • Arquivar:         [[ARCHIVE_TASK title="X"]]
@@ -2060,14 +2080,19 @@ final class AIAgentService: ObservableObject {
         AÇÕES DE CALENDÁRIO
         ───────────────────────────────────────────────────────
 
-        • Criar evento:
+        • Criar evento (TODOS os campos da criação manual estão disponíveis):
           [[CREATE_EVENT title="Texto" start="2026-04-30T14:00" end="2026-04-30T15:00"]]
-          [[CREATE_EVENT title="Texto" start="amanhã 14:00" duration="60"]]
-          [[CREATE_EVENT title="Texto" start="hoje 10:00" duration="1h30" location="Sala 3" guests="João,maria@email.com"]]
-          - `start` e (`end` OU `duration`) são obrigatórios
+          [[CREATE_EVENT title="Texto" start="amanhã 14:00" duration="60" notes="pauta…" meeting_url="meet.google.com/abc" guests="João,maria@email.com" alarm="15" availability="busy" color="9"]]
+          - `start` e (`end` OU `duration`) são obrigatórios. Use o MÁXIMO de campos que o usuário informar.
           - `start` aceita: ISO `YYYY-MM-DDTHH:MM`, `YYYY-MM-DD HH:MM`, `DD/MM/YYYY HH:MM`, `today HH:MM`, `hoje HH:MM`, `tomorrow HH:MM`, `amanhã HH:MM`
           - `duration` aceita: `60` (minutos), `1h`, `1h30`, `30min`, `1.5h`, `1:30`
           - `guests` aceita lista vírgula-separada de nomes (resolvidos contra contatos do calendário) ou e-mails diretos
+          - `notes` (alias `description`): descrição/pauta do evento
+          - `meeting_url` (alias `meet`/`video`): link da reunião (Meet/Zoom/etc.)
+          - `location`: local físico
+          - `alarm` (alias `reminder`): minutos antes para notificar (`10`, `1h`, `1 dia`); "sem"/"0" = sem alarme
+          - `availability`: `busy`/`ocupado` (padrão) ou `free`/`livre`
+          - `color`: id de cor do Google Calendar (1–11)
 
         • Apagar evento (referência por título):
           [[DELETE_EVENT title="Título exato"]]
@@ -2077,6 +2102,18 @@ final class AIAgentService: ObservableObject {
           - Cria um evento no calendário com o título da tarefa, no horário pedido
           - A tarefa do ClickUp não é alterada — só ganha um bloco de calendário associado pelo nome
           - Use quando o usuário disser coisas como "agenda 2h pra trabalhar no pitch amanhã", "bloqueia tempo pro X"
+
+        • Transformar evento em tarefa:
+          [[CONVERT_EVENT_TO_TASK title="Título do evento"]]
+          - Cria uma tarefa no ClickUp a partir do evento (notas/local/convidados viram a descrição, vencimento = início do evento) e REMOVE o evento do calendário
+          - Use para "transforma esse evento em tarefa", "vira a reunião X numa task"
+
+        • Transformar tarefa em evento:
+          [[CONVERT_TASK_TO_EVENT title="Título da tarefa" start="amanhã 14:00" duration="1h"]]
+          - Cria um evento no calendário a partir da tarefa e REMOVE a tarefa do ClickUp
+          - `start` e `duration` são opcionais — sem eles o app usa a janela de início/vencimento da própria tarefa (ou a próxima hora cheia)
+          - Use para "transforma essa tarefa em evento", "joga a task X na agenda amanhã 14h"
+          - Ambas as conversões removem o item de origem — só emita se o usuário pediu para TRANSFORMAR/converter
 
         ───────────────────────────────────────────────────────
         EXEMPLOS DE CROSS-REFERENCE

@@ -27,7 +27,7 @@ struct StatusPickerPopover: View {
                     HStack(spacing: 8) {
                         Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                             .font(.caption)
-                            .foregroundStyle(isSelected ? statusColor : Color(NSColor.tertiaryLabelColor))
+                            .foregroundStyle(isSelected ? statusColor : Editorial.inkMute)
                         Text(status.status.uppercased())
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(statusColor)
@@ -41,7 +41,7 @@ struct StatusPickerPopover: View {
                 .focusEffectDisabled()
 
                 if status.id != statuses.last?.id {
-                    Rectangle().fill(.separator.opacity(0.3)).frame(height: 0.5)
+                    Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
                 }
             }
         }

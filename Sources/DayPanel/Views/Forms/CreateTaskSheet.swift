@@ -29,6 +29,13 @@ struct CreateTaskSheet: View {
     @State private var dueDate     = Date().addingTimeInterval(86400)
     @State private var assigneeIds: Set<Int>    = []
     @State private var tagNames:    Set<String> = []
+
+    /// Interactive assignee search — mirrors the event guest
+    /// search: a live-filtered, multi-select editorial list
+    /// instead of a flat `Menu`.
+    @State private var assigneeSearch       = ""
+    @State private var showAssigneeSearch   = false
+    @FocusState private var assigneeSearchFocused: Bool
     @State private var creating    = false
 
     /// Files queued for upload. Selected via `NSOpenPanel`
@@ -45,12 +52,15 @@ struct CreateTaskSheet: View {
     /// itself is up.
     @State private var attachmentsUploaded: Int = 0
 
+    // Editorial-muted priority palette — same densified hexes as
+    // `CUTask.priorityHex` so the create form and the task list
+    // read priority with one coherent set of colors.
     private let priorities: [(Int, String, Color)] = [
-        (0, "Nenhuma", Color(NSColor.tertiaryLabelColor)),
-        (1, "Urgente", .red),
-        (2, "Alta",    .orange),
-        (3, "Normal",  .blue),
-        (4, "Baixa",   Color(NSColor.tertiaryLabelColor)),
+        (0, "Nenhuma", Editorial.inkMute),
+        (1, "Urgente", Color(hex: "#A8392A")),
+        (2, "Alta",    Color(hex: "#9A7B1F")),
+        (3, "Normal",  Color(hex: "#56708A")),
+        (4, "Baixa",   Color(hex: "#A8A39A")),
     ]
 
     private var cuConfigured: Bool {
@@ -59,11 +69,20 @@ struct CreateTaskSheet: View {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
+        // Editorial popup: near-square corners — same radius as the
+        // sibling `TaskDetailSheet` so creating and editing feel like
+        // one surface (prototype `PPopup`).
+        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
     }
 
     @FocusState private var titleFocused:       Bool
-    @FocusState private var descriptionFocused: Bool
+    // RichTextEditor drives this via the responder chain (it takes
+    // a Binding<Bool>, not a FocusState).
+    @State private var descriptionFocused = false
+
+    /// Trailing "@token" in the description, or nil. Drives the
+    /// inline member picker — same behavior as the comment composer.
+    @State private var mentionQuery: String?
 
     @State private var showStartPicker  = false
     @State private var showDuePicker    = false
@@ -71,49 +90,50 @@ struct CreateTaskSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header — no own background; the popup-level
-            // material (applied by `popupGlass`) shows through
-            // here as the translucent title bar.
+            // Editorial masthead: serif title + hairline rule.
             GlassFormHeader(title: "Nova Tarefa", onClose: onClose)
 
-            // Body + footer share a single solid surface that
-            // hides the popup-level material in their region —
-            // matches the design language now used by
-            // `TaskDetailSheet`.
+            // Body + footer flow on the shared paper surface — the
+            // header's hairline is the only divider (prototype
+            // `PNewTask`).
             VStack(spacing: 0) {
                 ScrollablePopupContent(maxHeight: scrollMaxHeight) {
                     VStack(alignment: .leading, spacing: 12) {
-                        // Hero: big title input + collapsible description
+                        // Hero: borderless serif title + collapsible
+                        // description on the bare paper.
                         titleHero
                         descriptionField
 
-                        // Subtle separator before the metadata grid — same
-                        // visual rhythm as the inline TaskDetailView.
-                        Rectangle()
-                            .fill(.separator.opacity(0.4))
-                            .frame(height: 0.5)
-                            .padding(.horizontal, -12)
-                            .padding(.top, 2)
-
-                        // Detail rows mirroring the expanded task pill:
-                        // [icon] [110pt label] [content]. Same icons, same
-                        // order, same labels — so creating feels like
-                        // editing.
-                        VStack(alignment: .leading, spacing: 10) {
+                        // Marginalia rows — each carries its own
+                        // `ruleSoft` underline (prototype `PMarg`),
+                        // so they self-divide with no extra separator.
+                        VStack(alignment: .leading, spacing: 0) {
                             statusDetailRow
                             assigneesDetailRow
+                            // Inline, live-filtered member picker —
+                            // placed in-flow (not a popover) so the
+                            // search field keeps keyboard focus.
+                            if showAssigneeSearch {
+                                assigneeResultsList
+                                    .transition(.asymmetric(
+                                        insertion: .opacity.combined(with: .offset(y: -6)),
+                                        removal:   .opacity.combined(with: .offset(y: -6))
+                                    ))
+                            }
                             datesDetailRow
                             priorityDetailRow
                             tagsDetailRow
                             attachmentsDetailRow
                         }
+                        .padding(.top, 6)
+                        .animation(.easeInOut(duration: 0.18), value: showAssigneeSearch)
 
                         if !cuConfigured {
                             GlassWarningRow("Configure o ClickUp nas configurações primeiro.")
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 24)
                 }
 
                 GlassFormFooter(
@@ -123,11 +143,20 @@ struct CreateTaskSheet: View {
                     createDisabled: title.isEmpty || creating || !cuConfigured
                 )
             }
-            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 460)
+        .frame(width: 540)
         .fixedSize(horizontal: false, vertical: true)
-        .popupGlass(shape)
+        // Editorial page chrome — near-neutral popup surface,
+        // hairline border, one soft ambient shadow (matches
+        // `TaskDetailSheet`).
+        .background(Editorial.popup, in: shape)
+        .clipShape(shape)
+        .overlay {
+            shape.strokeBorder(Editorial.rule, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
+        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
         // Drop target — accepts any file dragged from Finder /
         // Mail / Safari / iMessage. URLs are queued exactly the
         // same way the "Adicionar" button feeds `pickedAttachments`,
@@ -142,7 +171,7 @@ struct CreateTaskSheet: View {
         }
         .overlay(
             shape.strokeBorder(
-                Color.accentColor.opacity(isDropTargeted ? 0.7 : 0),
+                Editorial.accent.opacity(isDropTargeted ? 0.7 : 0),
                 lineWidth: isDropTargeted ? 2 : 0
             )
             .animation(.easeOut(duration: 0.15), value: isDropTargeted)
@@ -188,20 +217,27 @@ struct CreateTaskSheet: View {
 
     // MARK: - Detail-row helper (matches TaskDetailView)
 
+    /// Prototype `PMarg`: a `100px 1fr` row — uppercase sans
+    /// micro-caps label, ink value, hairline (`ruleSoft`) underline.
+    /// The `icon:` argument is kept for call-site compatibility but
+    /// unused (the editorial marginalia row carries no glyph).
     private func detailRow<Content: View>(
-        icon: String, label: String, @ViewBuilder content: () -> Content
+        icon _: String, label: String, @ViewBuilder content: () -> Content
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Label {
-                Text(label).font(.caption).foregroundStyle(.secondary)
-            } icon: {
-                Image(systemName: icon).font(.caption2).foregroundStyle(.tertiary).frame(width: 14)
-            }
-            .labelStyle(.titleAndIcon)
-            .frame(width: 110, alignment: .leading)
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label.uppercased())
+                .font(Editorial.sans(10.5, .semibold))
+                .tracking(1.1)
+                .foregroundStyle(Editorial.inkMute)
+                .frame(width: 100, alignment: .leading)
+                .padding(.top, 2)
 
             content()
             Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
         }
     }
 
@@ -240,47 +276,148 @@ struct CreateTaskSheet: View {
         detailRow(icon: "person.fill", label: "Responsáveis") {
             HStack(spacing: 6) {
                 if !assigneeIds.isEmpty {
-                    HStack(spacing: -4) {
-                        ForEach(selectedMembers.prefix(3), id: \.id) { m in
-                            avatarCircle(m)
-                                .overlay(Circle().strokeBorder(.background, lineWidth: 1.5))
-                        }
-                        if selectedMembers.count > 3 {
-                            Text("+\(selectedMembers.count - 3)")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 6)
+                    HStack(spacing: 5) {
+                        ForEach(selectedMembers, id: \.id) { m in
+                            assigneeChip(m)
                         }
                     }
                 }
-                Menu {
-                    if appState.availableMembers.isEmpty {
-                        Text("Nenhum membro disponível")
-                    } else {
-                        ForEach(appState.availableMembers) { m in
-                            Button {
-                                if assigneeIds.contains(m.id) { assigneeIds.remove(m.id) }
-                                else                          { assigneeIds.insert(m.id) }
-                            } label: {
-                                if assigneeIds.contains(m.id) {
-                                    Label(m.username, systemImage: "checkmark")
-                                } else {
-                                    Text(m.username)
-                                }
-                            }
-                        }
+
+                if showAssigneeSearch {
+                    TextField("Buscar pessoa…", text: $assigneeSearch)
+                        .textFieldStyle(.plain)
+                        .font(Editorial.sans(12.5))
+                        .foregroundStyle(Editorial.ink)
+                        .focused($assigneeSearchFocused)
+                        .focusEffectDisabled()
+                        .onSubmit { closeAssigneeSearch() }
+                    Button { closeAssigneeSearch() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Editorial.inkMute)
                     }
-                } label: {
-                    Text(assigneeIds.isEmpty ? "Adicionar" : "Editar")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.blue)
+                    .buttonStyle(.plain).focusEffectDisabled()
+                } else {
+                    Button {
+                        showAssigneeSearch = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            assigneeSearchFocused = true
+                        }
+                    } label: {
+                        Text(assigneeIds.isEmpty ? "Adicionar" : "Editar")
+                            .font(Editorial.sans(12, .medium))
+                            .foregroundStyle(Editorial.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .focusEffectDisabled()
             }
         }
+    }
+
+    private func closeAssigneeSearch() {
+        showAssigneeSearch    = false
+        assigneeSearch        = ""
+        assigneeSearchFocused = false
+    }
+
+    /// Removable chip for a chosen responsible. The trailing ✕
+    /// deselects the member — recovery path for an accidental pick.
+    private func assigneeChip(_ m: CUMember) -> some View {
+        HStack(spacing: 5) {
+            avatarCircle(m)
+            Text(m.username.split(separator: " ").first.map(String.init) ?? m.username)
+                .font(Editorial.sans(11.5, .medium))
+                .foregroundStyle(Editorial.ink)
+                .lineLimit(1)
+            Button { assigneeIds.remove(m.id) } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Editorial.inkMute)
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .help("Remover \(m.username)")
+        }
+        .padding(.leading, 3)
+        .padding(.trailing, 7)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Editorial.card)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
+        )
+    }
+
+    private var filteredAssigneeMembers: [CUMember] {
+        let q = assigneeSearch.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return appState.availableMembers }
+        return appState.availableMembers.filter {
+            $0.username.lowercased().contains(q)
+            || ($0.initials?.lowercased().contains(q) ?? false)
+        }
+    }
+
+    // Canonical editorial picker (matches the comment @-mention
+    // picker / event guest list): page surface, hairline border,
+    // `editorialMuted` avatar discs, ink names, `ruleSoft`
+    // separators. Multi-select — a check trails the chosen rows.
+    private var assigneeResultsList: some View {
+        let members = filteredAssigneeMembers
+        return VStack(alignment: .leading, spacing: 0) {
+            if members.isEmpty {
+                Text("Nenhum membro encontrado")
+                    .font(Editorial.sans(12))
+                    .foregroundStyle(Editorial.inkMute)
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+            } else {
+                ForEach(members) { m in
+                    Button {
+                        if assigneeIds.contains(m.id) { assigneeIds.remove(m.id) }
+                        else                          { assigneeIds.insert(m.id) }
+                    } label: {
+                        HStack(spacing: 8) {
+                            avatarCircle(m)
+                            Text(m.username)
+                                .font(Editorial.sans(12, .medium))
+                                .foregroundStyle(Editorial.ink)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            if assigneeIds.contains(m.id) {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Editorial.accent)
+                            }
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    if m.id != members.last?.id {
+                        Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+                    }
+                }
+            }
+        }
+        .padding(.leading, 112)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Editorial.page)
+                .padding(.leading, 112),
+            alignment: .leading
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
+                .padding(.leading, 112),
+            alignment: .leading
+        )
     }
 
     private var datesDetailRow: some View {
@@ -290,7 +427,7 @@ struct CreateTaskSheet: View {
                     label: hasStart
                         ? startDate.formatted(.dateTime.day().month(.abbreviated))
                         : "Início",
-                    color: hasStart ? .primary : .secondary,
+                    color: hasStart ? Editorial.ink : Editorial.inkSoft,
                     show:  $showStartPicker
                 ) {
                     UnifiedDatePickerPopover(task: draftTask, initialMode: .start) { mode, date in
@@ -299,14 +436,14 @@ struct CreateTaskSheet: View {
                 }
                 if hasStart || hasDue {
                     Image(systemName: "arrow.right")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Editorial.inkMute)
                 }
                 dateButton(
                     label: hasDue
                         ? dueDate.formatted(.dateTime.day().month(.abbreviated))
                         : "Vencimento",
-                    color: hasDue ? .primary : .secondary,
+                    color: hasDue ? Editorial.ink : Editorial.inkSoft,
                     show:  $showDuePicker
                 ) {
                     UnifiedDatePickerPopover(task: draftTask, initialMode: .due) { mode, date in
@@ -345,11 +482,17 @@ struct CreateTaskSheet: View {
     ) -> some View {
         Button { show.wrappedValue.toggle() } label: {
             Text(label)
-                .font(.caption.weight(.medium))
+                .font(Editorial.sans(12, .medium))
                 .foregroundStyle(color)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(.secondary.opacity(0.20), lineWidth: 0.5))
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Editorial.card)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(Editorial.rule, lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -372,16 +515,16 @@ struct CreateTaskSheet: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Image(systemName: "flag.fill")
-                        .font(.caption2)
+                        .font(.system(size: 9))
                         .foregroundStyle(current.2)
                     Text(current.1)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(Editorial.serif(14))
+                        .foregroundStyle(priority == 0 ? Editorial.inkMute : Editorial.ink)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Editorial.inkMute)
                 }
             }
             .menuStyle(.borderlessButton)
@@ -400,8 +543,8 @@ struct CreateTaskSheet: View {
                     }
                     if selectedTags.count > 3 {
                         Text("+\(selectedTags.count - 3)")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .font(Editorial.sans(11, .semibold))
+                            .foregroundStyle(Editorial.inkSoft)
                     }
                 }
                 Menu {
@@ -423,8 +566,8 @@ struct CreateTaskSheet: View {
                     }
                 } label: {
                     Text(tagNames.isEmpty ? "Adicionar" : "Editar")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.blue)
+                        .font(Editorial.sans(12, .medium))
+                        .foregroundStyle(Editorial.accent)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -460,21 +603,21 @@ struct CreateTaskSheet: View {
                         Text(pickedAttachments.isEmpty
                               ? "Adicionar"
                               : "Adicionar mais")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.blue)
+                            .font(Editorial.sans(12, .medium))
+                            .foregroundStyle(Editorial.accent)
                     }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
 
                     if !pickedAttachments.isEmpty {
                         Text("·")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .font(Editorial.sans(11))
+                            .foregroundStyle(Editorial.inkMute)
                         Text("\(pickedAttachments.count) " +
                              (pickedAttachments.count == 1
                                 ? "arquivo" : "arquivos"))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(Editorial.sans(11))
+                            .foregroundStyle(Editorial.inkSoft)
                     }
                 }
             }
@@ -486,20 +629,20 @@ struct CreateTaskSheet: View {
         let ext  = url.pathExtension.lowercased()
         return HStack(spacing: 8) {
             Image(systemName: iconName(forExtension: ext))
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(iconTint(forExtension: ext))
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Editorial.accent)
                 .frame(width: 16)
 
             Text(url.lastPathComponent)
-                .font(.caption)
-                .foregroundStyle(.primary)
+                .font(.system(size: 13, design: .serif).italic())
+                .foregroundStyle(Editorial.accent)
                 .lineLimit(1)
                 .truncationMode(.middle)
 
             if let size {
                 Text(size)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(Editorial.sans(10.5))
+                    .foregroundStyle(Editorial.inkMute)
             }
 
             Spacer(minLength: 4)
@@ -508,23 +651,23 @@ struct CreateTaskSheet: View {
                 pickedAttachments.removeAll { $0 == url }
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Editorial.inkMute)
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
             .help("Remover anexo")
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Editorial.card)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.10),
-                              lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(Editorial.rule,
+                              lineWidth: 1)
         )
     }
 
@@ -584,80 +727,166 @@ struct CreateTaskSheet: View {
         }
     }
 
-    private func iconTint(forExtension ext: String) -> Color {
-        switch ext {
-        case "pdf":                                       return .red
-        case "doc","docx","txt","rtf","md","pages":       return .blue
-        case "xls","xlsx","csv","numbers":                return .green
-        case "ppt","pptx","key":                          return .orange
-        case "png","jpg","jpeg","gif","heic","webp","svg","tiff","bmp":
-            return .pink
-        case "mp4","mov","m4v","avi","mkv","webm":        return .purple
-        case "mp3","wav","aac","m4a","flac","ogg":        return .indigo
-        case "zip","rar","7z","tar","gz","bz2":           return .brown
-        case "swift","js","ts","py","rb","go","java","kt","cpp","c","h","html","css","json","xml","yml","yaml","sh":
-            return .teal
-        default:                                          return .secondary
-        }
-    }
-
     // MARK: - Hero title
 
     private var titleHero: some View {
+        // Prototype `PNewTask`: borderless serif-24 input with a
+        // single bottom hairline (cinnabar when focused). No card,
+        // no fill — the title sits directly on the paper.
         TextField("", text: $title, prompt: Text("Título da tarefa")
-            .font(.title3.weight(.regular))
-            .foregroundColor(.secondary))
+            .font(Editorial.serif(24))
+            .foregroundColor(Editorial.inkMute))
             .textFieldStyle(.plain)
-            .font(.title3.weight(.semibold))
+            .font(Editorial.serif(24))
+            .foregroundStyle(Editorial.ink)
+            .tracking(-0.4)
             .focused($titleFocused)
             .focusEffectDisabled()
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(titleFocused ? Color.accentColor.opacity(0.45) : .white.opacity(0.15),
-                                  lineWidth: titleFocused ? 1.0 : 0.5)
-            )
+            .padding(.vertical, 8)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(titleFocused ? Editorial.accent : Editorial.rule)
+                    .frame(height: 1)
+            }
             .animation(.easeInOut(duration: 0.15), value: titleFocused)
     }
 
     // MARK: - Description
 
     private var descriptionField: some View {
-        // Compact when empty/unfocused, grows up to 90pt as the user
-        // writes. Saves vertical space for the rest of the form when
-        // the description isn't being edited.
+        // Compact when empty/unfocused, grows as the user writes.
         let minH: CGFloat = (description.isEmpty && !descriptionFocused) ? 36 : 60
-        let maxH: CGFloat = descriptionFocused ? 140 : 90
+        let maxH: CGFloat = descriptionFocused ? 160 : 96
 
-        return ZStack(alignment: .topLeading) {
-            if description.isEmpty && !descriptionFocused {
-                Text("Descrição (opcional)")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .allowsHitTesting(false)
-            }
-            TextEditor(text: $description)
-                .focused($descriptionFocused)
-                .focusEffectDisabled()
-                .scrollContentBackground(.hidden)
-                .background(TextEditorEnhancements())
-                .font(.subheadline)
+        return VStack(alignment: .leading, spacing: 6) {
+            ZStack(alignment: .topLeading) {
+                if description.isEmpty && !descriptionFocused {
+                    // Aligned to RichTextEditor's NSTextView insets
+                    // (left 5, top 8).
+                    Text("Descrição (opcional)")
+                        .font(Editorial.sans(13))
+                        .foregroundStyle(Editorial.inkMute)
+                        .padding(.leading, 12)
+                        .padding(.top, 11)
+                        .allowsHitTesting(false)
+                }
+                // RichTextEditor auto-detects URLs and renders them
+                // as clickable links — covers "colocar links na
+                // descrição" with the app's canonical editor.
+                RichTextEditor(
+                    text:              $description,
+                    minHeight:         minH,
+                    maxHeight:         maxH,
+                    scrollsInternally: true,
+                    fontSize:          13,
+                    isFocused:         $descriptionFocused,
+                    mentionStrings:    appState.availableMembers.map { "@" + $0.username },
+                    onFileDrop: { urls in
+                        // A file dropped on the description is queued
+                        // as an attachment (editorial ANEXOS chip) —
+                        // not pasted as a raw path. Multi-file safe.
+                        for u in urls where !pickedAttachments.contains(u) {
+                            pickedAttachments.append(u)
+                        }
+                    }
+                )
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
                 .frame(minHeight: minH, maxHeight: maxH)
+                .onChange(of: description) { _, new in
+                    updateMentionState(text: new)
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Editorial.card)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(descriptionFocused ? Editorial.accent : Editorial.rule,
+                                  lineWidth: 1)
+            )
+
+            // Inline editorial member picker for the trailing
+            // "@token" — same component family as the comment
+            // composer and the assignee search.
+            if let q = mentionQuery, !filteredMentionMembers(matching: q).isEmpty {
+                descriptionMentionPicker(query: q)
+                    .transition(.opacity.combined(with: .offset(y: -6)))
+            }
+
+            Text("Arraste arquivos para anexar · @ marca pessoas · links viram clicáveis")
+                .font(Editorial.sans(10.5))
+                .foregroundStyle(Editorial.inkMute)
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(descriptionFocused ? Color.accentColor.opacity(0.45) : .white.opacity(0.15),
-                              lineWidth: descriptionFocused ? 1.0 : 0.5)
-        )
         .animation(.easeInOut(duration: 0.18), value: descriptionFocused)
         .animation(.easeInOut(duration: 0.18), value: description.isEmpty)
+        .animation(.easeInOut(duration: 0.15), value: mentionQuery)
+    }
+
+    // MARK: - Description @-mentions
+
+    private func updateMentionState(text: String) {
+        guard let atIdx = text.lastIndex(of: "@") else {
+            mentionQuery = nil; return
+        }
+        let after = text.index(after: atIdx)
+        let trailing = String(text[after...])
+        if trailing.contains(where: { $0.isWhitespace || $0.isNewline }) {
+            mentionQuery = nil
+        } else {
+            mentionQuery = trailing.lowercased()
+        }
+    }
+
+    private func filteredMentionMembers(matching q: String) -> [CUMember] {
+        guard !appState.availableMembers.isEmpty else { return [] }
+        if q.isEmpty { return Array(appState.availableMembers.prefix(6)) }
+        return appState.availableMembers
+            .filter { $0.username.lowercased().contains(q) }
+            .prefix(6)
+            .map { $0 }
+    }
+
+    private func insertDescriptionMention(_ m: CUMember) {
+        guard let atIdx = description.lastIndex(of: "@") else { return }
+        let prefix = description[..<atIdx]
+        description = prefix + "@" + m.username + " "
+        mentionQuery = nil
+    }
+
+    private func descriptionMentionPicker(query: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            let members = filteredMentionMembers(matching: query)
+            ForEach(members) { m in
+                Button {
+                    insertDescriptionMention(m)
+                } label: {
+                    HStack(spacing: 8) {
+                        avatarCircle(m)
+                        Text("@" + m.username)
+                            .font(Editorial.sans(12, .medium))
+                            .foregroundStyle(Editorial.ink)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).focusEffectDisabled()
+                if m.id != members.last?.id {
+                    Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+                }
+            }
+        }
+        .background(
+            Editorial.page,
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
+        )
     }
 
     // MARK: - Status picker
@@ -665,12 +894,12 @@ struct CreateTaskSheet: View {
     private var statusPicker: some View {
         Group {
             if appState.availableStatuses.isEmpty {
-                Text("—").font(.caption).foregroundStyle(.tertiary)
+                Text("—").font(Editorial.sans(12)).foregroundStyle(Editorial.inkMute)
             } else {
                 Button { showStatusPicker.toggle() } label: { statusPillLabel }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
-                    .popover(isPresented: $showStatusPicker, arrowEdge: .top) {
+                    .popover(isPresented: $showStatusPicker, arrowEdge: .bottom) {
                         StatusPickerPopover(
                             statuses:          appState.availableStatuses,
                             currentStatusName: statusName
@@ -683,20 +912,26 @@ struct CreateTaskSheet: View {
         }
     }
 
+    // Editorial `StatusMark`-style value: a muted status dot +
+    // ink label + chevron — no loud capsule (prototype `PMarg`
+    // renders status the same way the task list does).
     private var statusPillLabel: some View {
         let s = appState.availableStatuses.first(where: { $0.status == statusName })
-        let color = Color(hex: s?.color ?? "#87909E")
-        return HStack(spacing: 4) {
-            Text((s?.status ?? "Selecionar").uppercased())
-                .font(.caption.weight(.bold))
+        let color = Color(hex: s?.color ?? "#87909E").editorialMuted
+        return HStack(spacing: 7) {
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+            Text(s?.status ?? "Selecionar")
+                .font(Editorial.sans(11.5, .medium))
+                .foregroundStyle(Editorial.inkSoft)
+                .tracking(0.2)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.7)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(Editorial.inkMute)
         }
-        .padding(.horizontal, 8).padding(.vertical, 3)
-        .foregroundStyle(color)
-        .background(color.opacity(0.15), in: Capsule())
-        .overlay(Capsule().strokeBorder(color.opacity(0.4), lineWidth: 0.5))
     }
 
     // MARK: - Helpers
@@ -710,7 +945,7 @@ struct CreateTaskSheet: View {
     }
 
     private func avatarCircle(_ m: CUMember) -> some View {
-        let bg = m.color.flatMap { Color(hex: $0) } ?? .blue
+        let bg = (m.color.flatMap { Color(hex: $0) } ?? Editorial.inkSoft).editorialMuted
         return ZStack {
             Circle().fill(bg)
             if let pic = m.profilePicture, let url = URL(string: pic) {
@@ -728,16 +963,25 @@ struct CreateTaskSheet: View {
     }
 
     private func tagPill(_ tag: CUTask.Tag) -> some View {
-        HStack(spacing: 3) {
-            Text(tag.name).font(.caption2.weight(.medium))
+        let c = Color(hex: tag.background).editorialMuted
+        return HStack(spacing: 4) {
+            Text(tag.name)
+                .font(Editorial.sans(10.5, .medium))
             Button { tagNames.remove(tag.name) } label: {
                 Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
             }
             .buttonStyle(.plain).focusEffectDisabled()
         }
         .padding(.horizontal, 7).padding(.vertical, 2)
-        .foregroundStyle(Color(hex: tag.foreground))
-        .background(Color(hex: tag.background).opacity(0.85), in: Capsule())
+        .foregroundStyle(c)
+        .background(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(c.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .strokeBorder(c.opacity(0.22), lineWidth: 1)
+        )
     }
 
     /// Footer button copy. Reflects the current phase of

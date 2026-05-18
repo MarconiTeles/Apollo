@@ -34,39 +34,39 @@ struct CUStatus: Identifiable, Hashable {
     /// (PT-BR + EN), falling back to whatever the API supplied.
     var displayHex: String {
         let key = status.lowercased().trimmingCharacters(in: .whitespaces)
+        // Muted, denser "Editorial Calm" palette — same families
+        // as `Editorial.statusColor`, desaturated/deepened to sit
+        // with the cream/ink system instead of ClickUp's vivid
+        // web hues.
         let map: [(String, String)] = [
-            ("to do",         "#5E5ED6"),  // purple
-            ("todo",          "#5E5ED6"),
-            ("a fazer",       "#5E5ED6"),
-            ("doing",         "#FE9100"),  // orange
-            ("em andamento",  "#FE9100"),
-            ("in progress",   "#FE9100"),
-            ("em progresso",  "#FE9100"),
-            ("review",        "#A875FF"),  // light purple
-            ("revisão",       "#A875FF"),
-            ("revisao",       "#A875FF"),
-            ("in review",     "#A875FF"),
-            // Goldenrod — the original ClickUp yellow (#F9D900) has too
-            // little chroma against white to be readable as pill text or
-            // filter labels. This darker variant keeps the "amarelo/gold"
-            // identity but actually stands out on light backgrounds.
-            ("liberado",      "#D4A017"),
-            ("released",      "#D4A017"),
-            ("aprovado",      "#D4A017"),
-            ("approved",      "#D4A017"),
-            ("complete",      "#6BC950"),  // green
-            ("completed",     "#6BC950"),
-            ("concluído",     "#6BC950"),
-            ("concluido",     "#6BC950"),
-            ("done",          "#6BC950"),
-            ("finalizado",    "#6BC950"),
-            ("cancelado",     "#E50000"),  // red
-            ("cancelled",     "#E50000"),
-            ("canceled",      "#E50000"),
-            ("backlog",       "#7B68EE"),  // muted purple
-            ("recorrentes",   "#9B59B6"),  // soft violet
-            ("recurring",     "#9B59B6"),
-            ("open",          "#87909E"),  // grey (default)
+            ("to do",         "#54577E"),  // muted slate-indigo
+            ("todo",          "#54577E"),
+            ("a fazer",       "#54577E"),
+            ("doing",         "#B0612E"),  // muted terracotta
+            ("em andamento",  "#B0612E"),
+            ("in progress",   "#B0612E"),
+            ("em progresso",  "#B0612E"),
+            ("review",        "#7A6597"),  // muted dusty plum
+            ("revisão",       "#7A6597"),
+            ("revisao",       "#7A6597"),
+            ("in review",     "#7A6597"),
+            ("liberado",      "#9A7B1F"),  // deep muted ochre
+            ("released",      "#9A7B1F"),
+            ("aprovado",      "#9A7B1F"),
+            ("approved",      "#9A7B1F"),
+            ("complete",      "#3F6B4A"),  // muted forest sage
+            ("completed",     "#3F6B4A"),
+            ("concluído",     "#3F6B4A"),
+            ("concluido",     "#3F6B4A"),
+            ("done",          "#3F6B4A"),
+            ("finalizado",    "#3F6B4A"),
+            ("cancelado",     "#B0402C"),  // muted brick (accent kin)
+            ("cancelled",     "#B0402C"),
+            ("canceled",      "#B0402C"),
+            ("backlog",       "#5E5786"),  // muted violet-slate
+            ("recorrentes",   "#7E6597"),  // muted lavender
+            ("recurring",     "#7E6597"),
+            ("open",          "#7C7E84"),  // warm muted grey (default)
         ]
         for (name, hex) in map where key == name || key.contains(name) {
             return hex

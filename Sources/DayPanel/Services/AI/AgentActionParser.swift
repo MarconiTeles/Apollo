@@ -111,12 +111,29 @@ enum AgentActionParser {
             guard let title = attrs["title"], !title.isEmpty else {
                 return nil
             }
+            // Hoisted into locals: a single big `.createTask(...)`
+            // literal with these `??` chains blows the Swift
+            // type-checker's budget ("unable to type-check in
+            // reasonable time").
+            let ctAssignees:   String? = attrs["assignees"] ?? attrs["assignee"]
+            let ctDescription: String? = attrs["description"] ?? attrs["desc"] ?? attrs["notes"]
+            let ctStart:       String? = attrs["start"] ?? attrs["start_date"]
+            let ctTags:        String? = attrs["tags"] ?? attrs["tag"]
+            let ctParent:      String? = attrs["parent"] ?? attrs["parent_task"] ?? attrs["parent_id"]
+            let ctLinks:       String? = attrs["links"] ?? attrs["link"] ?? attrs["url"]
+            let ctAttachments: String? = attrs["attachments"] ?? attrs["attachment"] ?? attrs["files"] ?? attrs["file"]
             return .createTask(
-                title:     title,
-                priority:  attrs["priority"],
-                due:       attrs["due"],
-                status:    attrs["status"],
-                assignees: attrs["assignees"] ?? attrs["assignee"]
+                title:       title,
+                priority:    attrs["priority"],
+                due:         attrs["due"],
+                status:      attrs["status"],
+                assignees:   ctAssignees,
+                description: ctDescription,
+                start:       ctStart,
+                tags:        ctTags,
+                parent:      ctParent,
+                links:       ctLinks,
+                attachments: ctAttachments
             )
 
         case "COMPLETE_TASK":
@@ -144,13 +161,27 @@ enum AgentActionParser {
             guard let title = attrs["title"], !title.isEmpty,
                   let start = attrs["start"], !start.isEmpty
             else { return nil }
+            // Hoisted (see CREATE_TASK note) — keeps the Swift
+            // type-checker inside its time budget.
+            let ceDuration: String? = attrs["duration"] ?? attrs["minutes"]
+            let ceGuests:   String? = attrs["guests"] ?? attrs["guest"]
+            let ceNotes:    String? = attrs["notes"] ?? attrs["description"] ?? attrs["desc"]
+            let ceMeet:     String? = attrs["meeting_url"] ?? attrs["meetingURL"] ?? attrs["meet"] ?? attrs["video"]
+            let ceColor:    String? = attrs["color"] ?? attrs["colorId"] ?? attrs["color_id"]
+            let ceAvail:    String? = attrs["availability"] ?? attrs["busy"] ?? attrs["free"]
+            let ceAlarm:    String? = attrs["alarm"] ?? attrs["reminder"] ?? attrs["alarm_minutes"]
             return .createEvent(
                 title:           title,
                 start:           start,
                 end:             attrs["end"],
-                durationMinutes: attrs["duration"] ?? attrs["minutes"],
+                durationMinutes: ceDuration,
                 location:        attrs["location"],
-                guests:          attrs["guests"] ?? attrs["guest"]
+                guests:          ceGuests,
+                notes:           ceNotes,
+                meetingURL:      ceMeet,
+                color:           ceColor,
+                availability:    ceAvail,
+                alarm:           ceAlarm
             )
 
         case "DELETE_EVENT":
@@ -171,6 +202,23 @@ enum AgentActionParser {
                 start: start,
                 durationMinutes: dur
             )
+
+        case "CONVERT_EVENT_TO_TASK", "EVENT_TO_TASK":
+            guard let ref = attrs["event_id"] ?? attrs["title"]
+                            ?? attrs["event"],
+                  !ref.isEmpty
+            else { return nil }
+            return .convertEventToTask(eventRef: ref)
+
+        case "CONVERT_TASK_TO_EVENT", "TASK_TO_EVENT":
+            guard let ref = attrs["task_id"] ?? attrs["title"]
+                            ?? attrs["task"],
+                  !ref.isEmpty
+            else { return nil }
+            return .convertTaskToEvent(
+                taskRef: ref,
+                start: attrs["start"] ?? attrs["start_date"],
+                durationMinutes: attrs["duration"] ?? attrs["minutes"])
 
         // ── Read / fetch markers ───────────────────────────
         // Format mirrors the mutation markers — same parser
@@ -224,10 +272,18 @@ enum AgentActionParser {
             return .updateTaskTitle(taskRef: ref, newTitle: newTitle)
 
         case "UPDATE_TASK_DESCRIPTION", "SET_DESCRIPTION":
-            guard let ref = attrs["task_id"] ?? attrs["title"], !ref.isEmpty,
-                  let desc = attrs["description"] ?? attrs["text"]
+            guard let ref = attrs["task_id"] ?? attrs["title"], !ref.isEmpty
             else { return nil }
-            return .updateTaskDescription(taskRef: ref, description: desc)
+            let utdDesc:  String? = attrs["description"] ?? attrs["text"]
+            let utdLinks: String? = attrs["links"] ?? attrs["link"] ?? attrs["url"]
+            let utdFiles: String? = attrs["attachments"] ?? attrs["attachment"] ?? attrs["files"] ?? attrs["file"]
+            // Need at least one of: new body, links, files.
+            guard utdDesc != nil || utdLinks != nil || utdFiles != nil
+            else { return nil }
+            return .updateTaskDescription(taskRef: ref,
+                                          description: utdDesc,
+                                          links: utdLinks,
+                                          attachments: utdFiles)
 
         case "UPDATE_TASK_ASSIGNEES", "REASSIGN_TASK":
             guard let ref = attrs["task_id"] ?? attrs["title"], !ref.isEmpty
@@ -250,10 +306,26 @@ enum AgentActionParser {
             return .removeTaskTag(taskRef: ref, tag: tag)
 
         case "ADD_TASK_COMMENT", "COMMENT", "POST_COMMENT":
-            guard let ref = attrs["task_id"] ?? attrs["title"], !ref.isEmpty,
-                  let text = attrs["text"] ?? attrs["comment"], !text.isEmpty
+            guard let ref = attrs["task_id"] ?? attrs["title"], !ref.isEmpty
             else { return nil }
-            return .addTaskComment(taskRef: ref, text: text)
+            let cmText:  String? = attrs["text"] ?? attrs["comment"]
+            let cmFiles: String? = attrs["attachments"] ?? attrs["attachment"] ?? attrs["files"] ?? attrs["file"]
+            // A comment needs text OR at least one file.
+            let hasText = cmText.map { !$0.isEmpty } ?? false
+            guard hasText || (cmFiles?.isEmpty == false) else { return nil }
+            return .addTaskComment(taskRef: ref,
+                                   text: hasText ? cmText : nil,
+                                   attachments: cmFiles)
+
+        case "ADD_TASK_ATTACHMENT", "ATTACH_FILE", "ADD_ATTACHMENT",
+             "ATTACH":
+            guard let ref = attrs["task_id"] ?? attrs["title"], !ref.isEmpty,
+                  let files = attrs["attachments"] ?? attrs["attachment"]
+                              ?? attrs["files"] ?? attrs["file"]
+                              ?? attrs["url"],
+                  !files.isEmpty
+            else { return nil }
+            return .addTaskAttachment(taskRef: ref, files: files)
 
         case "CREATE_SUBTASK":
             guard let parent = attrs["parent"] ?? attrs["parent_title"] ?? attrs["task_id"],

@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 /// Conversational UI for the in-app Apollo AI agent. Renders as
 /// a popover anchored to the toolbar's sparkles button. Owns the
@@ -9,6 +11,20 @@ struct AIAgentChatView: View {
 
     @State private var draft: String = ""
     @FocusState private var composerFocused: Bool
+
+    /// Files dropped / picked into the composer — identical UX to
+    /// the task-comment box. Pushed into `appState.aiAgent` on
+    /// send so the action executor turns them into real ClickUp
+    /// attachments without a second native file panel.
+    @State private var pendingAttachments: [URL] = []
+    @State private var isDropTargeted: Bool = false
+
+    /// Drives the staggered entrance of the home-screen
+    /// (daily-summary) sections. Flips true once on appear so
+    /// each block fades + rises in sequence; `@State` resets
+    /// per open so the cascade replays every time the panel
+    /// is launched.
+    @State private var homeRevealed: Bool = false
 
     // MARK: - @-mention autocomplete
     //
@@ -29,6 +45,11 @@ struct AIAgentChatView: View {
     /// reads `activeModel` to render a "degraded" badge.
     @StateObject private var geminiQuota = GeminiQuotaTracker.shared
 
+    /// Live weather for the daily-summary masthead strip
+    /// (IP-geolocated, 30-min cache; same source the old clock
+    /// tile used).
+    @StateObject private var weather = WeatherFetcher.shared
+
     var body: some View {
         // GlassEffectContainer (macOS 26+) groups every Liquid
         // Liquid-glass / popupGlass surface treatment was removed
@@ -39,7 +60,6 @@ struct AIAgentChatView: View {
         // double refraction with the dashboard surface.
         VStack(spacing: 0) {
             header
-            Divider().opacity(0.5)
             // Embedded backend gates: if the user picked Apollo
             // IA (local) but never downloaded the model,
             // intercept the chat with a download CTA. Once the
@@ -57,7 +77,6 @@ struct AIAgentChatView: View {
                     errorBanner(err)
                 }
             }
-            Divider().opacity(0.5)
             composer
         }
         // Fill the entire host window — width AND height. The
@@ -79,7 +98,14 @@ struct AIAgentChatView: View {
         // composer field) so the lack of a containing surface
         // reads as "Apple Intelligence panel" instead of
         // "missing background".
-        .onAppear { composerFocused = true }
+        .onAppear {
+            composerFocused = true
+            weather.refreshIfStale()
+            // Kick the staggered home-screen entrance on the
+            // next runloop tick so the first frame is the
+            // hidden state (otherwise the cascade is skipped).
+            DispatchQueue.main.async { homeRevealed = true }
+        }
     }
 
     /// Whether the runtime manager is currently streaming a
@@ -93,98 +119,106 @@ struct AIAgentChatView: View {
 
     // MARK: - Header
 
+    /// The chat panel's top bar. With no conversation yet it is
+    /// the newspaper masthead of the "diário do dia" summary;
+    /// once a conversation starts it becomes the "— a coluna"
+    /// chat header.
+    @ViewBuilder
     private var header: some View {
-        HStack(spacing: 10) {
-            // Back button — only shown when there's an active
-            // conversation. Tapping clears history (which also
-            // resets the streaming state) inside a spring
-            // animation, so the chat scroll slides away and the
-            // empty-state hero cross-fades back in via the
-            // matching transitions defined on `transcript`.
-            if !appState.aiAgent.messages.isEmpty {
-                Button {
-                    // Truly instant. Just removing the
-                    // `withAnimation` wrapper isn't enough —
-                    // the `transcript` view switches between
-                    // `chatScroll` and `emptyState` via
-                    // `.transition(...)` modifiers, and SwiftUI
-                    // applies a default 0.35s transition
-                    // animation whenever the branch flips.
-                    // `withTransaction(disablesAnimations: true)`
-                    // forces SwiftUI to swap the views in the
-                    // SAME frame as the click — no fade, no
-                    // slide, no scale. That's what makes the
-                    // back button feel instant instead of
-                    // "clicked then waited".
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) {
-                        appState.aiAgent.clearHistory()
-                    }
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 26, height: 26)
-                        .background(.regularMaterial, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .focusEffectDisabled()
-                .help("Voltar para sugestões")
-                // Slight asymmetric transition so the back
-                // button slides in from the leading edge when
-                // a chat starts, and slides back out when the
-                // user returns to the empty state.
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .move(edge: .leading)),
-                    removal:   .opacity.combined(with: .move(edge: .leading))
-                ))
-            }
+        if appState.aiAgent.messages.isEmpty {
+            dashboardMasthead
+        } else {
+            chatHeader
+        }
+    }
 
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.accentColor, Color(hex: "#FF8A4C")],
-                            startPoint: .topLeading,
-                            endPoint:   .bottomTrailing
-                        )
-                    )
-                    .frame(width: 28, height: 28)
-                Image(systemName: "sparkles")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white)
+    /// Newspaper masthead for the daily-summary home screen
+    /// (prototype `PAIDashboard`): wordmark + "— diário do dia",
+    /// today's date in small-caps, a double ink rule.
+    private var dashboardMasthead: some View {
+        HStack(spacing: 12) {
+            AIMark(size: 22)
+            (
+                Text("Apollo")
+                    .font(Editorial.serif(17, .medium))
+                    .foregroundColor(Editorial.ink)
+                + Text("  — diário do dia")
+                    .font(Editorial.serif(17).italic())
+                    .foregroundColor(Editorial.inkSoft)
+            )
+            .tracking(-0.2)
+            Spacer(minLength: 0)
+            Text(Self.mastheadDate())
+                .font(Editorial.sans(10.5, .semibold))
+                .tracking(1.3)
+                .foregroundStyle(Editorial.inkMute)
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15))
+                    .foregroundStyle(Editorial.inkSoft)
             }
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text("Apollo IA")
-                        .font(.subheadline.weight(.semibold))
-                    Text("BETA")
-                        .font(.system(size: 8, weight: .heavy, design: .rounded))
-                        .tracking(0.8)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1.5)
-                        .background(Color.accentColor, in: Capsule())
-                }
+            .buttonStyle(TBIconButtonStyle())
+            .focusEffectDisabled()
+            .help("Fechar")
+        }
+        .padding(.leading, 36)
+        .padding(.trailing, 28)
+        .frame(height: 64)
+        .overlay(alignment: .bottom) {
+            // Newspaper "2px double" bottom rule.
+            VStack(spacing: 2) {
+                Rectangle().fill(Editorial.ink.opacity(0.85))
+                    .frame(height: 1)
+                Rectangle().fill(Editorial.ink.opacity(0.85))
+                    .frame(height: 1)
+            }
+        }
+    }
+
+    /// Abbreviated pt-BR date for the masthead, e.g.
+    /// "SÁB, 16 MAI 2026".
+    private static func mastheadDate(_ date: Date = Date()) -> String {
+        let c = TodayCache.calendar.dateComponents(
+            [.weekday, .day, .month, .year], from: date)
+        let wd  = ["", "DOM", "SEG", "TER", "QUA",
+                   "QUI", "SEX", "SÁB"]
+        let mon = ["", "JAN", "FEV", "MAR", "ABR", "MAI", "JUN",
+                   "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"]
+        let wi = c.weekday ?? 1
+        let mi = c.month ?? 1
+        let w = (1...7).contains(wi)  ? wd[wi]  : ""
+        let m = (1...12).contains(mi) ? mon[mi] : ""
+        return "\(w), \(c.day ?? 0) \(m) \(c.year ?? 0)"
+    }
+
+    private var chatHeader: some View {
+        HStack(spacing: 12) {
+            AIMark(size: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                // "Apollo — a coluna" — the editorial masthead
+                // (serif, with the italic inkSoft kicker).
+                (
+                    Text("Apollo")
+                        .font(Editorial.serif(17, .medium))
+                        .foregroundColor(Editorial.ink)
+                    + Text("  — a coluna")
+                        .font(Editorial.serif(17).italic())
+                        .foregroundColor(Editorial.inkSoft)
+                )
+                .tracking(-0.2)
                 providerLine
             }
-            Spacer()
+            Spacer(minLength: 0)
             if !appState.aiAgent.messages.isEmpty {
                 Button {
-                    // Truly instant. Just removing the
-                    // `withAnimation` wrapper isn't enough —
-                    // the `transcript` view switches between
-                    // `chatScroll` and `emptyState` via
-                    // `.transition(...)` modifiers, and SwiftUI
-                    // applies a default 0.35s transition
-                    // animation whenever the branch flips.
-                    // `withTransaction(disablesAnimations: true)`
-                    // forces SwiftUI to swap the views in the
-                    // SAME frame as the click — no fade, no
-                    // slide, no scale. That's what makes the
-                    // back button feel instant instead of
-                    // "clicked then waited".
+                    // Truly instant. The `transcript` view
+                    // switches between `chatScroll` and
+                    // `emptyState` via `.transition(...)`
+                    // modifiers; SwiftUI would otherwise apply
+                    // its default 0.35s branch animation.
+                    // `withTransaction(disablesAnimations:true)`
+                    // swaps the views in the SAME frame as the
+                    // click so clearing feels instant.
                     var t = Transaction()
                     t.disablesAnimations = true
                     withTransaction(t) {
@@ -192,27 +226,28 @@ struct AIAgentChatView: View {
                     }
                 } label: {
                     Image(systemName: "trash")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 22, height: 22)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Editorial.inkSoft)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TBIconButtonStyle())
                 .focusEffectDisabled()
                 .help("Limpar conversa")
             }
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22, height: 22)
-                    .background(.regularMaterial, in: Circle())
+                    .font(.system(size: 15))
+                    .foregroundStyle(Editorial.inkSoft)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TBIconButtonStyle())
             .focusEffectDisabled()
+            .help("Fechar")
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
+        .padding(.leading, 36)
+        .padding(.trailing, 28)
+        .frame(height: 64)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+        }
     }
 
     /// Sub-line under "Apollo IA" showing the active provider.
@@ -239,19 +274,16 @@ struct AIAgentChatView: View {
                     return "Limite por minuto do \(GeminiQuotaTracker.displayLabel(for: preferred)) atingido — usando \(GeminiQuotaTracker.displayLabel(for: active)) por alguns segundos. Volta sozinho assim que a janela do Google libera."
                 }
             }()
-            HStack(spacing: 4) {
-                Text(GeminiQuotaTracker.displayLabel(for: active))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+            HStack(spacing: 6) {
+                Folio(GeminiQuotaTracker.displayLabel(for: active))
                 Text(badgeText)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(Color.orange)
+                    .font(Editorial.sans(9.5, .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(Editorial.accent)
             }
             .help(helpText)
         } else {
-            Text(appState.aiAgent.providerName)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            Folio(appState.aiAgent.providerName)
         }
     }
 
@@ -265,55 +297,34 @@ struct AIAgentChatView: View {
     /// `downloadingPanel` instead.
     @ViewBuilder
     private var modelMissingPanel: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 18) {
             Spacer(minLength: 0)
-            ZStack {
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [Color.accentColor.opacity(0.30), .clear],
-                            center: .center,
-                            startRadius: 4,
-                            endRadius: 60
-                        )
-                    )
-                    .frame(width: 120, height: 120)
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 40, weight: .semibold))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [Color.accentColor, Color(hex: "#FF8A4C")],
-                            startPoint: .topLeading,
-                            endPoint:   .bottomTrailing
-                        )
-                    )
-            }
-            VStack(spacing: 6) {
+            AIMark(size: 34)
+            VStack(spacing: 8) {
                 Text("Apollo IA precisa de um modelo")
-                    .font(.title3.weight(.semibold))
-                Text("Modelo de ~4,6 GB, baixado uma vez. Roda 100% local depois — privacidade total.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Editorial.serif(24).italic())
+                    .foregroundStyle(Editorial.ink)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
+                Text("Modelo de ~4,6 GB, baixado uma vez. Roda 100% local depois — privacidade total.")
+                    .font(Editorial.serif(14))
+                    .foregroundStyle(Editorial.inkSoft)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
             }
             Button {
                 Task { await appState.aiAgent.embeddedRuntime.downloadModel() }
             } label: {
-                Label("Baixar modelo (~4,6 GB)", systemImage: "arrow.down.circle.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
-                    .background(Color.accentColor, in: Capsule())
+                Text("Baixar modelo (~4,6 GB)")
             }
-            .buttonStyle(.plain).focusEffectDisabled()
+            .buttonStyle(PaperButtonStyle(active: true))
+            .focusEffectDisabled()
 
             if case .failed(let msg) = appState.aiAgent.embeddedRuntime.status {
                 Text(msg)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 24)
+                    .font(Editorial.sans(11.5))
+                    .foregroundStyle(Editorial.accent)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
             }
             Spacer(minLength: 0)
         }
@@ -338,41 +349,29 @@ struct AIAgentChatView: View {
 
         VStack(spacing: 16) {
             Spacer(minLength: 0)
-            ZStack {
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [Color.accentColor.opacity(0.30), .clear],
-                            center: .center,
-                            startRadius: 4,
-                            endRadius: 60
-                        )
-                    )
-                    .frame(width: 110, height: 110)
-                Text("\(pct)%")
-                    .font(.system(size: 28, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Color.accentColor)
-            }
-            VStack(spacing: 4) {
-                Text("Baixando modelo…")
-                    .font(.subheadline.weight(.semibold))
+            Text("\(pct)%")
+                .font(Editorial.serif(48))
+                .foregroundStyle(Editorial.accent)
+                .monospacedDigit()
+            VStack(spacing: 6) {
+                Folio("Baixando modelo")
                 Text(total > 0
                      ? String(format: "%.2f GB de %.2f GB", writtenGB, totalGB)
                      : String(format: "%.2f GB", writtenGB))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .font(Editorial.mono(12))
+                    .foregroundStyle(Editorial.inkSoft)
             }
             ProgressView(value: max(0, min(1, fraction)))
                 .progressViewStyle(.linear)
-                .tint(Color.accentColor)
-                .padding(.horizontal, 32)
+                .tint(Editorial.accent)
+                .frame(maxWidth: 320)
 
             Button {
                 appState.aiAgent.embeddedRuntime.cancelDownload()
             } label: {
                 Text("Cancelar")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.red)
+                    .font(Editorial.sans(12, .medium))
+                    .foregroundStyle(Editorial.accent)
             }
             .buttonStyle(.plain).focusEffectDisabled()
             Spacer(minLength: 0)
@@ -414,8 +413,20 @@ struct AIAgentChatView: View {
 
     private var chatScroll: some View {
         ScrollViewReader { proxy in
+          // GeometryReader gives the scroll content a minimum
+          // height equal to the viewport. WHY: the editorial
+          // turns are far shorter than the old chat bubbles, so
+          // a short conversation's total height is well under the
+          // viewport. `proxy.scrollTo(bottomAnchor, anchor:.bottom)`
+          // then aligned the 1pt sentinel to the viewport's
+          // bottom edge and pushed the (short) content entirely
+          // ABOVE the visible area — a blank white panel. Pinning
+          // the content to `minHeight: viewport` + `.top` keeps
+          // it visible when short, while still scrolling normally
+          // (and honouring scroll-to-bottom) once it overflows.
+          GeometryReader { geo in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                LazyVStack(alignment: .leading, spacing: 24) {
                     ForEach(appState.aiAgent.messages) { msg in
                         messageBubble(msg)
                             .id(msg.id)
@@ -438,8 +449,12 @@ struct AIAgentChatView: View {
                         .frame(height: 1)
                         .id(Self.bottomAnchorID)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 80)
+                .padding(.top, 32)
+                .padding(.bottom, 24)
+                .frame(maxWidth: .infinity,
+                       minHeight: geo.size.height,
+                       alignment: .top)
                 .animation(.spring(response: 0.45, dampingFraction: 0.78),
                            value: appState.aiAgent.messages.count)
                 .animation(.spring(response: 0.35, dampingFraction: 0.75),
@@ -486,6 +501,7 @@ struct AIAgentChatView: View {
                 proxy.scrollTo(Self.bottomAnchorID,
                                anchor: .bottom)
             }
+          }
         }
     }
 
@@ -494,129 +510,546 @@ struct AIAgentChatView: View {
     /// declares the anchor agree on a single value.
     private static let bottomAnchorID = "apollo-chat-bottom-anchor"
 
-    private var emptyState: some View {
-        // Only play the staggered entrance cascade the first
-        // time the empty state is shown per app session. On
-        // every subsequent appearance — most importantly when
-        // the user clicks the back button to return here from
-        // a chat — jump straight to the settled state so the
-        // back-navigation feels instant.
-        let shouldCascade = !appState.aiAgent.hasShownEmptyEntrance
-        return EmptyStateView(
-            isConfigured: appState.aiAgent.isConfigured,
-            onSuggestion: { text in
-                draft = text
-                sendCurrentDraft()
-            },
-            playEntranceCascade: shouldCascade,
-            onCascadeShown: {
-                appState.aiAgent.hasShownEmptyEntrance = true
-            }
-        )
+    // MARK: - Daily-summary home (prototype `PAIDashboard`)
+
+    private struct DaySummary {
+        var overdue: Int
+        var oldestDays: Int
+        var urgent: Int
+        var todayEvents: Int
+        // Meetings / agenda
+        var meetingMinutes: Int
+        var nextMeeting: CalendarEvent?
+        var todaysMeetings: [CalendarEvent]
+        var freeWindowMinutes: Int
+        // Performance
+        var completedWeek: Int
+        var createdWeek: Int
+        var onTimePct: Int?            // nil when no closed-with-due sample
+        var completionsByDay: [Int]    // last 7 days, oldest → today
     }
 
-    private func messageBubble(_ msg: ChatTurn) -> some View {
-        let isStreaming = appState.aiAgent.streamingMessageId == msg.id
-        return HStack(alignment: .top, spacing: 8) {
-            if msg.role == .assistant {
-                AssistantAvatar(isPulsing: isStreaming)
-            } else {
-                Spacer(minLength: 30)
+    private struct DashRec: Identifiable {
+        let id = UUID()
+        let num: String
+        let title: String
+        let body: String
+        let prompt: String
+    }
+
+    private var daySummary: DaySummary {
+        let today = TodayCache.startOfToday
+        let cal   = TodayCache.calendar
+        let overdueTasks = appState.tasks.filter {
+            !$0.isCompleted && ($0.dueDate.map { $0 < today } ?? false)
+        }
+        let oldest = overdueTasks.compactMap(\.dueDate).map {
+            cal.dateComponents([.day],
+                               from: cal.startOfDay(for: $0),
+                               to: today).day ?? 0
+        }.max() ?? 0
+        let urgent = appState.tasks.filter {
+            !$0.isCompleted && $0.priority == 1
+        }.count
+        let now = Date()
+        let todays = appState.events
+            .filter { !$0.isAllDay
+                && cal.isDate($0.startDate, inSameDayAs: now) }
+            .sorted { $0.startDate < $1.startDate }
+        let meetMin = todays.reduce(0) {
+            $0 + Int($1.endDate.timeIntervalSince($1.startDate) / 60)
+        }
+        let next = todays.first { $0.endDate > now }
+
+        // Largest free gap inside today's 09:00–19:00 window.
+        let dayStart = cal.date(bySettingHour: 9,  minute: 0,
+                                second: 0, of: now) ?? now
+        let dayEnd   = cal.date(bySettingHour: 19, minute: 0,
+                                second: 0, of: now) ?? now
+        var cursor = max(dayStart, now)
+        var freeMax = 0
+        for ev in todays where ev.endDate > cursor {
+            if ev.startDate > cursor {
+                freeMax = max(freeMax,
+                    Int(ev.startDate.timeIntervalSince(cursor) / 60))
+            }
+            cursor = max(cursor, ev.endDate)
+        }
+        if dayEnd > cursor {
+            freeMax = max(freeMax,
+                Int(dayEnd.timeIntervalSince(cursor) / 60))
+        }
+
+        // Performance — last 7 days closed/created + on-time.
+        let weekAgo = cal.date(byAdding: .day, value: -7, to: today)
+            ?? today
+        let closed = appState.completedTasksCached
+        let completedWeek = closed.filter {
+            ($0.dateClosed.map { $0 >= weekAgo }) ?? false
+        }.count
+        let createdWeek = appState.tasks.filter {
+            ($0.dateCreated.map { $0 >= weekAgo }) ?? false
+        }.count
+        let closedWithDue = closed.filter {
+            $0.dateClosed != nil && $0.dueDate != nil
+        }
+        let onTime: Int? = closedWithDue.isEmpty ? nil : {
+            let ok = closedWithDue.filter {
+                guard let c = $0.dateClosed, let d = $0.dueDate
+                else { return false }
+                return c <= cal.date(bySettingHour: 23, minute: 59,
+                                     second: 59, of: d) ?? d
+            }.count
+            return Int((Double(ok) / Double(closedWithDue.count))
+                       * 100.0 + 0.5)
+        }()
+        var byDay = [Int](repeating: 0, count: 7)
+        for t in closed {
+            guard let c = t.dateClosed else { continue }
+            let d = cal.dateComponents([.day],
+                from: cal.startOfDay(for: c), to: today).day ?? 99
+            if d >= 0 && d <= 6 { byDay[6 - d] += 1 }
+        }
+
+        return DaySummary(overdue: overdueTasks.count,
+                          oldestDays: oldest,
+                          urgent: urgent,
+                          todayEvents: todays.count,
+                          meetingMinutes: meetMin,
+                          nextMeeting: next,
+                          todaysMeetings: todays,
+                          freeWindowMinutes: freeMax,
+                          completedWeek: completedWeek,
+                          createdWeek: createdWeek,
+                          onTimePct: onTime,
+                          completionsByDay: byDay)
+    }
+
+    private func hhmm(_ minutes: Int) -> String {
+        let h = minutes / 60, m = minutes % 60
+        if h == 0 { return "\(m)min" }
+        return m == 0 ? "\(h)h" : "\(h)h\(String(format: "%02d", m))"
+    }
+
+    private func timeLabel(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "pt_BR")
+        f.dateFormat = "HH:mm"
+        return f.string(from: date)
+    }
+
+    private func recommendations(_ s: DaySummary) -> [DashRec] {
+        var r: [DashRec] = []
+        func nn() -> String { String(format: "%02d", r.count + 1) }
+        if s.overdue > 0 {
+            r.append(DashRec(
+                num: nn(),
+                title: "Reagendar \(s.overdue) atrasada\(s.overdue == 1 ? "" : "s")",
+                body: "Apollo distribui nos próximos dias úteis.",
+                prompt: "Reagende as \(s.overdue) tarefas atrasadas distribuindo nos próximos dias úteis"))
+        }
+        if s.todayEvents == 0 {
+            r.append(DashRec(
+                num: nn(),
+                title: "Bloquear janela de foco",
+                body: "Dia livre — reserve um bloco de trabalho profundo.",
+                prompt: "Bloqueie uma janela de foco de 3 horas hoje à tarde"))
+        }
+        if s.urgent > 0 {
+            r.append(DashRec(
+                num: nn(),
+                title: "Priorizar \(s.urgent) urgente\(s.urgent == 1 ? "" : "s")",
+                body: "Veja primeiro o que não pode esperar.",
+                prompt: "Liste minhas tarefas urgentes e sugira a ordem de execução"))
+        }
+        if let m = s.nextMeeting, m.attendees.count >= 2 {
+            r.append(DashRec(
+                num: nn(),
+                title: "Preparar p/ \(m.title)",
+                body: "\(timeLabel(m.startDate)) · \(m.attendees.count) pessoas — quer um briefing?",
+                prompt: "Me prepare para a reunião \"\(m.title)\" às \(timeLabel(m.startDate)): resuma o contexto, participantes e o que devo levar"))
+        }
+        if r.isEmpty {
+            r.append(DashRec(
+                num: "01",
+                title: "Resumir meu dia",
+                body: "Visão rápida do que importa hoje.",
+                prompt: "Resuma meu dia"))
+        }
+        return Array(r.prefix(3))
+    }
+
+    private func headlineText(_ s: DaySummary) -> Text {
+        let f = Editorial.serif(30)
+        let fi = Editorial.serif(30).italic()
+        if s.overdue > 0 {
+            return Text("\(s.overdue) tarefas ")
+                    .font(f).foregroundColor(Editorial.ink)
+                + Text("atrasadas")
+                    .font(fi).foregroundColor(Editorial.accent)
+                + Text(" — a mais antiga há \(s.oldestDays) dia\(s.oldestDays == 1 ? "" : "s").")
+                    .font(f).foregroundColor(Editorial.ink)
+        }
+        return Text("Nenhuma tarefa ")
+                .font(f).foregroundColor(Editorial.ink)
+            + Text("atrasada")
+                .font(fi).foregroundColor(Editorial.accent)
+            + Text(" — o dia está limpo.")
+                .font(f).foregroundColor(Editorial.ink)
+    }
+
+    private func captionText(_ s: DaySummary) -> String {
+        if s.todayEvents == 0 {
+            return s.freeWindowMinutes >= 60
+                ? "Dia livre, sem reuniões — \(hhmm(s.freeWindowMinutes)) de janela aberta pra trabalho profundo."
+                : "Dia livre, sem reuniões. Boa janela pra adiantar o que importa."
+        }
+        let mt = hhmm(s.meetingMinutes)
+        let fw = s.freeWindowMinutes >= 30
+            ? " Maior janela livre: \(hhmm(s.freeWindowMinutes))."
+            : ""
+        return "\(s.todayEvents) reuni\(s.todayEvents == 1 ? "ão" : "ões") hoje · \(mt) no total.\(fw)"
+    }
+
+    /// The Apollo IA home screen — an elegant productivity
+    /// magazine ("diário do dia"): a lead column with the
+    /// headline, today's agenda and recommendations, and a
+    /// number-led rail with weather, the day in figures and a
+    /// weekly performance read. The composer footer stays put;
+    /// sending (or accepting a recommendation) drops into chat.
+    private var emptyState: some View {
+        let s = daySummary
+        return HStack(alignment: .top, spacing: 36) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Folio("Manchete do dia", accent: true)
+                        headlineText(s)
+                            .lineSpacing(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 10)
+                        Caption(captionText(s), size: 14)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 12)
+                    }
+                    .homeReveal(0, homeRevealed)
+                    agendaSection(s).homeReveal(1, homeRevealed)
+                    recommendationsSection(s).homeReveal(2, homeRevealed)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            VStack(alignment: .leading, spacing: 2) {
-                MessageBody(
-                    text: msg.text,
-                    isStreaming: isStreaming,
-                    role: msg.role,
-                    agendaIndex: appState.aiAgent.agendaIndex
-                )
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(
-                    msg.role == .user
-                    ? AnyShapeStyle(ApolloPalette.eventBlueSoft)
-                    : AnyShapeStyle(ApolloPalette.cream),
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(
-                            msg.role == .user
-                            ? ApolloPalette.eventBlue.opacity(0.30)
-                            : ApolloPalette.creamBorder,
-                            lineWidth: 0.5
-                        )
-                )
-                // Multi-color halo — three soft accent-family
-                // shadows offset slightly in different directions
-                // so the bubble appears to float above a quiet
-                // aurora. Replaces the single grey shadow that
-                // depended on the cream surface for warmth.
-                // The streaming bubble gets stronger blue to
-                // signal "active". Subtle dark shadow at the
-                // bottom keeps the silhouette grounded.
-                //
-                // `.compositingGroup()` BEFORE the shadow stack is
-                // critical: without it, every token appended to a
-                // streaming bubble re-rendered the bubble's
-                // content AND independently recomputed the
-                // shadow blur passes against the new content. The
-                // group flattens the bubble + bg + border into a
-                // single layer once per token; the shadows then
-                // composite against that flat layer.
-                //
-                // PERF: collapsed FOUR stacked shadows down to
-                // TWO. The previous "aurora halo" rendered an
-                // accent shadow + warm shadow + violet shadow
-                // + dark grounding shadow — each a separate
-                // Gaussian blur pass per render. The combined
-                // accent+violet shadow below approximates the
-                // multi-colour bloom (still tinted by the
-                // accent palette, slightly larger radius), and
-                // a single dark hairline keeps the bubble
-                // grounded. Two passes ≈ half the per-render
-                // GPU shadow work for every visible bubble in
-                // the chat scroll.
-                .compositingGroup()
-                .shadow(color: ApolloPalette.bubbleShadowAccent
-                    .opacity(isStreaming ? 0.32 : 0.85),
-                        radius: isStreaming ? 16 : 14,
-                        x: 0, y: 4)
-                .shadow(color: .black.opacity(0.08),
-                        radius: 2, x: 0, y: 1)
-                .contextMenu {
-                    Button {
-                        let pb = NSPasteboard.general
-                        pb.clearContents()
-                        pb.setString(msg.text, forType: .string)
-                    } label: {
-                        Label("Copiar", systemImage: "doc.on.doc")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    weatherStrip.homeReveal(3, homeRevealed)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Folio("Em números").padding(.bottom, 14)
+                        dashStat(big: "\(s.overdue)", label: "atrasadas",
+                                 sub: s.overdue > 0
+                                    ? "a mais antiga há \(s.oldestDays) dia\(s.oldestDays == 1 ? "" : "s")"
+                                    : "tudo em dia",
+                                 accent: s.overdue > 0)
+                        statDivider
+                        dashStat(big: "\(s.urgent)", label: "urgentes",
+                                 sub: nil, accent: false)
+                        statDivider
+                        dashStat(big: "\(s.todayEvents)", label: "reuniões hoje",
+                                 sub: s.todayEvents == 0
+                                    ? "nada agendado"
+                                    : "\(hhmm(s.meetingMinutes)) no total",
+                                 accent: false)
+                    }
+                    .homeReveal(4, homeRevealed)
+                    performanceSection(s).homeReveal(5, homeRevealed)
+                    Spacer(minLength: 0)
+                }
+            }
+            .frame(width: 232)
+            .padding(.leading, 30)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(Editorial.rule).frame(width: 1)
+            }
+        }
+        .padding(.top, 28)
+        .padding(.leading, 40)
+        .padding(.trailing, 36)
+        .padding(.bottom, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity,
+               alignment: .topLeading)
+    }
+
+    // MARK: Magazine sections
+
+    private func recommendationsSection(_ s: DaySummary) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Folio("Recomendações").padding(.bottom, 12)
+            ForEach(recommendations(s)) { rec in
+                dashRecRow(rec)
+            }
+        }
+        .padding(.top, 26)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func agendaSection(_ s: DaySummary) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Folio("Agenda de hoje").padding(.bottom, 12)
+            if s.todaysMeetings.isEmpty {
+                Text("Sem reuniões hoje — a agenda está aberta.")
+                    .font(Editorial.serif(14).italic())
+                    .foregroundStyle(Editorial.inkSoft)
+                    .padding(.vertical, 6)
+            } else {
+                ForEach(Array(s.todaysMeetings.prefix(5)),
+                        id: \.id) { agendaRow($0) }
+                if s.todaysMeetings.count > 5 {
+                    Text("+ \(s.todaysMeetings.count - 5) mais")
+                        .font(Editorial.sans(11))
+                        .foregroundStyle(Editorial.inkMute)
+                        .padding(.top, 8)
+                }
+            }
+        }
+        .padding(.top, 26)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+        }
+    }
+
+    private func agendaRow(_ ev: CalendarEvent) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            Text(timeLabel(ev.startDate))
+                .font(Editorial.sans(12, .medium))
+                .foregroundStyle(Editorial.accent)
+                .monospacedDigit()
+            VStack(alignment: .leading, spacing: 3) {
+                Text(ev.title)
+                    .font(Editorial.serif(15))
+                    .foregroundStyle(Editorial.ink)
+                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    if !ev.attendees.isEmpty {
+                        Text("\(ev.attendees.count) pessoas")
+                            .font(Editorial.sans(11))
+                            .foregroundStyle(Editorial.inkMute)
+                    }
+                    if ev.meetingURL != nil {
+                        Text("· vídeo")
+                            .font(Editorial.sans(11))
+                            .foregroundStyle(Editorial.inkMute)
+                    } else if let loc = ev.location,
+                              !loc.isEmpty {
+                        Text("· \(loc)")
+                            .font(Editorial.sans(11))
+                            .foregroundStyle(Editorial.inkMute)
+                            .lineLimit(1)
                     }
                 }
             }
+            Spacer(minLength: 8)
+            Text(hhmm(Int(ev.endDate
+                .timeIntervalSince(ev.startDate) / 60)))
+                .font(Editorial.sans(11))
+                .foregroundStyle(Editorial.inkMute)
+                .monospacedDigit()
+        }
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+        }
+    }
 
-            if msg.role == .user {
-                ZStack {
-                    Circle()
-                        .fill(ApolloPalette.eventBlue.opacity(0.20))
-                        .frame(width: 22, height: 22)
-                    Image(systemName: "person.fill")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(ApolloPalette.eventBlue)
+    @ViewBuilder
+    private var weatherStrip: some View {
+        if let r = weather.current {
+            VStack(alignment: .leading, spacing: 0) {
+                Folio("O tempo")
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: r.icon)
+                        .font(.system(size: 18))
+                        .foregroundStyle(Editorial.inkSoft)
+                    Text("\(r.tempC)°")
+                        .font(Editorial.serif(28))
+                        .foregroundStyle(Editorial.ink)
+                        .tracking(-1)
+                    Text(r.city)
+                        .font(Editorial.sans(11))
+                        .foregroundStyle(Editorial.inkMute)
                 }
-            } else {
-                Spacer(minLength: 30)
+                .padding(.top, 6)
+            }
+            .padding(.bottom, 14)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Editorial.ruleSoft)
+                    .frame(height: 1)
+            }
+            .padding(.bottom, 16)
+        }
+    }
+
+    private func performanceSection(_ s: DaySummary) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Folio("Desempenho")
+            weekBars(s.completionsByDay)
+            Caption("fechadas nos últimos 7 dias", size: 11.5)
+            HStack(alignment: .top, spacing: 22) {
+                perfStat("\(s.completedWeek)", "fechadas · 7d")
+                perfStat(s.onTimePct.map { "\($0)%" } ?? "—",
+                         "no prazo")
+            }
+            .padding(.top, 4)
+        }
+        .padding(.top, 14)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+        }
+        .padding(.top, 16)
+    }
+
+    private func perfStat(_ big: String, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(big)
+                .font(Editorial.serif(22))
+                .foregroundStyle(Editorial.ink)
+                .monospacedDigit()
+                .tracking(-0.8)
+            Text(label)
+                .font(Editorial.sans(10.5))
+                .foregroundStyle(Editorial.inkMute)
+        }
+    }
+
+    private func weekBars(_ counts: [Int]) -> some View {
+        let peak = max(counts.max() ?? 0, 1)
+        return HStack(alignment: .bottom, spacing: 7) {
+            ForEach(Array(counts.enumerated()), id: \.offset) { i, c in
+                VStack(spacing: 5) {
+                    Text("\(c)")
+                        .font(Editorial.sans(9))
+                        .foregroundStyle(Editorial.inkMute)
+                        .monospacedDigit()
+                    RoundedRectangle(cornerRadius: 1,
+                                     style: .continuous)
+                        .fill(i == counts.count - 1
+                              ? Editorial.accent
+                              : Editorial.inkFaint)
+                        .frame(width: 14,
+                               height: max(3, CGFloat(c)
+                                / CGFloat(peak) * 34))
+                }
             }
         }
-        .frame(maxWidth: .infinity,
-               alignment: msg.role == .user ? .trailing : .leading)
+        .frame(height: 52, alignment: .bottom)
+    }
+
+    private var statDivider: some View {
+        Rectangle().fill(Editorial.ruleSoft)
+            .frame(height: 1)
+            .padding(.vertical, 13)
+    }
+
+    private func dashStat(big: String, label: String,
+                          sub: String?, accent: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(big)
+                .font(Editorial.serif(44))
+                .foregroundStyle(accent ? Editorial.accent
+                                        : Editorial.ink)
+                .monospacedDigit()
+                .tracking(-1.5)
+            Text(label)
+                .font(Editorial.sans(11.5))
+                .foregroundStyle(Editorial.inkSoft)
+            if let sub { Caption(sub, size: 11.5) }
+        }
+    }
+
+    private func dashRecRow(_ rec: DashRec) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Text(rec.num)
+                .font(Editorial.serif(24))
+                .foregroundStyle(Editorial.inkFaint)
+                .monospacedDigit()
+                .tracking(-1)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(rec.title)
+                    .font(Editorial.serif(16, .medium))
+                    .foregroundStyle(Editorial.ink)
+                Text(rec.body)
+                    .font(Editorial.serif(13.5))
+                    .foregroundStyle(Editorial.inkSoft)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button {
+                draft = rec.prompt
+                sendCurrentDraft()
+            } label: {
+                Text("Aceitar →")
+            }
+            .buttonStyle(PaperButtonStyle(active: true))
+            .focusEffectDisabled()
+        }
+        .padding(.vertical, 14)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+        }
+    }
+
+    /// Editorial transcript turn — NO chat bubbles. A user turn
+    /// is a pull-quote (ink left rule + italic serif + em-dash
+    /// attribution); an assistant turn is a "Resposta" folio
+    /// followed by the serif body.
+    private func messageBubble(_ msg: ChatTurn) -> some View {
+        let isStreaming = appState.aiAgent.streamingMessageId == msg.id
+        return Group {
+            if msg.role == .user {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("“\(msg.text)”")
+                        .font(Editorial.serif(17).italic())
+                        .foregroundStyle(Editorial.ink)
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    Text("— Você")
+                        .font(Editorial.sans(11))
+                        .foregroundStyle(Editorial.inkMute)
+                }
+                .padding(.leading, 18)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(Editorial.ink).frame(width: 2)
+                }
+                .frame(maxWidth: 720, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Folio("Resposta")
+                    MessageBody(
+                        text: msg.text,
+                        isStreaming: isStreaming,
+                        role: msg.role,
+                        agendaIndex: appState.aiAgent.agendaIndex
+                    )
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contextMenu {
+            Button {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(msg.text, forType: .string)
+            } label: {
+                Label("Copiar", systemImage: "doc.on.doc")
+            }
+        }
         .transition(.asymmetric(
-            insertion: .opacity
-                .combined(with: .scale(scale: 0.85,
-                                       anchor: msg.role == .user ? .bottomTrailing : .bottomLeading))
-                .combined(with: .offset(y: 8)),
-            removal: .opacity
+            insertion: .opacity.combined(with: .offset(y: 8)),
+            removal:   .opacity
         ))
     }
 
@@ -624,25 +1057,16 @@ struct AIAgentChatView: View {
     /// the model hasn't streamed any token yet. Three dots that
     /// rise and fall in sequence with a shared phase loop.
     private var thinkingIndicator: some View {
-        HStack(alignment: .top, spacing: 8) {
-            AssistantAvatar(isPulsing: true)
-            HStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 10) {
+            Folio("Resposta")
+            HStack(spacing: 5) {
                 BouncingDot(delay: 0.0)
                 BouncingDot(delay: 0.15)
                 BouncingDot(delay: 0.30)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 11)
-            .background(ApolloPalette.cream,
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(ApolloPalette.creamBorder, lineWidth: 0.5)
-            )
-            Spacer(minLength: 30)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .bottomLeading)))
+        .transition(.opacity)
     }
 
     /// Live chain-of-thought preview shown while a reasoning
@@ -658,50 +1082,38 @@ struct AIAgentChatView: View {
             .filter { !$0.isEmpty }
             .suffix(6)
             .joined(separator: "\n")
-        return HStack(alignment: .top, spacing: 8) {
-            VStack {
-                Image(systemName: "brain")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                ProgressView().controlSize(.mini).scaleEffect(0.6)
-            }
-            .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Pensando…")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text(trimmed)
-                    .font(.caption2)
-                    .italic()
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .lineLimit(6)
-                    .truncationMode(.head)
-            }
-            Spacer(minLength: 30)
+        return VStack(alignment: .leading, spacing: 8) {
+            Folio("Raciocínio", accent: true)
+            Text(trimmed)
+                .font(Editorial.serif(13.5).italic())
+                .foregroundStyle(Editorial.inkMute)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(6)
+                .truncationMode(.head)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
-        .background(ApolloPalette.cream,
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(ApolloPalette.creamBorder, lineWidth: 0.5)
-        )
+        .padding(.leading, 18)
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Editorial.rule).frame(width: 2)
+        }
+        .frame(maxWidth: 720, alignment: .leading)
     }
 
     private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+        HStack(spacing: 10) {
+            Circle().fill(Editorial.accent).frame(width: 6, height: 6)
             Text(message)
-                .font(.caption)
-                .foregroundStyle(.primary)
+                .font(Editorial.serif(13.5))
+                .foregroundStyle(Editorial.ink)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.orange.opacity(0.10))
+        .padding(.horizontal, 80)
+        .padding(.vertical, 12)
+        .background(Editorial.accentSoft)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+        }
     }
 
     // MARK: - Composer
@@ -716,52 +1128,95 @@ struct AIAgentChatView: View {
             // popover shadow at the bottom of the chat.
             if let query = mentionQuery {
                 mentionPicker(query: query)
+                    .padding(.horizontal, 36)
+                    .padding(.top, 10)
                     .transition(.opacity.combined(
                         with: .move(edge: .bottom)))
             }
 
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField("Pergunte algo…", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.subheadline)
-                    .lineLimit(1...4)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .liquidGlassField(in: Capsule())
-                    .overlay(Capsule().strokeBorder(.primary.opacity(0.08),
-                                                    lineWidth: 0.5))
-                    .focused($composerFocused)
-                    .onSubmit { sendCurrentDraft() }
-                    // Watch the draft so we can pop the picker
-                    // open / close as `@`-tokens come and go.
-                    .onChange(of: draft) { _, new in
-                        recomputeMentionState(in: new)
+            VStack(alignment: .leading, spacing: 8) {
+                // Queued attachments — drag-dropped or picked,
+                // identical chips to the task-comment box.
+                if !pendingAttachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(pendingAttachments, id: \.self) { url in
+                                pendingAttachmentChip(url)
+                            }
+                        }
                     }
-
-                Button(action: sendCurrentDraft) {
-                    Image(systemName: "arrow.up")
-                        .font(.callout.weight(.bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(
-                            canSend
-                            ? AnyShapeStyle(LinearGradient(
-                                colors: [Color.accentColor, Color(hex: "#FF8A4C")],
-                                startPoint: .topLeading,
-                                endPoint:   .bottomTrailing
-                            ))
-                            : AnyShapeStyle(Color.secondary.opacity(0.30)),
-                            in: Circle()
-                        )
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
-                .buttonStyle(.plain)
-                .focusEffectDisabled()
-                .disabled(!canSend)
-                .keyboardShortcut(.return, modifiers: .command)
+
+                HStack(alignment: .center, spacing: 14) {
+                    AIMark(size: 16)
+                    TextField("Pergunte algo, ou diga…  ·  arraste arquivos pra anexar",
+                              text: $draft, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(Editorial.serif(15).italic())
+                        .foregroundStyle(Editorial.ink)
+                        .tint(Editorial.accent)
+                        .lineLimit(1...4)
+                        .focused($composerFocused)
+                        .onSubmit { sendCurrentDraft() }
+                        // Watch the draft so we can pop the picker
+                        // open / close as `@`-tokens come and go.
+                        .onChange(of: draft) { _, new in
+                            recomputeMentionState(in: new)
+                        }
+
+                    // Paperclip — same affordance as the comment
+                    // box; opens the sandbox file chooser.
+                    Button { pickFilesIntoPending() } label: {
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 15, weight: .regular))
+                            .foregroundStyle(Editorial.inkSoft)
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Anexar arquivos")
+
+                    Button(action: sendCurrentDraft) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(canSend ? Editorial.page
+                                                     : Editorial.inkMute)
+                            .frame(width: 32, height: 32)
+                            .background(
+                                (canSend ? Editorial.accent : Editorial.rule),
+                                in: Circle()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .disabled(!canSend)
+                    .keyboardShortcut(.return, modifiers: .command)
+                }
+            }
+            .padding(.horizontal, 36)
+            .padding(.vertical, 14)
+            .background(Editorial.accent.opacity(isDropTargeted ? 0.05 : 0))
+            .overlay(alignment: .top) {
+                // Accent + thicker top rule while a drag is over
+                // the composer — mirrors the comment box's
+                // accent drop-target border.
+                Rectangle()
+                    .fill(isDropTargeted ? Editorial.accent.opacity(0.55)
+                                         : Editorial.rule)
+                    .frame(height: isDropTargeted ? 2 : 1)
+            }
+            // Files dropped straight onto the composer (Finder,
+            // Mail, Safari, iMessage) — identical to the task
+            // comment box's `.onDrop(of: [.fileURL] …)`.
+            .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) {
+                handleDroppedProviders($0)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .background(Editorial.paper)
+        .animation(.spring(response: 0.32, dampingFraction: 0.85),
+                   value: pendingAttachments)
+        .animation(.easeOut(duration: 0.16), value: isDropTargeted)
         .animation(.spring(response: 0.32, dampingFraction: 0.85),
                    value: mentionQuery)
     }
@@ -778,35 +1233,30 @@ struct AIAgentChatView: View {
     private func mentionPicker(query: String) -> some View {
         let matches = filteredContacts(for: query)
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Image(systemName: "at")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
-                Text(query.isEmpty
-                     ? "Selecione um contato"
-                     : "Buscando \"\(query)\"")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Folio(query.isEmpty
+                      ? "Selecione um contato"
+                      : "Buscando “\(query)”")
                 Spacer(minLength: 0)
                 Button {
                     mentionQuery = nil
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Editorial.inkMute)
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
 
             if matches.isEmpty {
                 Text("Nenhum contato encontrado")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                    .font(Editorial.serif(13).italic())
+                    .foregroundStyle(Editorial.inkMute)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -823,14 +1273,14 @@ struct AIAgentChatView: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.regularMaterial)
+            Editorial.page,
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
+        .shadow(color: .black.opacity(0.16), radius: 20, y: 10)
     }
 
     private func mentionRow(_ contact: AIContact,
@@ -838,42 +1288,33 @@ struct AIAgentChatView: View {
         HStack(spacing: 10) {
             ZStack {
                 Circle()
-                    .fill(contact.kind == .clickup
-                          ? Color(hex: "#A875FF").opacity(0.18)
-                          : Color(hex: "#5AC8FA").opacity(0.18))
+                    .fill(Editorial.accentSoft)
                     .frame(width: 24, height: 24)
                 Image(systemName: contact.kind == .clickup
                       ? "person.fill"
                       : "envelope.fill")
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(contact.kind == .clickup
-                                     ? Color(hex: "#A875FF")
-                                     : Color(hex: "#5AC8FA"))
+                    .foregroundStyle(Editorial.accent)
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(contact.name)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.primary)
+                    .font(Editorial.serif(14))
+                    .foregroundStyle(Editorial.ink)
                     .lineLimit(1)
                 if !contact.secondary.isEmpty {
                     Text(contact.secondary)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .font(Editorial.serif(11).italic())
+                        .foregroundStyle(Editorial.inkSoft)
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
-            Text(contact.kind == .clickup ? "ClickUp" : "Calendário")
-                .font(.system(size: 9, weight: .heavy))
-                .tracking(0.4)
-                .foregroundStyle(.tertiary)
+            Folio(contact.kind == .clickup ? "ClickUp" : "Calendário")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
         .background(
-            isHighlighted
-            ? Color.accentColor.opacity(0.10)
-            : Color.clear
+            isHighlighted ? Editorial.accentSoft : Color.clear
         )
         .contentShape(Rectangle())
     }
@@ -951,22 +1392,142 @@ struct AIAgentChatView: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasText = !draft
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return (hasText || !pendingAttachments.isEmpty)
             && !appState.aiAgent.isThinking
             && appState.aiAgent.isConfigured
     }
 
     private func sendCurrentDraft() {
-        let text = draft
         guard canSend else { return }
+        let trimmed = draft
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let files = pendingAttachments
+        // Hand the dropped/picked files to the agent so the
+        // action executor turns them into real ClickUp
+        // attachments (one-shot, consumed by the emitted
+        // create/comment/attach action — no second file panel).
+        appState.aiAgent.pendingAttachments = files
+        // Files but no instruction → give the model an explicit
+        // attach request naming the files so it emits the right
+        // action instead of just chatting.
+        let text: String
+        if trimmed.isEmpty, !files.isEmpty {
+            let names = files.map(\.lastPathComponent)
+                .joined(separator: ", ")
+            text = files.count == 1
+                ? "Anexe este arquivo (\(names))."
+                : "Anexe estes \(files.count) arquivos (\(names))."
+        } else {
+            text = draft
+        }
         draft = ""
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+            pendingAttachments = []
+        }
         // Synchronous submit — appends the user turn and flips
         // isThinking ON THE SAME runloop tick so the view
         // transitions out of the empty state immediately.
-        // Wrapped in `withAnimation` so the empty→chat swap
-        // animates smoothly instead of snapping.
         withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
             appState.aiAgent.submit(text)
+        }
+    }
+
+    // MARK: - Composer attachments (drag-drop / paperclip)
+
+    /// Sandbox-compatible chooser — same as the task-comment
+    /// box's paperclip.
+    private func pickFilesIntoPending() {
+        let panel = NSOpenPanel()
+        panel.title                   = "Anexar arquivos"
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories    = false
+        panel.canChooseFiles          = true
+        guard panel.runModal() == .OK else { return }
+        appendPending(panel.urls)
+    }
+
+    /// Files dropped straight onto the composer. Mirrors
+    /// `TaskCommentsSection.handleDroppedProviders`.
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        guard !providers.isEmpty else { return false }
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                DispatchQueue.main.async { appendPending([url]) }
+            }
+        }
+        return true
+    }
+
+    private func appendPending(_ urls: [URL]) {
+        for url in urls where !pendingAttachments.contains(url) {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                pendingAttachments.append(url)
+            }
+        }
+        composerFocused = true
+    }
+
+    private func pendingAttachmentChip(_ url: URL) -> some View {
+        let ext = url.pathExtension.lowercased()
+        return HStack(spacing: 7) {
+            Image(systemName: Self.chipIcon(ext))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Editorial.accent)
+                .frame(width: 14)
+            Text(url.lastPathComponent)
+                .font(Editorial.sans(11.5))
+                .foregroundStyle(Editorial.ink)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Button {
+                withAnimation(.spring(response: 0.3,
+                                      dampingFraction: 0.85)) {
+                    pendingAttachments.removeAll { $0 == url }
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Editorial.inkMute)
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .help("Remover anexo")
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            Editorial.page,
+            in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
+        )
+    }
+
+    private static func chipIcon(_ ext: String) -> String {
+        switch ext {
+        case "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff":
+            return "photo"
+        case "mp4", "mov", "m4v", "avi", "mkv":
+            return "play.rectangle"
+        case "mp3", "wav", "aac", "m4a", "flac":
+            return "waveform"
+        case "pdf":
+            return "doc.richtext"
+        case "zip", "rar", "7z", "tar", "gz":
+            return "shippingbox"
+        case "csv", "xls", "xlsx", "numbers":
+            return "tablecells"
+        case "key", "ppt", "pptx":
+            return "rectangle.on.rectangle"
+        case "doc", "docx", "pages", "txt", "md", "rtf":
+            return "doc"
+        default:
+            return "paperclip"
         }
     }
 }
@@ -986,7 +1547,7 @@ private struct AssistantAvatar: View {
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [Color.accentColor.opacity(0.35), .clear],
+                        colors: [Editorial.accent.opacity(0.35), .clear],
                         center: .center,
                         startRadius: 2,
                         endRadius: 18
@@ -1005,7 +1566,7 @@ private struct AssistantAvatar: View {
             Circle()
                 .fill(
                     LinearGradient(
-                        colors: [Color.accentColor, Color(hex: "#FF8A4C")],
+                        colors: [Editorial.accent, Color(hex: "#FF8A4C")],
                         startPoint: .topLeading,
                         endPoint:   .bottomTrailing
                     )
@@ -1034,7 +1595,7 @@ private struct BouncingDot: View {
 
     var body: some View {
         Circle()
-            .fill(Color.accentColor)
+            .fill(Editorial.accent)
             .frame(width: 6, height: 6)
             .offset(y: lifted ? -3 : 3)
             .opacity(lifted ? 1 : 0.45)
@@ -1162,9 +1723,9 @@ private struct MessageBody: View {
         // settled and we render the full markdown rendering.
         if withCursor {
             (Text(prettified) + cursor)
-                .font(.subheadline)
-                .lineSpacing(2)
-                .foregroundStyle(.primary)
+                .font(Editorial.serif(16))
+                .lineSpacing(5)
+                .foregroundStyle(Editorial.ink)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
@@ -1181,9 +1742,9 @@ private struct MessageBody: View {
             }()
 
             Text(attributed)
-                .font(.subheadline)
-                .lineSpacing(2)
-                .foregroundStyle(.primary)
+                .font(Editorial.serif(16))
+                .lineSpacing(5)
+                .foregroundStyle(Editorial.ink)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1191,19 +1752,14 @@ private struct MessageBody: View {
 
     @ViewBuilder
     private func dayHeaderBlock(_ s: String) -> some View {
-        Text(s.uppercased())
-            .font(.caption2.weight(.bold))
-            .foregroundStyle(.secondary)
-            .tracking(0.6)
-            .padding(.top, 2)
+        Folio(s)
+            .padding(.top, 6)
     }
 
     @ViewBuilder
     private func sectionHeaderBlock(_ s: String) -> some View {
-        Text(s)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.tertiary)
-            .padding(.top, 1)
+        Folio(s, accent: true)
+            .padding(.top, 4)
     }
 }
 
@@ -1344,8 +1900,10 @@ private enum MessageParser {
     /// glue it with the next line and try matching the result
     /// as a task.
     private static func looksLikeTaskTitleStart(_ s: String) -> Bool {
-        // Must lead with a bullet character we recognise.
-        let bulletPrefixes = ["• ", "•", "- ", "* "]
+        // Must lead with a bullet — or a subtask marker (`↳`) —
+        // that we recognise. Subtasks wrap exactly like tasks,
+        // so they get the same glue-and-retry treatment.
+        let bulletPrefixes = ["• ", "•", "- ", "* ", "↳"]
         guard bulletPrefixes.contains(where: { s.hasPrefix($0) })
         else { return false }
         // Must NOT already contain a `[...]` block (otherwise
@@ -1372,7 +1930,7 @@ private enum MessageParser {
     /// that ARE part of the canonical title.
     private static func looseLookupPill(_ s: String,
                                         index: AIAgentService.AgendaIndex) -> MessageBlock? {
-        var body = s
+        var body = stripSubtaskMarker(s)
         for prefix in ["• ", "•", "- ", "* "] {
             if body.hasPrefix(prefix) {
                 body = String(body.dropFirst(prefix.count))
@@ -1624,9 +2182,36 @@ private enum MessageParser {
     ///   • "<title> [<status>] · vence <date>"
     ///   • "<title> (vence <date>)"          — RESTO DA SEMANA bullets
     ///   • "<title> (<status>, vence <date>)"— legacy fallback
+    /// Strips a leading subtask marker so the CHILD title is what
+    /// gets matched against the agenda index. The system prompt
+    /// renders subtasks as `↳ subtarefa de "<Parent>": <Child> …`
+    /// (see `AIAgentService`), so without this the needle would
+    /// still carry the `↳ subtarefa de "…":` prefix and never
+    /// resolve to the live `CUTask` — the subtask would fall
+    /// through to the read-only ghost pill instead of a fully
+    /// interactive `TaskChatPill`.
+    private static func stripSubtaskMarker(_ s: String) -> String {
+        // Tolerant of: an optional leading bullet, an optional
+        // `↳` arrow, and either `subtarefa de "<Parent>":` or a
+        // bare `subtarefa:` — the literal `subtarefa … :` is what
+        // gates the strip, so plain (non-subtask) task lines pass
+        // through untouched.
+        let pattern =
+            #"^\s*(?:[•·\-*]\s*)?(?:↳\s*)?subtarefa\s*(?:de\s+["“][^"”]*["”]\s*)?:\s*"#
+        guard let regex = try? NSRegularExpression(
+                pattern: pattern, options: [.caseInsensitive]),
+              let m = regex.firstMatch(
+                in: s, range: NSRange(s.startIndex..., in: s)),
+              m.range.length > 0,
+              let r = Range(m.range, in: s)
+        else { return s }
+        return String(s[r.upperBound...])
+            .trimmingCharacters(in: .whitespaces)
+    }
+
     private static func matchTaskLine(_ s: String,
                                       index: AIAgentService.AgendaIndex) -> MessageBlock? {
-        var body = s
+        var body = stripSubtaskMarker(s)
         for prefix in ["• ", "•", "- ", "* "] {
             if body.hasPrefix(prefix) {
                 body = String(body.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
@@ -1714,45 +2299,28 @@ private struct EventChatPill: View {
                 appState.detailEvent = event
             }
         } label: {
-            HStack(alignment: .center, spacing: 8) {
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(Color.white.opacity(0.85))
-                    .frame(width: 3, height: 28)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(event.title)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text(timeText)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "calendar")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.7))
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Circle().fill(color).frame(width: 7, height: 7)
+                    .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 1 }
+                Text(event.title)
+                    .font(Editorial.serif(15))
+                    .foregroundStyle(Editorial.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(timeText)
+                    .font(Editorial.sans(12, .medium))
+                    .foregroundStyle(Editorial.inkSoft)
+                    .monospacedDigit()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(color)
-            )
-            .shadow(color: color.opacity(0.35), radius: 4, x: 0, y: 1)
-            // PERF: removed `.background(GeometryReader …
-            // pillFrame preference)` + matching
-            // `.onPreferenceChange { pillFrame = $0 }` —
-            // they captured the pill's global frame into a
-            // `@State pillFrame` that nothing read. The
-            // click handler reads the cursor's window-rect
-            // via `MouseOriginCapture` instead, so the
-            // GR-driven layout pass per pill per render was
-            // pure dead-cost work.
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .interactivePillFeedback(accent: color, cornerRadius: 10)
     }
 }
 
@@ -1774,36 +2342,28 @@ private struct EventChatPillGhost: View {
         Button {
             tryOpen()
         } label: {
-            HStack(alignment: .center, spacing: 8) {
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(Color.white.opacity(0.85))
-                    .frame(width: 3, height: 28)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text(timeText)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "calendar")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.7))
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Circle().fill(Editorial.accent).frame(width: 7, height: 7)
+                    .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 1 }
+                Text(title)
+                    .font(Editorial.serif(15))
+                    .foregroundStyle(Editorial.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(timeText)
+                    .font(Editorial.sans(12, .medium))
+                    .foregroundStyle(Editorial.inkSoft)
+                    .monospacedDigit()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.accentColor)
-            )
-            .shadow(color: Color.accentColor.opacity(0.35), radius: 4, x: 0, y: 1)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .interactivePillFeedback(accent: Color.accentColor, cornerRadius: 10)
     }
 
     private func tryOpen() {
@@ -1841,26 +2401,12 @@ private struct TaskChatPill: View {
     @State private var hoveringCheckbox: Bool = false
 
     private var statusColor: Color { Color(hex: task.statusDisplayHex) }
-    private var priorityColor: Color { Color(hex: task.priorityHex) }
 
     /// O(1) lookup against AppState's pre-resolved index. See
     /// `TaskRowView.doneTargetStatus` for full rationale.
     private var doneTargetStatus: CUStatus? {
         appState.doneTargetByStatus[task.status]
             ?? appState.doneTargetFallback
-    }
-
-    private var doneColor: Color {
-        if let hex = doneTargetStatus?.displayHex {
-            return Color(hex: hex)
-        }
-        return .blue
-    }
-
-    private var checkIcon: String {
-        if task.isCompleted { return "checkmark.circle.fill" }
-        if completing       { return "circle.dotted" }
-        return "circle"
     }
 
     var body: some View {
@@ -1875,177 +2421,177 @@ private struct TaskChatPill: View {
                 appState.detailTask = task
             }
         } label: {
-            HStack(alignment: .center, spacing: 8) {
-                // Hover-to-DONE checkbox — clones TaskRowView's
-                // behaviour 1:1 so completing a task from inside
-                // the AI chat feels identical to completing it
-                // from the dashboard list.
+            HStack(alignment: .center, spacing: 12) {
+                // Hover-to-DONE checkbox — 1:1 with the dashboard
+                // row's `DonePillView` (editorial pill reveal),
+                // not a bespoke chat affordance.
                 checkboxButton
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 5) {
                     Text(task.title)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(task.isCompleted ? .secondary : .primary)
-                        .strikethrough(task.isCompleted, color: .secondary)
+                        .font(Editorial.serif(15))
+                        .foregroundStyle(task.isCompleted
+                                         ? Editorial.inkMute : Editorial.ink)
+                        .strikethrough(task.isCompleted,
+                                       color: Editorial.inkMute)
                         .lineLimit(2)
 
-                    // Hide the static status pill while the
-                    // hover-DONE pill is showing — same
-                    // anti-clutter trick the SubtaskRow uses.
-                    if !hoveringCheckbox || task.isCompleted {
-                        HStack(spacing: 5) {
-                            Text(task.status.uppercased())
-                                .font(.system(size: 9, weight: .heavy))
-                                .tracking(0.4)
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(
-                                    Capsule().fill(statusColor)
-                                )
-
-                            // Trailing meta cluster — pinned to the
-                            // right edge. Uses the structured task
-                            // data (assignee → avatar, dueDate →
-                            // text, priorityHex → flag tint) instead
-                            // of dumping the AI's free-form
-                            // `priorityText` tail. This keeps the
-                            // glyphs compact, neutral, and aligned.
-                            Spacer(minLength: 6)
-
-                            if let due = task.dueDate {
-                                Text(due, format: .dateTime.day().month(.abbreviated).locale(Locale(identifier: "pt_BR")))
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            if let assignee = task.assignees.first {
-                                assigneeAvatar(assignee)
-                            }
-
-                            if (1...4).contains(task.priority) {
-                                Image(systemName: "flag.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(priorityColor)
-                            }
-                        }
-                        .transition(.opacity)
+                    // Status as editorial dot + word — same as
+                    // the dashboard's `StatusPillView`.
+                    HStack(spacing: 7) {
+                        Circle().fill(statusColor)
+                            .frame(width: 7, height: 7)
+                        Text(task.status.capitalized)
+                            .font(Editorial.sans(11.5, .medium))
+                            .foregroundStyle(Editorial.inkSoft)
+                            .tracking(0.2)
                     }
                 }
-                Spacer(minLength: 0)
+                Spacer(minLength: 8)
+                metaTrailing
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(ApolloPalette.cream)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(statusColor.opacity(0.75), lineWidth: 1.2)
-            )
-            // PERF: removed dead `pillFrame` capture (see
-            // `EventChatPill` for full rationale). Click
-            // handler uses `MouseOriginCapture` instead.
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .interactivePillFeedback(accent: statusColor, cornerRadius: 10)
     }
 
-    /// Compact assignee avatar — same look as `TaskRowView`'s
-    /// 16pt avatar, scaled down slightly for the chat pill where
-    /// the meta row sits at 9pt type.
-    private func assigneeAvatar(_ a: CUTask.Assignee) -> some View {
-        let bg = a.color.flatMap { Color(hex: $0) } ?? .blue
-        return ZStack {
-            Circle().fill(bg)
-            if let pic = a.profilePicture, let url = URL(string: pic) {
-                CachedAvatar(url: url)
-                    .clipShape(Circle())
-            } else {
-                Text(a.initials ?? String(a.username.prefix(2)).uppercased())
-                    .font(.system(size: 6, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-        }
-        .frame(width: 14, height: 14)
-    }
-
-    /// Hover-to-DONE checkbox. Default state is a small grey
-    /// circle. On hover (when not completed), the circle morphs
-    /// rightward into a pill labelled with the next status
-    /// ("REVIEW", "COMPLETE", etc.) in that status's colour.
-    /// Click triggers the same `updateTaskStatus` API call the
-    /// dashboard's TaskRowView uses, so completing from chat
-    /// feels identical to completing from the main list.
-    private var checkboxButton: some View {
-        let isHover  = hoveringCheckbox && !task.isCompleted && !completing
-        let pillColor = doneColor
-        let pillLabel = (doneTargetStatus?.status ?? "DONE").uppercased()
-
-        return Button {
-            guard !task.isCompleted, !completing else { return }
-            guard let target = doneTargetStatus else { return }
-            completing = true
-            Task {
-                await appState.updateTaskStatus(task, to: target)
-                completing = false
-            }
-        } label: {
-            Group {
-                if isHover {
-                    Text(pillLabel)
-                        .font(.system(size: 10, weight: .heavy))
-                        .foregroundStyle(pillColor)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(.ultraThinMaterial))
-                        .overlay(Capsule().strokeBorder(pillColor, lineWidth: 1.5))
-                        .overlay(
-                            Capsule().strokeBorder(
-                                LinearGradient(
-                                    colors: [
-                                        .white.opacity(0.55),
-                                        .white.opacity(0.18),
-                                        .white.opacity(0.05),
-                                    ],
-                                    startPoint: .top,
-                                    endPoint:   .bottom
-                                ),
-                                lineWidth: 0.6
-                            )
-                            .allowsHitTesting(false)
-                        )
-                        .shadow(color: .black.opacity(0.10),
-                                radius: 4, x: 0, y: 2)
-                        .shadow(color: .black.opacity(0.05),
-                                radius: 1, x: 0, y: 1)
-                        .transition(.asymmetric(
-                            insertion: .opacity.combined(with: .scale(scale: 0.7,
-                                                                      anchor: .leading)),
-                            removal:   .opacity.combined(with: .scale(scale: 0.7,
-                                                                      anchor: .leading))
-                        ))
-                } else {
-                    Image(systemName: checkIcon)
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(task.isCompleted ? pillColor : Color.secondary)
-                        .symbolEffect(.bounce, value: task.isCompleted)
-                        .frame(width: 14, height: 14)
-                        .transition(.opacity)
+    /// Right-aligned meta — relative date (cinnabar + "atrasada"
+    /// when overdue) then the priority flag. Mirrors
+    /// `TaskRowView.metaDateBadge` / `priorityBadge` exactly.
+    @ViewBuilder
+    private var metaTrailing: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            if let due = task.dueDate {
+                let overdue = due < Date() && !task.isCompleted
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(Self.relativeDateText(for: due))
+                        .font(Editorial.sans(12, .medium))
+                        .foregroundStyle(overdue ? Editorial.accent
+                                                 : Editorial.inkSoft)
+                        .monospacedDigit()
+                    if overdue {
+                        Text("atrasada")
+                            .font(Editorial.serif(10.5).italic())
+                            .foregroundStyle(Editorial.accent)
+                    }
                 }
             }
-            .fixedSize(horizontal: true, vertical: true)
+            if task.priority > 0 {
+                Image(systemName: "flag.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color(hex: task.priorityHex))
+                    .help(task.priorityLabel)
+            }
+        }
+    }
+
+    /// Hover-to-DONE checkbox — a quiet hairline circle that, on
+    /// hover, reveals the editorial DONE pill (next status label
+    /// in its own colour on a `page` chip with a `rule` hairline,
+    /// scaling out from the leading edge), exactly like the
+    /// dashboard `DonePillView`. Click advances the status via
+    /// the same API and registers an undo, so completing a task
+    /// from chat behaves identically to the list.
+    private var checkboxButton: some View {
+        let canAct  = !task.isCompleted && !completing
+        let showPill = hoveringCheckbox && canAct && doneTargetStatus != nil
+        let baseGlyph = task.isCompleted ? "checkmark.circle.fill"
+                       : completing      ? "circle.dotted" : "circle"
+        let baseTint: Color = task.isCompleted
+            ? Editorial.statusColor("complete")
+            : Editorial.inkFaint
+
+        return Button {
+            commitDone()
+        } label: {
+            ZStack(alignment: .leading) {
+                Image(systemName: baseGlyph)
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(baseTint)
+                    .symbolEffect(.bounce, value: task.isCompleted)
+                    .frame(width: 16, height: 16)
+                    .opacity(showPill ? 0 : 1)
+
+                if showPill, let target = doneTargetStatus {
+                    Text(target.status.uppercased())
+                        .font(Editorial.sans(10, .semibold))
+                        .tracking(0.4)
+                        .foregroundStyle(Color(hex: target.displayHex))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3)
+                        .background(
+                            Editorial.page,
+                            in: RoundedRectangle(cornerRadius: 4,
+                                                 style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4,
+                                             style: .continuous)
+                                .strokeBorder(Editorial.rule, lineWidth: 1)
+                        )
+                        .fixedSize()
+                        .transition(
+                            .scale(scale: 0.85, anchor: .leading)
+                                .combined(with: .opacity)
+                        )
+                }
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
         .disabled(task.isCompleted || completing || doneTargetStatus == nil)
+        .animation(.spring(response: 0.30, dampingFraction: 0.62),
+                   value: showPill)
         .scrollAwareOnHover { hover in
-            withAnimation(.spring(duration: 0.28, bounce: 0.20)) {
-                hoveringCheckbox = hover
+            hoveringCheckbox = hover
+        }
+    }
+
+    /// Advance to the resolved DONE target and register an undo —
+    /// the same pipeline `TaskRowCellView.commitDoneAction` uses
+    /// so the list and the chat stay behaviourally identical.
+    private func commitDone() {
+        guard !task.isCompleted, !completing else { return }
+        guard let target = doneTargetStatus else { return }
+        let originalStatusName = task.status
+        let snapshot = task
+        completing = true
+        Task {
+            await appState.updateTaskStatus(snapshot, to: target)
+            completing = false
+            appState.pushUndo(
+                label: "“\(snapshot.title)” → \(originalStatusName.uppercased())"
+            ) {
+                if let restore = appState.availableStatuses
+                    .first(where: { $0.status == originalStatusName }) {
+                    await appState.updateTaskStatus(snapshot, to: restore)
+                }
             }
+        }
+    }
+
+    /// Mirror of `TaskRowView.relativeDateText(for:)` so chat
+    /// task rows read dates identically to the dashboard list.
+    private static func relativeDateText(for date: Date) -> String {
+        let now    = TodayCache.startOfToday
+        let target = TodayCache.calendar.startOfDay(for: date)
+        let days   = TodayCache.calendar
+            .dateComponents([.day], from: now, to: target).day ?? 0
+        switch days {
+        case 0:         return "Hoje"
+        case 1:         return "Amanhã"
+        case -1:        return "Ontem"
+        case 2...6:     return "em \(days) dias"
+        case -6 ... -2: return "\(-days) dias atrás"
+        default:
+            return SharedDateFormatters.shortDayMonthPTBR.string(from: date)
         }
     }
 }
@@ -2071,6 +2617,18 @@ private extension View {
                 .onChanged { _ in onPress() }
                 .onEnded { _ in onRelease() }
         )
+    }
+
+    /// Staggered home-screen entrance: each section fades up
+    /// from +16pt with a per-index delay once `on` flips true.
+    func homeReveal(_ index: Int, _ on: Bool) -> some View {
+        self
+            .opacity(on ? 1 : 0)
+            .offset(y: on ? 0 : 16)
+            .animation(
+                .spring(response: 0.55, dampingFraction: 0.86)
+                    .delay(0.05 + Double(index) * 0.07),
+                value: on)
     }
 }
 
@@ -2103,50 +2661,43 @@ private struct TaskChatPillGhost: View {
         Button {
             tryOpen()
         } label: {
-            HStack(alignment: .center, spacing: 8) {
-                Circle()
-                    .strokeBorder(Color.secondary.opacity(0.6), lineWidth: 1.2)
-                    .frame(width: 14, height: 14)
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "circle")
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(Editorial.inkFaint)
+                    .frame(width: 16, height: 16)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 5) {
                     Text(title)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(Editorial.serif(15))
+                        .foregroundStyle(Editorial.ink)
                         .lineLimit(2)
 
-                    HStack(spacing: 5) {
-                        Text(statusText.uppercased())
-                            .font(.system(size: 9, weight: .heavy))
-                            .tracking(0.4)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(resolvedStatusColor))
-
-                        if let prio = priorityText, !prio.isEmpty {
-                            Text(prio)
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
-                        }
+                    HStack(spacing: 7) {
+                        Circle().fill(resolvedStatusColor)
+                            .frame(width: 7, height: 7)
+                        Text(statusText.capitalized)
+                            .font(Editorial.sans(11.5, .medium))
+                            .foregroundStyle(Editorial.inkSoft)
+                            .tracking(0.2)
                     }
                 }
-                Spacer(minLength: 0)
+                Spacer(minLength: 8)
+                if let prio = priorityText, !prio.isEmpty {
+                    Text(prio)
+                        .font(Editorial.sans(11))
+                        .foregroundStyle(Editorial.inkMute)
+                }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(ApolloPalette.cream)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(resolvedStatusColor.opacity(0.75), lineWidth: 1.2)
-            )
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .interactivePillFeedback(accent: resolvedStatusColor, cornerRadius: 10)
     }
 
     private func tryOpen() {
@@ -2303,7 +2854,7 @@ private struct EmptyStateView: View {
                 .fill(
                     RadialGradient(
                         colors: [
-                            Color.accentColor.opacity(0.30),
+                            Editorial.accent.opacity(0.30),
                             Color(hex: "#A875FF").opacity(0.18),
                             .clear
                         ],
@@ -2345,7 +2896,7 @@ private struct EmptyStateView: View {
                     RadialGradient(
                         colors: [
                             Color.white.opacity(0.55),
-                            Color.accentColor.opacity(0.10),
+                            Editorial.accent.opacity(0.10),
                             .clear
                         ],
                         center: .center,
@@ -2365,7 +2916,7 @@ private struct EmptyStateView: View {
                 .foregroundStyle(
                     LinearGradient(
                         colors: [
-                            Color.accentColor,
+                            Editorial.accent,
                             Color(hex: "#A875FF"),
                             Color(hex: "#FF8A4C")
                         ],
@@ -2375,7 +2926,7 @@ private struct EmptyStateView: View {
                 )
                 .rotationEffect(.degrees(sparkleRotate))
                 .scaleEffect(halo1Pulse ? 1.06 : 0.96)
-                .shadow(color: Color.accentColor.opacity(0.55),
+                .shadow(color: Editorial.accent.opacity(0.55),
                         radius: 12, x: 0, y: 0)
         }
         .compositingGroup()
@@ -2624,7 +3175,7 @@ private struct EmptyStateView: View {
             .init(icon: "calendar.badge.clock",
                   title: "__today__",
                   subtitle: heroSubtitle,
-                  accent: Color.accentColor,
+                  accent: Editorial.accent,
                   prompt: "O que eu tenho hoje?",
                   size: .x3y2,
                   badge: (todayEvents.count + todayTasks.count) == 0

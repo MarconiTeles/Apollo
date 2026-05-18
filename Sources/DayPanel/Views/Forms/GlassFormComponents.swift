@@ -1,5 +1,10 @@
 import SwiftUI
 
+// Editorial Calm form chrome. (Filename kept for git history;
+// the "Glass" materials were replaced by paper + hairline +
+// serif/sans + the single cinnabar accent — matching the
+// prototype's `PNewTask` / `PNewEvent` overlays.)
+
 // MARK: - Header
 
 struct GlassFormHeader: View {
@@ -7,27 +12,34 @@ struct GlassFormHeader: View {
     let onClose: () -> Void
 
     var body: some View {
-        HStack(alignment: .center) {
-            Text(title)
-                .font(.title3.weight(.semibold))
-            Spacer()
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20, height: 20)
-                    .background(.regularMaterial, in: Circle())
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(Editorial.serif(22))
+                    .foregroundStyle(Editorial.ink)
+                    .tracking(-0.4)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(Editorial.inkSoft)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .keyboardShortcut(.cancelAction)
             }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
+            .padding(.horizontal, 28)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
+
+            Rectangle().fill(Editorial.rule).frame(height: 1)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 18)
-        .padding(.bottom, 12)
     }
 }
 
-// MARK: - Glass text field
+// MARK: - Editorial text field
 
 struct GlassTextField: View {
     let placeholder: String
@@ -41,21 +53,22 @@ struct GlassTextField: View {
     var body: some View {
         TextField(placeholder, text: $text)
             .textFieldStyle(.plain)
-            .font(.body)
+            .font(Editorial.sans(13))
+            .foregroundStyle(Editorial.ink)
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
-            // Was `.regularMaterial` — see `GlassSectionCard`
-            // for the per-frame backdrop-filter cost rationale.
-            .background(Color.primary.opacity(0.05),
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Editorial.card)
+            )
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(Editorial.rule, lineWidth: 1)
             )
     }
 }
 
-// MARK: - Glass form row (generic container)
+// MARK: - Form row (generic container)
 
 struct GlassFormRow<Content: View>: View {
     @ViewBuilder let content: () -> Content
@@ -66,17 +79,13 @@ struct GlassFormRow<Content: View>: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        // Was `.regularMaterial` — multiple form rows per
-        // section × multiple sections per popup compounded
-        // into 8-12+ active CABackdropFilters per popup,
-        // each redrawing on every scroll frame. Solid tint
-        // gives the same readable surface without the
-        // per-frame blur cost.
-        .background(Color.primary.opacity(0.04),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Editorial.card)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
         )
     }
 }
@@ -85,35 +94,38 @@ struct GlassFormRow<Content: View>: View {
 
 struct GlassWarningRow: View {
     let message: String
-    var tint: Color = .orange
+    var tint: Color = Editorial.accent
 
-    init(_ message: String, tint: Color = .orange) {
+    init(_ message: String, tint: Color = Editorial.accent) {
         self.message = message
         self.tint = tint
     }
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: tint == .red ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
+            Image(systemName: "exclamationmark.circle")
                 .foregroundStyle(tint)
-                .font(.caption)
+                .font(.system(size: 12, weight: .regular))
             Text(message)
-                .font(.caption)
+                .font(Editorial.sans(12))
                 .foregroundStyle(tint)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(tint.opacity(0.08))
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(tint.opacity(0.2), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(tint.opacity(0.22), lineWidth: 1)
         )
     }
 }
 
-// MARK: - Glass section card (for Settings)
+// MARK: - Section card (for Settings)
 
 struct GlassSectionCard<Content: View>: View {
     let title: String
@@ -121,29 +133,20 @@ struct GlassSectionCard<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: icon)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
+        VStack(alignment: .leading, spacing: 12) {
+            Folio(title)
 
             content()
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Was `.regularMaterial` — every section card allocated
-        // its own `CABackdropFilter`, and the parent popup's
-        // `.popupGlass(shape)` already provides one. With 4
-        // sections in Settings (and similar counts in other
-        // popups using this component), the stacked backdrop
-        // filters re-rendered the blur of everything behind
-        // them on every scroll frame, making the popup scroll
-        // visibly stutter. Solid tinted fill matches the
-        // visual weight without the per-frame backdrop cost.
-        .background(Color.primary.opacity(0.04),
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Editorial.card)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
         )
     }
 }
@@ -157,32 +160,57 @@ struct GlassFormFooter: View {
     let createDisabled: Bool
 
     var body: some View {
+        // Prototype `PNewTask`/`PNewEvent` footer: no divider —
+        // the body flows continuously into a right-aligned button
+        // pair (`gap 8`, `marginTop 24`) inside the 28px body gutter.
         HStack(spacing: 8) {
+            Spacer()
+
+            // Cancelar — paperButton(): page surface, hairline, ink.
             Button(action: onCancel) {
                 Text("Cancelar")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 34)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-
-            Button(action: onCreate) {
-                Text(createLabel)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(createDisabled ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.white))
-                    .frame(maxWidth: .infinity, minHeight: 34)
+                    .font(Editorial.sans(12.5, .medium))
+                    .foregroundStyle(Editorial.ink)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
                     .background(
-                        createDisabled ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(Color.accentColor),
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Editorial.page)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .strokeBorder(Editorial.rule, lineWidth: 1)
                     )
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
+
+            // Criar — paperButton(true): solid ink surface, page
+            // text, dimmed to 0.5 opacity while disabled (exact
+            // prototype behavior — no separate muted style).
+            Button(action: onCreate) {
+                Text(createLabel)
+                    .font(Editorial.sans(12.5, .medium))
+                    .foregroundStyle(Editorial.page)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Editorial.ink)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .strokeBorder(Editorial.ink, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .opacity(createDisabled ? 0.5 : 1)
             .disabled(createDisabled)
+            .keyboardShortcut(.defaultAction)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 28)
+        .padding(.top, 24)
+        .padding(.bottom, 22)
     }
 }

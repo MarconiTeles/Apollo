@@ -55,27 +55,6 @@ struct ContentView: View {
     @State private var filtersOrigin:  CGRect = .zero
     @State private var notifsOrigin:   CGRect = .zero
 
-    // Minimum task panel width — chosen so a row's COMPLETE pill, title,
-    // status pill, avatar, due-date badge, priority and chevron all fit
-    // on one line without wrapping.
-    // Lowered from 480 → 432 so the layout still has a usable
-    // timeline (≥ 280pt) when the window is squeezed to its new
-    // minimum frame width of 740pt: 740 − 8 (handle) − 432 = 300.
-    private static let minTaskPanelWidth: CGFloat = 432
-    private static let maxTaskPanelWidth: CGFloat = 720
-
-    @State private var taskPanelWidth: CGFloat = {
-        let stored = CGFloat(UserDefaults.standard.double(forKey: "dp_taskPanelWidth"))
-            .nonZeroOr(Self.minTaskPanelWidth)
-        // Clamp to BOTH bounds. Earlier builds didn't enforce
-        // `maxTaskPanelWidth` on the ResizableHandle's drag
-        // range, so a saved value can be far above the design
-        // ceiling — making cards look "cut" because the panel
-        // grows past where the timeline can stay readable.
-        return min(Self.maxTaskPanelWidth,
-                   max(Self.minTaskPanelWidth, stored))
-    }()
-
     @State private var dateDirection: Int = 0  // -1 = backward, +1 = forward
 
     /// Snapshot of the cursor location taken at the moment the
@@ -114,6 +93,11 @@ struct ContentView: View {
     var body: some View {
         GeometryReader { windowGeo in
             ZStack(alignment: .topTrailing) {
+                // Editorial canvas — warm cream paper behind
+                // everything, replacing the system window
+                // background. The whole redesign sits on this.
+                Editorial.paper.ignoresSafeArea()
+
                 // Layers 1–4 below are the "dashboard" — everything
                 // sitting under the popup z-stack. We wrap them in
                 // a Group so a single `.allowsHitTesting(!anyPopupOpen)`
@@ -149,16 +133,43 @@ struct ContentView: View {
                     //    blur over the dashboard scrolling
                     //    behind, while the pills stay sharp
                     //    on top.
-                    FrostedStrip(barHeight: 52)
+                    // Top fade over the events list halved
+                    // (120 → 60) per request — the soft shadow
+                    // reaches half as far down the timeline.
+                    FrostedStrip(barHeight: 52, fadeExtent: 60)
 
                     // 3. Task filter bar — above the strip so
                     //    the filter pills don't get blurred.
-                    VStack(spacing: 0) {
-                        Color.clear
-                            .frame(width: taskPanelWidth, height: 52)
-                            .allowsHitTesting(false)
-                        TaskFilterBar()
-                            .frame(width: taskPanelWidth)
+                    //    Anchored to the SAME split `mainContent`
+                    //    uses so the category bar is confined to
+                    //    the task column and never bleeds over
+                    //    the timeline.
+                    GeometryReader { geo in
+                        let total     = max(1, geo.size.width)
+                        let timelineW = (total - 1) * (1.0 / 2.05)
+                        // `.top` alignment is critical: the
+                        // flexible Color.clear spacer makes the
+                        // HStack full-height, so without it the
+                        // bar would be vertically centred (mid-
+                        // list) instead of pinned under the
+                        // toolbar at the top of the task column.
+                        HStack(alignment: .top, spacing: 0) {
+                            // Spacer over the timeline column + the
+                            // 1pt centre rule — keeps the filter
+                            // bar off the events side.
+                            Color.clear
+                                .frame(width: timelineW + 1)
+                                .allowsHitTesting(false)
+                            VStack(spacing: 0) {
+                                Color.clear
+                                    .frame(height: 52)
+                                    .allowsHitTesting(false)
+                                TaskFilterBar()
+                                Spacer(minLength: 0)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .frame(maxHeight: .infinity, alignment: .top)
                     }
 
                     // 4. Toolbar — TOPMOST layer; pills stay
@@ -223,7 +234,8 @@ struct ContentView: View {
                 FloatingModal(
                     isPresented: $showNewEvent,
                     origin:      newEventOrigin,
-                    windowSize:  windowGeo.size
+                    windowSize:  windowGeo.size,
+                    genie:       true
                 ) {
                     CreateEventSheet(onClose: { showNewEvent = false })
                         .environmentObject(appState)
@@ -252,26 +264,14 @@ struct ContentView: View {
                 // closed, forcing the toolbar pill to re-read the
                 // new list name from Keychain (which isn't
                 // observable on its own).
-                FloatingModal(
-                    isPresented: Binding(
-                        get: { showListPicker },
-                        set: { newValue in
-                            if !newValue && showListPicker {
-                                listPickerToken &+= 1
-                            }
-                            showListPicker = newValue
-                        }
-                    ),
-                    origin:      listPickerOrigin,
-                    windowSize:  windowGeo.size
-                ) {
-                    CUListPickerSheet(onClose: {
-                        listPickerToken &+= 1
-                        showListPicker = false
-                    })
-                    .environmentObject(appState)
-                    .frame(maxWidth: 420)
+                // List picker — anchored DROPDOWN under the
+                // "Listas" toolbar pill (was a centered modal).
+                Group {
+                    if showListPicker {
+                        listAnchoredOverlay(windowSize: windowGeo.size)
+                    }
                 }
+                .zIndex(1100)
                 FloatingModal(
                     isPresented: $showOnboarding,
                     windowSize:  windowGeo.size,
@@ -283,6 +283,11 @@ struct ContentView: View {
                 ) {
                     OnboardingView(onClose: { showOnboarding = false })
                         .environmentObject(appState)
+                        // The redesigned onboarding is a full-bleed
+                        // two-pane editorial spread (prototype
+                        // `POnboarding`), so it must fill the window
+                        // rather than sit centred like a small modal.
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 // Task detail popup — opened from the small "open" icon
                 // above the chevron on a task row. Origin is captured
@@ -422,32 +427,19 @@ struct ContentView: View {
                 // attached to a toolbar pixel. Backdrop dimmer
                 // catches outside-clicks for dismissal.
                 if showAIChat {
-                    // Frosted backdrop blurring the dashboard
-                    // — same material the welcome splash uses
-                    // when it appears (`Rectangle().fill(
-                    // .regularMaterial)`). Cached as a single
-                    // CABackdropFilter by Core Animation: one
-                    // backdrop blur recomputed only when the
-                    // dashboard content changes, not per
-                    // frame. Lets the AI chat items float
-                    // panel-less over a soft frosted surface.
-                    Rectangle()
-                        .fill(.regularMaterial)
+                    // Editorial backdrop — a light dim, not a
+                    // frosted wash. The redesigned Apollo IA is
+                    // a calm paper "column", so it sits over a
+                    // quiet darkened dashboard (matching the
+                    // other editorial overlays) instead of the
+                    // old Apple-Intelligence frosted material +
+                    // neon edge glow, which were dropped with
+                    // the rest of the Liquid Glass language.
+                    Color.black.opacity(0.10)
                         .ignoresSafeArea()
                         .transition(.opacity)
                         .allowsHitTesting(false)
                         .zIndex(800)
-
-                    // Apple Intelligence-style neon edge glow.
-                    // Sits BEHIND the chat (zIndex 850 vs chat's
-                    // 900) so the colours bloom around the
-                    // window perimeter without washing out the
-                    // chat content.
-                    IntelligenceEdgeGlow()
-                        .ignoresSafeArea()
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
-                        .zIndex(850)
 
                     aiChatCenteredOverlay(windowSize: windowGeo.size)
                         .zIndex(900)
@@ -484,6 +476,34 @@ struct ContentView: View {
                         )
                         .allowsHitTesting(updateService.availableUpdate != nil)
                         .zIndex(1200)
+                }
+
+                // Toast — drops in just BELOW the 52pt head bar,
+                // top-right, as its own surface (no longer painted
+                // over the bell). Suppressed during welcome /
+                // onboarding so the intro stays clean.
+                if !showWelcome && !showOnboarding, let pill = bellPillNotif {
+                    BellPill(notification: pill,
+                             onTap: {
+                                 collapseBellPill()
+                                 showNotifs = true
+                             },
+                             onDismiss: { collapseBellPill() })
+                        .padding(.top, 52 + 12)
+                        .padding(.trailing, 18)
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity,
+                            alignment: .topTrailing
+                        )
+                        .transition(.asymmetric(
+                            insertion: .offset(y: -8).combined(with: .opacity),
+                            removal:   .opacity
+                        ))
+                        .animation(.spring(duration: 0.4, bounce: 0.22),
+                                   value: bellPillNotif?.id)
+                        .allowsHitTesting(true)
+                        .zIndex(1250)
                 }
             }
             .coordinateSpace(name: "appWindow")
@@ -643,34 +663,59 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    withAnimation(.spring(duration: 0.42, bounce: 0.28)) {
+                    withAnimation(.spring(response: 0.52,
+                                          dampingFraction: 0.82)) {
                         showAIChat = false
                     }
                 }
                 .transition(.opacity)
 
             AIAgentChatView(onClose: {
-                withAnimation(.spring(duration: 0.42, bounce: 0.28)) {
+                withAnimation(.spring(response: 0.52,
+                                      dampingFraction: 0.82)) {
                     showAIChat = false
                 }
             })
                 .environmentObject(appState)
-                // Window-percentage paddings so the chat
-                // surface always insets proportionally to the
-                // host frame: 15% top/bottom (header anchors
-                // 15% down from the toolbar, composer anchors
-                // 15% up from the bottom edge) and 20% on
-                // each side. With the panel-less floating
-                // design these paddings define where the
-                // first/last items can land.
-                .padding(.top,        windowSize.height * 0.05)
-                .padding(.bottom,     windowSize.height * 0.05)
-                .padding(.horizontal, windowSize.width  * 0.05)
+                // Editorial "column" card — a calm paper surface
+                // with a hairline rule and soft shadow (the
+                // prototype `PPopup`/`PAIChat` chrome), inset
+                // generously from the window edges so it reads
+                // as a focused reading panel rather than a
+                // panel-less float.
+                .background(
+                    Editorial.paper,
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Editorial.rule, lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.22), radius: 50, y: 40)
+                .shadow(color: .black.opacity(0.08), radius: 24, y: 8)
+                .padding(.top,        max(28, windowSize.height * 0.05))
+                .padding(.bottom,     max(28, windowSize.height * 0.05))
+                .padding(.horizontal, max(48, windowSize.width  * 0.07))
+                // Window entrance/exit: the panel grows out of
+                // the Apollo button (cursor anchor) but from a
+                // readable 0.90 — not a speck — drifting up into
+                // place with a soft blur clearing, and settles
+                // out the same way. Reads as an elegant
+                // "publication opening" rather than a UI pop.
                 .transition(.asymmetric(
-                    insertion: .scale(scale: 0.05, anchor: cursorAnchor)
-                        .combined(with: .opacity),
-                    removal:   .scale(scale: 0.05, anchor: cursorAnchor)
+                    insertion: .scale(scale: 0.90, anchor: cursorAnchor)
                         .combined(with: .opacity)
+                        .combined(with: .offset(y: 14))
+                        .combined(with: .modifier(
+                            active:   BlurModifier(radius: 14),
+                            identity: BlurModifier(radius: 0))),
+                    removal: .scale(scale: 0.95, anchor: cursorAnchor)
+                        .combined(with: .opacity)
+                        .combined(with: .offset(y: 10))
+                        .combined(with: .modifier(
+                            active:   BlurModifier(radius: 10),
+                            identity: BlurModifier(radius: 0)))
                 ))
         }
     }
@@ -831,6 +876,57 @@ struct ContentView: View {
             .animation(.spring(duration: 0.42, bounce: 0.28), value: showFilters)
     }
 
+    /// List picker as an anchored DROPDOWN under the "Listas"
+    /// toolbar pill — compact single-column variant, growing out
+    /// of the click point. Same mechanics as the filter popover.
+    @ViewBuilder
+    private func listAnchoredOverlay(windowSize: CGSize) -> some View {
+        let dropdownWidth: CGFloat = 380
+        let safeMargin:    CGFloat = 12
+
+        // Anchor the dropdown's left edge at the click X, clamped
+        // so it never overflows the window's right safe margin.
+        let rawMinX = listPickerOrigin.minX == 0
+            ? safeMargin : listPickerOrigin.minX
+        let minX = min(rawMinX, windowSize.width - dropdownWidth - safeMargin)
+        let leftPad = max(minX, safeMargin)
+        let topPad  = max(listPickerOrigin.maxY + 4, 54)
+
+        let buttonAnchor = UnitPoint(
+            x: windowSize.width  > 0 ? listPickerOrigin.midX / windowSize.width  : 0.2,
+            y: windowSize.height > 0 ? listPickerOrigin.midY / windowSize.height : 0.05
+        )
+
+        Color.black.opacity(0.001)
+            .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.spring(duration: 0.42, bounce: 0.28)) {
+                    listPickerToken &+= 1
+                    showListPicker = false
+                }
+            }
+            .transition(.opacity)
+
+        CUListPickerSheet(onClose: {
+            withAnimation(.spring(duration: 0.42, bounce: 0.28)) {
+                listPickerToken &+= 1
+                showListPicker = false
+            }
+        }, compact: true)
+            .environmentObject(appState)
+            .padding(.top, topPad)
+            .padding(.leading, leftPad)
+            .padding(.trailing, safeMargin)
+            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                   alignment: .topLeading)
+            .transition(.asymmetric(
+                insertion: .scale(scale: 0.05, anchor: buttonAnchor).combined(with: .opacity),
+                removal:   .scale(scale: 0.05, anchor: buttonAnchor).combined(with: .opacity)
+            ))
+            .animation(.spring(duration: 0.42, bounce: 0.28), value: showListPicker)
+    }
+
     /// Toolbar pill that opens the multi-dimensional filter popover.
     /// Shows a counter badge when one or more dimensions are active.
     private var filtersButton: some View {
@@ -841,38 +937,13 @@ struct ContentView: View {
                 showFilters.toggle()
             }
         } label: {
-            // Icon-only button — text label dropped to keep the
-            // toolbar compact. Active filter count surfaces as a
-            // small accent capsule next to the icon when ≥1 filter
-            // is on; tooltip carries the full "Filtros (N ativos)"
-            // text via `.help(...)` so accessibility isn't lost.
-            HStack(spacing: 4) {
-                Image(systemName: "line.3.horizontal.decrease")
-                    .font(.callout.weight(.semibold))
-                if isActive {
-                    Text("\(count)")
-                        .font(.caption2.weight(.heavy))
-                        .foregroundStyle(.white)
-                        .frame(minWidth: 16, minHeight: 16)
-                        .padding(.horizontal, 3)
-                        .background(Color.accentColor, in: Capsule())
-                }
-            }
-            .foregroundStyle(isActive ? Color.accentColor : Color.primary)
-            .padding(.horizontal, isActive ? 8 : 9)
-            .frame(height: 28)
-            // Same glass treatment as the Nova tarefa pill: regularMaterial
-            // base + liquidGlassEdge for the bevel/specular highlight.
-            // When filters are active we tint the whole capsule with a
-            // subtle accent overlay so the active state is still legible.
-            .background(.regularMaterial, in: Capsule())
-            .background(
-                isActive ? Color.accentColor.opacity(0.12) : Color.clear,
-                in: Capsule()
-            )
-            .liquidGlassEdge(Capsule())
+            // Prototype: plain "Filtros" TBBtn text. The active
+            // count is carried in the tooltip (not a capsule) so
+            // the band stays type-only; the word turns cinnabar
+            // while ≥1 dimension is active.
+            Text("Filtros")
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TBButtonStyle(accent: isActive))
         .focusEffectDisabled()
         .help(isActive ? "Filtros (\(count) ativos)" : "Filtros")
         .captureFrame($filtersOrigin)
@@ -885,6 +956,13 @@ struct ContentView: View {
     /// dismisses to force the refresh, since Keychain isn't
     /// observable on its own. Tapping reuses the same
     /// `CUListPickerSheet` the Settings/Onboarding flows use.
+    /// Segmented-ish toggle between "Lista" (the picked ClickUp
+    /// list) and "Meu" (cross-list tasks assigned to the
+    /// connected user). Flipping it re-syncs immediately so the
+    /// right column repopulates from the chosen source. The
+    /// list-picker pill dims in My Work mode since the active
+    /// list no longer scopes what's shown (the picked list is
+    /// still remembered for when the user flips back).
     private var listPickerPill: some View {
         // `listPickerToken` is referenced inside the closure so the
         // view recomputes whenever it bumps; reading it here keeps
@@ -906,85 +984,18 @@ struct ContentView: View {
             showListPicker = true
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "list.bullet.rectangle")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
                 Text(truncated)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 11, weight: .regular))
             }
-            .padding(.leading, 9)
-            .padding(.trailing, 8)
-            .frame(height: 26)
-            .background(.regularMaterial, in: Capsule())
-            .liquidGlassEdge(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TBButtonStyle())
         .focusEffectDisabled()
         .help("Lista ClickUp atual: \(name) — clique para trocar")
     }
 
-    /// Toolbar search field — glass capsule with a magnifier icon,
-    /// a borderless TextField bound to `AppState.searchQuery`, and
-    /// a clear-X that appears once the query is non-empty. The
-    /// field has a fixed width (220pt) so it stays visually
-    /// balanced next to the other toolbar pills, yet wide enough
-    /// for typical task-name fragments.
-    private var searchField: some View {
-        let hasQuery = !appState.searchQuery
-            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(hasQuery ? Color.accentColor : .secondary)
-
-            TextField("Buscar tarefas", text: $appState.searchQuery)
-                .textFieldStyle(.plain)
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-                .focusEffectDisabled()
-
-            if hasQuery {
-                Button {
-                    appState.searchQuery = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .focusEffectDisabled()
-                .help("Limpar busca")
-                .transition(.opacity.combined(with: .scale(scale: 0.7)))
-            }
-        }
-        .padding(.leading, 10)
-        .padding(.trailing, hasQuery ? 6 : 10)
-        // Width trimmed by 35% (220 → 143pt) to take less toolbar
-        // real estate; the placeholder "Buscar tarefas" still fits
-        // at this size and typed queries truncate gracefully.
-        .frame(width: 143, height: 28)
-        // Subtle accent tint when the query is active so the user
-        // can spot at a glance that the list is narrowed.
-        .background(.regularMaterial, in: Capsule())
-        .background(
-            hasQuery ? Color.accentColor.opacity(0.10) : Color.clear,
-            in: Capsule()
-        )
-        .liquidGlassEdge(Capsule())
-        .overlay(
-            Capsule().strokeBorder(
-                hasQuery ? Color.accentColor.opacity(0.30) : Color.clear,
-                lineWidth: 0.6
-            )
-        )
-        .animation(.spring(duration: 0.25, bounce: 0.20), value: hasQuery)
-    }
 
     private func maybeShowOnboarding() {
         guard !onboardingDismissedThisSession else { return }
@@ -1026,43 +1037,25 @@ struct ContentView: View {
     // MARK: - Glass Toolbar
 
     private var toolbar: some View {
-        HStack(spacing: 8) {
+        // Reproduces the prototype's `PToolbar` exactly: a type-led
+        // band of `TBBtn` text buttons separated by a 26pt gap, the
+        // active-list picker, a flexible gap, then the trailing
+        // cluster (Filtros · Buscar ⌘K · + Tarefa · ✦ Apollo · 🔔 ·
+        // ⚙). No glass, no capsules, no diagnostic chrome — the
+        // hairline rule along the bottom IS the only divider.
+        HStack(spacing: 26) {
 
-            // ── Novo evento ──────────────────────────────────────────────
-            // Glass pill matching the "+ Tarefa" button on the
-            // trailing side: plus icon + label, same height,
-            // same material treatment. The previous compact
-            // 28pt circle was visually inconsistent with its
-            // sibling create-action button on the right; the
-            // pill makes both creation entry points read as a
-            // matched pair.
+            // + Evento
             Button { showNewEvent = true } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                        .font(.callout.weight(.bold))
-                    Text("Evento")
-                        .font(.subheadline.weight(.medium))
-                }
-                .foregroundStyle(.primary)
-                .padding(.leading, 9)
-                .padding(.trailing, 12)
-                .frame(height: 28)
-                .background(.regularMaterial, in: Capsule())
-                .liquidGlassEdge(Capsule())
+                Text("+ Evento")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TBButtonStyle())
             .focusEffectDisabled()
             .help("Novo evento")
             .captureFrame($newEventOrigin)
 
-            // ── "Hoje" jump-to-today button ──────────────────────────────
-            // The date capsule used to live to the left of this button
-            // and acted as a calendar opener; it was removed because
-            // the timeline already shows the current date as a sticky
-            // header and the popup picker felt redundant.
+            // Hoje — jump to today + resync
             Button {
-                // No click haptic — the trackpad's click pulse
-                // is the natural feedback for the "Hoje" tap.
                 dateDirection = appState.selectedDate < Date() ? 1 : -1
                 withAnimation(.spring(duration: 0.35)) {
                     appState.selectedDate = Date()
@@ -1071,134 +1064,74 @@ struct ContentView: View {
                 Task { await appState.sync() }
             } label: {
                 Text("Hoje")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(isToday ? AnyShapeStyle(Color.secondary)
-                                             : AnyShapeStyle(Color.blue))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(.horizontal, 10)
-                    .frame(height: 26)
-                    .background(.regularMaterial, in: Capsule())
-                    .liquidGlassEdge(Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TBButtonStyle())
             .focusEffectDisabled()
 
-            // ── ClickUp list picker pill ─────────────────────────────────
-            // Shows the active list name with a chevron — clicking
-            // opens the same `CUListPickerSheet` Settings uses so
-            // the user can switch lists without leaving the
-            // dashboard. Hidden when ClickUp isn't connected (no
-            // list to show, picker would be empty).
+            // {Active list} ⌄ — opens the same picker Settings uses
             if appState.clickUpAuthService.isConnected {
                 listPickerPill
             }
 
-            // Push the trailing cluster (Mock badge, Filtros,
-            // Search, Tarefa, Sync, Bell, Settings) against the
-            // window's right edge.
             Spacer(minLength: 0)
 
-            // ── Mock badge ────────────────────────────────────────────────
-            if appState.showMockData {
-                Label("Exemplo", systemImage: "sparkles")
-                    .font(.caption2).fontWeight(.medium)
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(.orange.opacity(0.14), in: Capsule())
-                    .overlay(Capsule().strokeBorder(.orange.opacity(0.3), lineWidth: 0.5))
-            }
-
-            // ── Offline queue indicator ──────────────────────────
-            // Renders only when there are pending mutations
-            // waiting on connectivity. Self-hides when empty —
-            // doesn't add toolbar chrome for users who are
-            // always online.
-            OfflineQueueIndicator()
-
-            // ── Filtros ───────────────────────────────────────────────────
-            // Visible only when ClickUp is connected — otherwise there are
-            // no tasks to filter and the button would be a dead end.
+            // Filtros — accent-tinted while ≥1 dimension is active
             if appState.clickUpAuthService.isConnected {
                 filtersButton
             }
 
-            // ── Search bar ────────────────────────────────────────────────
-            // Glass capsule with magnifier + text field that narrows
-            // the visible task list as the user types. Shows only
-            // when ClickUp is connected (no tasks to search
-            // otherwise).
-            if appState.clickUpAuthService.isConnected {
-                searchField
-            }
-
-            // ── Nova tarefa ───────────────────────────────────────────────
-            // Icon swapped from `checkmark.circle.badge.plus` to a
-            // plain `plus` glyph — the previous icon mixed two
-            // metaphors (check + add) and read as ambiguous.
-            // The `+` sign is universally understood as "add new".
-            // The "Tarefa" text label is preserved so the button's
-            // purpose is clear without hovering for the tooltip.
-            Button { showNewTask = true } label: {
+            // Buscar ⌘K — opens the existing Spotlight-style palette
+            // (same responder action ⌘K triggers from the menu).
+            Button {
+                NSApp.sendAction(Selector(("toggleCommandPalette:")), to: nil, from: nil)
+            } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                        .font(.callout.weight(.bold))
-                    Text("Tarefa")
-                        .font(.subheadline.weight(.medium))
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 14, weight: .regular))
+                    Text("Buscar")
+                    KbdTB(text: "⌘K")
                 }
-                .foregroundStyle(.primary)
-                .padding(.leading, 9)
-                .padding(.trailing, 12)
-                .frame(height: 28)
-                .background(.regularMaterial, in: Capsule())
-                .liquidGlassEdge(Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TBButtonStyle())
+            .focusEffectDisabled()
+            .help("Buscar (⌘K)")
+
+            // + Tarefa
+            Button { showNewTask = true } label: {
+                Text("+ Tarefa")
+            }
+            .buttonStyle(TBButtonStyle())
             .focusEffectDisabled()
             .help("Nova tarefa")
             .captureFrame($newTaskOrigin)
 
-            // ── Apollo IA ─────────────────────────────────────────────────
-            // Sparkles pill that opens the agent chat as a popover
-            // anchored under the button. The button itself is
-            // wrapped in `ApolloIAOrbButton` — a custom view that
-            // builds an Apple Intelligence-style halo of moving
-            // gradients around the sparkle, plus hover-driven
-            // glow boost and click-activation flash.
-            ApolloIAOrbButton(isActive: showAIChat) {
-                // Snapshot the cursor position at click time so
-                // the chat opens scaling out of the exact pixel
-                // the user pressed (and shrinks back into it on
-                // close). Same one-shot read used by the bell
-                // notifications popup — see `notifsOpenPoint`.
+            // ✦ Apollo — cinnabar mark + word (prototype AIMark)
+            Button {
                 let rect = MouseOriginCapture.currentClickRectInMainWindow()
                 if rect != .zero {
                     aiChatOpenPoint = CGPoint(x: rect.midX, y: rect.midY)
                 }
-                withAnimation(.spring(duration: 0.42, bounce: 0.28)) {
+                withAnimation(.spring(response: 0.52,
+                                      dampingFraction: 0.82)) {
                     showAIChat.toggle()
                 }
+            } label: {
+                HStack(spacing: 5) {
+                    AIMark(size: 14)
+                    Text("Apollo")
+                }
             }
+            .buttonStyle(TBButtonStyle(accent: true))
+            .focusEffectDisabled()
             .help("Apollo IA")
-            // Popover anchored to the orb button was replaced by
-            // a window-centred overlay (see `aiChatOverlay`
-            // below). The popover's arrow + edge anchoring made
-            // the chat feel pinned to a tiny corner of the
-            // toolbar; centring it gives the chat the visual
-            // weight of a primary surface.
             .onChange(of: appState.aiAgent.dismissChatRequest) { _, _ in
-                withAnimation(.spring(duration: 0.32, bounce: 0.25)) {
+                withAnimation(.spring(response: 0.45,
+                                      dampingFraction: 0.85)) {
                     showAIChat = false
                 }
             }
-            // RAM relief — when the chat closes (any reason),
-            // tell Ollama to unload the model NOW instead of
-            // holding the ~5 GB of weights in RAM for the
-            // default 5 minutes. Next time the user opens the
-            // chat there's a ~1-2s cold-load delay, but the
-            // rest of the system gets its memory back
-            // immediately, which removes the "Apollo turned
-            // my computer slow" feeling.
+            // RAM relief — unload the embedded model the moment the
+            // chat closes instead of holding ~5 GB for 5 min.
             .onChange(of: showAIChat) { _, isOpen in
                 if !isOpen {
                     Task.detached(priority: .background) {
@@ -1207,33 +1140,8 @@ struct ContentView: View {
                 }
             }
 
-            glassDivider
-
-            // ── Sync + Settings circles ───────────────────────────────────
-            SyncButton(status: appState.syncStatus) {
-                Task { await appState.sync() }
-            }
-            .keyboardShortcut("r", modifiers: .command)
-
-            // Bell + sync-status pill — clicking opens the Notifications
-            // Center popover. New notifications momentarily expand the
-            // capsule leftward into the BellPill (Dynamic Island style).
-            // The sync-status dot lives inside the same pill, label-less,
-            // so the toolbar stays compact.
+            // 🔔 — notifications; cinnabar count badge (prototype)
             Button {
-                // Snapshot the cursor at click time so the popup
-                // grows out of the exact pixel the user pressed
-                // (and shrinks back into it on close).
-                //
-                // PERF: previously read from a `cursorPosition`
-                // @State updated on every mouse move via
-                // `onContinuousHover` — that was forcing
-                // ContentView's body to re-evaluate hundreds of
-                // times per second whenever the cursor traveled
-                // over the window. Now we read NSEvent's mouse
-                // location ONCE at click time via
-                // `MouseOriginCapture` — same accuracy, zero
-                // per-frame cost.
                 let rect = MouseOriginCapture.currentClickRectInMainWindow()
                 notifsOpenPoint = rect == .zero
                     ? CGPoint(x: notifsOrigin.midX, y: notifsOrigin.midY)
@@ -1242,58 +1150,21 @@ struct ContentView: View {
                     showNotifs.toggle()
                 }
             } label: {
-                HStack(spacing: 7) {
-                    StatusIndicator(status: appState.syncStatus, showLabel: false)
-                    // `.overlay` instead of putting the badge in
-                    // a ZStack so the badge's natural size NEVER
-                    // influences the parent HStack's layout —
-                    // appearing/disappearing the count pill (or
-                    // toggling between "9" and "99") used to
-                    // reflow the toolbar capsule on every sync.
-                    Image(systemName: "bell.fill")
-                        .font(.callout)
-                        .foregroundStyle(.primary)
-                        .overlay(alignment: .topTrailing) {
-                            if appState.unreadNotifications > 0 && bellPillNotif == nil {
-                                Text("\(min(appState.unreadNotifications, 99))")
-                                    .font(.system(size: 9, weight: .heavy))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 4)
-                                    .frame(minWidth: 14, minHeight: 14)
-                                    .background(Color.red, in: Capsule())
-                                    .overlay(Capsule().strokeBorder(.background, lineWidth: 1))
-                                    .offset(x: 7, y: -7)
-                            }
+                Image(systemName: "bell")
+                    .font(.system(size: 15, weight: .regular))
+                    .overlay(alignment: .topTrailing) {
+                        if appState.unreadNotifications > 0 {
+                            TBBadge(count: appState.unreadNotifications)
                         }
-                }
-                .padding(.leading, 9)
-                .padding(.trailing, 9)
-                .frame(height: 28)
-                .background(.regularMaterial, in: Capsule())
-                .liquidGlassEdge(Capsule())
+                    }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TBIconButtonStyle())
             .focusEffectDisabled()
             .help("Notificações")
             .captureFrame($notifsOrigin)
-            .overlay(alignment: .trailing) {
-                if let pill = bellPillNotif {
-                    BellPill(notification: pill,
-                             onTap: {
-                                 collapseBellPill()
-                                 showNotifs = true
-                             },
-                             onDismiss: { collapseBellPill() })
-                        .transition(.asymmetric(
-                            insertion: .scale(scale: 0.4, anchor: .trailing)
-                                .combined(with: .opacity),
-                            removal:   .scale(scale: 0.6, anchor: .trailing)
-                                .combined(with: .opacity)
-                        ))
-                        .allowsHitTesting(true)
-                }
-            }
-            .animation(.spring(duration: 0.45, bounce: 0.30), value: bellPillNotif?.id)
+            // The toast is no longer painted over the bell — it
+            // drops in BELOW the head bar (see the top-trailing
+            // overlay in `body`). This handler only feeds it.
             .onChange(of: appState.toastQueue) { _, queue in
                 guard let next = queue.last else { return }
                 bellPillTask?.cancel()
@@ -1305,136 +1176,62 @@ struct ContentView: View {
                 Task { @MainActor in appState.toastQueue.removeAll() }
             }
 
+            // ⚙ — settings
             Button { showSettings = true } label: {
                 Image(systemName: "gear")
-                    .frame(width: 28, height: 28)
-                    .background(.regularMaterial, in: Circle())
-                    .liquidGlassEdge(Circle())
+                    .font(.system(size: 15, weight: .regular))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TBIconButtonStyle())
             .focusEffectDisabled()
             .captureFrame($settingsOrigin)
         }
-        .padding(.leading, 110)  // clear macOS traffic lights + breathing room
+        // Leading clears the native macOS traffic lights with
+        // 10px breathing room after them (was 93 → 103).
+        // Trailing kept tight (12) so the gear sits near the
+        // window edge.
+        .padding(.leading, 103)
         .padding(.trailing, 12)
-        // Width / height are set at the call site
-        // (`toolbar.frame(width: windowGeo.size.width, height: 52)`)
-        // so the toolbar is anchored directly to the GeometryReader's
-        // window size and never reflows in response to the resize
-        // handle being dragged.
-        // No background here — the ZStack in `body` provides the frosted strip
-        // behind, with the soft gradient fade at the bottom edge.
+        // Invisible ⌘R sync trigger. Lives in a zero-impact
+        // BACKGROUND (not as an HStack child) — as a sibling it
+        // inherited the HStack's 26pt spacing, leaving a big
+        // dead gap to the right of the gear.
+        .background(
+            Button { Task { await appState.sync() } } label: { EmptyView() }
+                .buttonStyle(.plain)
+                .opacity(0)
+                .accessibilityHidden(true)
+                .keyboardShortcut("r", modifiers: .command)
+        )
+        .frame(maxHeight: .infinity, alignment: .center)
+        // The chrome IS the rule — a single hairline along the
+        // band's bottom edge, no frosted material.
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+        }
     }
 
     // MARK: - Main content
 
     private var mainContent: some View {
-        // Wrap in a GeometryReader so the task panel width can be
-        // clamped to whatever space is actually left after the
-        // timeline's minimum width. Without this, a stored
-        // `taskPanelWidth` value from a previous (larger) window
-        // size lets the panel push past the window's right edge
-        // when the user shrinks the window — task rows get clipped
-        // mid-pill against the trailing border.
+        // EditorialMainV2: a clean proportional split —
+        // `gridTemplateColumns: '1fr 1.05fr'` (timeline | tasks)
+        // with a single hairline rule between. No resizable
+        // handle, no edge-fade masks (those were Liquid-Glass
+        // affordances); the redesign is a fixed two-column
+        // spread that scales with the window.
         GeometryReader { geo in
-            let timelineMin:  CGFloat = 280
-            let handleWidth:  CGFloat = 8
-            // Largest task-panel width the current container can
-            // afford while still leaving room for the timeline at
-            // its minimum.
-            // Floor: design min. Ceiling: SMALLER of design max
-            // (keeps the panel readable) and what fits in the
-            // current window after timeline + handle. Without
-            // the design max, dragging the resize handle could
-            // grow the panel up to (window - 280 - 8) which on
-            // a 1900pt window is ~1610pt — way past the 720pt
-            // sweet spot the row layout was designed against.
-            let allowedMax = max(
-                Self.minTaskPanelWidth,
-                min(Self.maxTaskPanelWidth,
-                    geo.size.width - handleWidth - timelineMin)
-            )
-            let effectiveTaskWidth = min(taskPanelWidth, allowedMax)
-
+            let total     = max(1, geo.size.width)
+            let timelineW = (total - 1) * (1.0 / 2.05)
             HStack(spacing: 0) {
-                // 60-day scrollable timeline; reads events directly from AppState
-                // for the entire ±30-day range fetched on sync.
                 TimelineView()
-                    .frame(minWidth: timelineMin, maxWidth: .infinity)
-                    // Soft fade on the right edge so event pills that
-                    // overflow horizontally don't get hard-clipped at the
-                    // resizable handle — the last few points fade to
-                    // transparent instead.
-                    .mask(edgeFadeMask(side: .trailing, fade: 16))
-
-                // Resize-handle range tracks the live container so
-                // dragging can never exceed the available space.
-                ResizableHandle(width: $taskPanelWidth,
-                                range: Self.minTaskPanelWidth ... allowedMax)
-
+                    .frame(width: timelineW)
+                Rectangle()
+                    .fill(Editorial.rule)
+                    .frame(width: 1)
                 TaskListView()
-                    // `effectiveTaskWidth` (clamped) instead of the
-                    // raw stored `taskPanelWidth` keeps the panel
-                    // inside the window even if the stored value is
-                    // larger than the current frame allows.
-                    .frame(width: effectiveTaskWidth)
-                    // Mirror fade on the LEFT edge of the task panel.
-                    .mask(edgeFadeMask(side: .leading, fade: 16))
-            }
-            // Keep the persisted preference in sync if the window
-            // shrank below what it originally accommodated — this
-            // way the next window-grow event uses an already-clamped
-            // value instead of springing back to the original.
-            .onChange(of: geo.size.width) { _, _ in
-                if taskPanelWidth > allowedMax {
-                    taskPanelWidth = allowedMax
-                }
-            }
-            // One-time migration: writes the clamped value back
-            // to UserDefaults so the next launch starts within
-            // the design bounds. Earlier builds let the saved
-            // preference grow past `maxTaskPanelWidth` (720),
-            // and that stale value was what made the cards
-            // look "cut" — the panel was eating space the row
-            // layout wasn't designed to fill.
-            .onAppear {
-                let stored = UserDefaults.standard.double(forKey: "dp_taskPanelWidth")
-                if stored > Self.maxTaskPanelWidth || stored < Self.minTaskPanelWidth {
-                    UserDefaults.standard.set(Double(taskPanelWidth),
-                                              forKey: "dp_taskPanelWidth")
-                }
+                    .frame(maxWidth: .infinity)
             }
         }
-    }
-
-    /// Returns a linear-gradient mask that fades the given side over
-    /// `fade` points of width. Used to soften the abrupt clip between
-    /// the events and tasks panels — content near the inner edge
-    /// gradually dissolves into transparency instead of being cut.
-    private func edgeFadeMask(side: HorizontalEdge, fade: CGFloat) -> some View {
-        GeometryReader { proxy in
-            let w = proxy.size.width
-            let cutoff = max(0, (w - fade) / max(w, 1))
-            LinearGradient(
-                stops: side == .trailing
-                    ? [.init(color: .black, location: 0.0),
-                       .init(color: .black, location: cutoff),
-                       .init(color: .clear, location: 1.0)]
-                    : [.init(color: .clear, location: 0.0),
-                       .init(color: .black, location: 1.0 - cutoff),
-                       .init(color: .black, location: 1.0)],
-                startPoint: .leading,
-                endPoint:   .trailing
-            )
-        }
-    }
-
-    // MARK: - Helpers
-
-    private var glassDivider: some View {
-        Rectangle()
-            .fill(.separator.opacity(0.6))
-            .frame(width: 0.5, height: 18)
     }
 
 }
@@ -1605,7 +1402,11 @@ struct FrostedStrip: View {
         // body's first row reads continuously.
         // Single GPU rasterisation, no per-frame backdrop
         // sampling.
-        let bg = Color(NSColor.windowBackgroundColor)
+        // Editorial: the chrome is paper, not a frosted/glass
+        // blur. Solid cream over the toolbar band, then a short
+        // soft fade so content scrolling up dissolves into the
+        // paper instead of hard-clipping under a hairline.
+        let bg = Editorial.paper
         let total = barHeight + fadeExtent
         let solidStop = barHeight / total
         LinearGradient(
@@ -1623,426 +1424,6 @@ struct FrostedStrip: View {
     }
 }
 
-// MARK: - Resizable handle (drag to change task-panel width)
-
-struct ResizableHandle: View {
-    @Binding var width: CGFloat
-    let range: ClosedRange<CGFloat>
-
-    @State private var startWidth: CGFloat?
-    @State private var hovering    = false
-
-    var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(.separator.opacity(hovering ? 1.0 : 0.5))
-                .frame(width: hovering ? 1.5 : 0.5)
-        }
-        .frame(width: 8)
-        .contentShape(Rectangle())
-        .onHover { isOver in
-            hovering = isOver
-            if isOver { NSCursor.resizeLeftRight.push() }
-            else      { NSCursor.pop() }
-        }
-        .gesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                .onChanged { value in
-                    if startWidth == nil { startWidth = width }
-                    let proposed = (startWidth ?? width) - value.translation.width
-                    width = min(max(proposed, range.lowerBound), range.upperBound)
-                }
-                .onEnded { _ in
-                    startWidth = nil
-                    UserDefaults.standard.set(Double(width), forKey: "dp_taskPanelWidth")
-                }
-        )
-    }
-}
-
-// MARK: - Helpers
-
-private extension CGFloat {
-    func nonZeroOr(_ fallback: CGFloat) -> CGFloat { self == 0 ? fallback : self }
-}
-
-// MARK: - Apollo IA toolbar button (Apple Intelligence-inspired)
-
-/// Sparkle button with a continuously living halo of coloured
-/// light around it — inspired by the Apple Intelligence
-/// activation glow on iOS 18 / macOS 26. Two slowly rotating
-/// conic gradients (different speeds, different hue offsets)
-/// sit behind the button; on hover the halo brightens and
-/// scales out a touch; on click a quick "ignite" pulse fires
-/// the halo to peak intensity, then settles back to its
-/// continuous breathing loop.
-///
-/// `isActive` flips on while the chat popover is showing, so
-/// the halo locks at peak intensity for the duration of the
-/// session — same visual cue Siri uses to signal "I'm
-/// listening".
-struct ApolloIAOrbButton: View {
-    let isActive: Bool
-    let action: () -> Void
-
-    /// Two independent rotation phases so the conic gradients
-    /// drift at different speeds — composition never repeats
-    /// to the same frame, keeping the halo feeling alive.
-    @State private var phaseA: Double = 0
-    @State private var phaseB: Double = 0
-
-    /// Soft breathing scale for the halo ring.
-    @State private var breathe: Bool = false
-
-    @State private var isHovered: Bool = false
-    @State private var isIgniting: Bool = false
-
-    var body: some View {
-        // The halo lives OUTSIDE the Button so its 160pt
-        // ambient glow doesn't expand the button's hit area.
-        // The Button's clickable surface (and the cursor's
-        // hover region) stays exactly the size of the 28pt
-        // sparkle pill — same as the original toolbar button —
-        // while the halo is free to bleed visually wherever it
-        // wants. SwiftUI lets children draw past their parent's
-        // frame; we just lock the parent to 28pt so the layout
-        // slot, hit-test bounds, and hover region all match.
-        ZStack {
-            halo
-            Button(action: { triggerIgnite() }) {
-                core
-            }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-        }
-        .frame(width: 28, height: 28)
-        .contentShape(Circle())            // restrict hit-test to circular core
-        .scaleEffect(scaleValue)
-        .animation(.spring(response: 0.32, dampingFraction: 0.7),
-                   value: isHovered)
-        .animation(.spring(response: 0.30, dampingFraction: 0.55),
-                   value: isIgniting)
-        .onHover { isHovered = $0 }
-        // Orb stays STATIC at rest. Animations only start when
-        // the user engages with the AI surface — saves ~25-30%
-        // sustained GPU on idle. Re-fires whenever any of the
-        // engagement signals flip on.
-        .onAppear {
-            if shouldAnimate { startBreathing() }
-        }
-        .onChange(of: isActive) { _, _ in
-            if shouldAnimate { startBreathing() } else { stopBreathing() }
-        }
-        .onChange(of: isHovered) { _, _ in
-            if shouldAnimate { startBreathing() } else { stopBreathing() }
-        }
-    }
-
-    // MARK: Halo
-
-    /// Multi-layer aurora. The core ring (two stacked conic
-    /// gradients drifting in opposite directions) lives close
-    /// to the button's edge for definition; an outer "ambient"
-    /// halo extends much further with a wide gaussian blur and
-    /// very low opacity, so the colour bleeds softly into the
-    /// surrounding interface instead of stopping at a hard
-    /// boundary. Both layers ramp visibility with hover /
-    /// active / ignite — the outer halo ramps a touch more
-    /// aggressively so peaks visibly "spread out" further.
-    private var halo: some View {
-        ZStack {
-            // ── Outer ambient halo ───────────────────────────
-            // Very wide, very blurred, very faint. Painted as
-            // a soft radial wash that fades to clear far past
-            // the button's edge — this is what gives the
-            // sparkle button a sense of "presence" radiating
-            // through the toolbar instead of stopping at a
-            // crisp ring.
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color.accentColor.opacity(0.55),
-                            Color(hex: "#A875FF").opacity(0.30),
-                            Color(hex: "#FF8A4C").opacity(0.15),
-                            .clear
-                        ],
-                        center: .center,
-                        startRadius: 4,
-                        endRadius: 80
-                    )
-                )
-                // PERF: blur radius cut 16→10. Each blur pass is
-                // a separate offscreen render — at 16pt the
-                // backing buffer is huge and cheap to scale up
-                // visually but expensive to maintain.
-                .frame(width: 140, height: 140)
-                .blur(radius: 10)
-                .opacity(ambientOpacity)
-                .scaleEffect(ambientScale)
-
-            // Outer secondary aurora — slowly hue-rotating to
-            // shift colour cast over time.
-            //
-            // PERF: blur 26→14, frame 120→100. The previous
-            // 26pt blur on a 120pt circle was the single
-            // heaviest layer in the orb (forced a ~150x150
-            // offscreen buffer redrawn every frame).
-            Circle()
-                .fill(
-                    AngularGradient(
-                        colors: [
-                            Color(hex: "#5AC8FA").opacity(0.55),
-                            Color(hex: "#A875FF").opacity(0.55),
-                            Color(hex: "#FF5E8A").opacity(0.55),
-                            Color(hex: "#FF8A4C").opacity(0.55),
-                            Color(hex: "#5AC8FA").opacity(0.55)
-                        ],
-                        center: .center,
-                        angle: .degrees(phaseA)
-                    )
-                )
-                .frame(width: 100, height: 100)
-                .blur(radius: 14)
-                .opacity(ambientOpacity * 0.85)
-
-            // ── Inner aurora ring ────────────────────────────
-            // Two angular gradients drifting in opposite
-            // directions — gives the close-edge halo its
-            // shimmering "alive" quality.
-            ZStack {
-                Circle()
-                    .fill(
-                        AngularGradient(
-                            colors: [
-                                Color(hex: "#5AC8FA"),
-                                Color(hex: "#A875FF"),
-                                Color(hex: "#FF5E8A"),
-                                Color(hex: "#FF8A4C"),
-                                Color(hex: "#5AC8FA")
-                            ],
-                            center: .center,
-                            angle: .degrees(phaseA)
-                        )
-                    )
-                    .blur(radius: 8)
-                    .frame(width: 50, height: 50)
-
-                Circle()
-                    .fill(
-                        AngularGradient(
-                            colors: [
-                                Color(hex: "#FF8A4C"),
-                                Color.accentColor,
-                                Color(hex: "#A875FF"),
-                                Color(hex: "#5AC8FA"),
-                                Color(hex: "#FF8A4C")
-                            ],
-                            center: .center,
-                            angle: .degrees(-phaseB)
-                        )
-                    )
-                    .blur(radius: 10)
-                    .frame(width: 56, height: 56)
-                    .opacity(0.8)
-            }
-            .compositingGroup()
-            // Soft feathered ring mask — wider than before
-            // (18pt vs 14pt) and more blur so the inner edge
-            // melts into the core button.
-            .mask(
-                Circle()
-                    .strokeBorder(Color.white, lineWidth: 18)
-                    .frame(width: haloDiameter, height: haloDiameter)
-                    .blur(radius: 6)
-            )
-            .opacity(haloOpacity)
-            .scaleEffect(haloScale)
-        }
-        // (Previously experimented with `.drawingGroup()` here
-        // to cache the blurred halo. Reverted: this view sits
-        // in the toolbar and is *always* mounted, so the
-        // offscreen Metal texture allocated by drawingGroup
-        // stays held indefinitely — and because the rotation
-        // is driven by `phaseA`/`phaseB` parameters of an
-        // AngularGradient (not a transform on a static
-        // texture), the cache would have been invalidated
-        // every frame anyway when the orb was actively
-        // breathing. Net effect was a permanent GPU resource
-        // hold for negligible draw savings, leaving the whole
-        // app sluggish after the AI chat closed.)
-        .animation(.easeInOut(duration: 2.4)
-                    .repeatForever(autoreverses: true),
-                   value: breathe)
-        .animation(.spring(response: 0.4, dampingFraction: 0.75),
-                   value: isHovered)
-        .animation(.spring(response: 0.30, dampingFraction: 0.55),
-                   value: isIgniting)
-        .animation(.spring(response: 0.5, dampingFraction: 0.78),
-                   value: isActive)
-        .allowsHitTesting(false)
-    }
-
-    /// The actual sparkle pill, untouched in style so the
-    /// button keeps its place in the toolbar's visual rhythm.
-    private var core: some View {
-        Image(systemName: "sparkles")
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(
-                LinearGradient(
-                    colors: [Color.accentColor, Color(hex: "#FF8A4C")],
-                    startPoint: .topLeading,
-                    endPoint:   .bottomTrailing
-                )
-            )
-            .frame(width: 28, height: 28)
-            .background(.regularMaterial, in: Circle())
-            .liquidGlassEdge(Circle())
-            // Coloured drop shadow that intensifies in sync with
-            // the halo so the button feels like it's emitting
-            // the light, not just sitting behind it.
-            .shadow(color: Color.accentColor.opacity(coreShadowOpacity),
-                    radius: coreShadowRadius, x: 0, y: 0)
-    }
-
-    // MARK: Curves
-
-    private var haloDiameter: CGFloat {
-        if isIgniting { return 56 }
-        if isActive   { return 50 }
-        if isHovered  { return 48 }
-        return breathe ? 44 : 40
-    }
-
-    private var haloOpacity: Double {
-        if isIgniting { return 1.0 }
-        if isActive   { return 0.95 }
-        if isHovered  { return 0.85 }
-        return breathe ? 0.55 : 0.35
-    }
-
-    private var haloScale: CGFloat {
-        if isIgniting { return 1.18 }
-        if isActive   { return 1.08 }
-        if isHovered  { return 1.05 }
-        return 1
-    }
-
-    /// Outer ambient halo opacity — same shape of curve as the
-    /// inner halo but ramped a touch lower at rest so the
-    /// ambient bleed stays subtle, with a steeper jump on
-    /// hover/active/ignite so peaks visibly spread further.
-    private var ambientOpacity: Double {
-        if isIgniting { return 0.95 }
-        if isActive   { return 0.80 }
-        if isHovered  { return 0.65 }
-        return breathe ? 0.40 : 0.25
-    }
-
-    /// The outer ambient halo expands more aggressively than
-    /// the inner ring so peaks read as "the light spread out"
-    /// across the surrounding interface.
-    private var ambientScale: CGFloat {
-        if isIgniting { return 1.30 }
-        if isActive   { return 1.15 }
-        if isHovered  { return 1.10 }
-        return breathe ? 1.04 : 0.96
-    }
-
-    private var scaleValue: CGFloat {
-        if isIgniting { return 1.10 }
-        if isHovered  { return 1.04 }
-        return 1
-    }
-
-    private var coreShadowOpacity: Double {
-        if isIgniting { return 0.65 }
-        if isActive   { return 0.55 }
-        if isHovered  { return 0.40 }
-        return 0.18
-    }
-
-    private var coreShadowRadius: CGFloat {
-        if isIgniting { return 16 }
-        if isActive   { return 12 }
-        if isHovered  { return 10 }
-        return 6
-    }
-
-    // MARK: Choreography
-
-    /// Kicks off the continuous loops — both rotation phases at
-    /// independent speeds so the halo never lines up to the
-    /// same frame, plus the slow breathing pulse.
-    ///
-    /// PERF: only run these when the orb is actively engaged
-    /// (chat open, hovered, or igniting). At rest the orb is a
-    /// frozen-frame composite — no per-frame GPU work, no
-    /// system-wide FPS hit. Two angular gradients + four blur
-    /// passes + compositing group running 24/7 in the toolbar
-    /// were measured at ~30% sustained GPU on Apple Silicon
-    /// laptops, which is why other apps' scroll FPS dropped
-    /// while Apollo was open.
-    private func startBreathing() {
-        guard shouldAnimate else {
-            // Force-stop any pre-existing animations so the
-            // orb settles into its static frame.
-            phaseA = 0
-            phaseB = 0
-            breathe = false
-            return
-        }
-        withAnimation(.linear(duration: 7.5)
-                        .repeatForever(autoreverses: false)) {
-            phaseA = 360
-        }
-        withAnimation(.linear(duration: 11.0)
-                        .repeatForever(autoreverses: false)) {
-            phaseB = 360
-        }
-        breathe = true
-    }
-
-    /// Stops the continuous loops by snapping the animatable
-    /// state to its current value with `withAnimation(nil)` —
-    /// SwiftUI sees the new "target" matches the current value
-    /// and discontinues the repeat.
-    private func stopBreathing() {
-        withAnimation(.linear(duration: 0)) {
-            // Set to current value so SwiftUI cancels in-flight
-            // tween; the gradients freeze where they are.
-        }
-        breathe = false
-    }
-
-    /// True iff the orb should be animating right now.
-    /// PERF: removed `isActive` from the trigger set. With the
-    /// chat panel open the orb's breathing/blur loop runs
-    /// indefinitely, layering its 60Hz redraws on top of the
-    /// already-expensive `IntelligenceEdgeGlow`. Now the
-    /// ambient chat-open state lets the orb sit STATIC
-    /// (still rendered, just not animating); hover and the
-    /// brief ignite pulse still drive the animation, so the
-    /// affordances the user actively interacts with stay
-    /// alive while idle cost goes to zero.
-    private var shouldAnimate: Bool {
-        isHovered || isIgniting
-    }
-
-    /// Briefly spikes the halo to peak intensity (`isIgniting`)
-    /// for ~0.45s, then lets it settle back to its rest /
-    /// hover / active baseline. Always fires `action()` first
-    /// so the popover open is instant — the visual ignite is
-    /// purely cosmetic and runs in parallel.
-    private func triggerIgnite() {
-        action()
-        isIgniting = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-            isIgniting = false
-        }
-    }
-}
-
 // MARK: - Apple Intelligence-style edge glow
 
 /// Neon glow that hugs the window perimeter with a continuously
@@ -2057,6 +1438,20 @@ struct ApolloIAOrbButton: View {
 /// painting on. Two stacked layers (a sharper inner ring + a
 /// softer outer halo) give the bloom depth without resorting to
 /// a Metal shader.
+/// Animatable Gaussian-blur modifier so a `.modifier` transition
+/// can interpolate the radius — used for the AI window's
+/// blur-in / blur-out entrance & exit.
+private struct BlurModifier: ViewModifier, Animatable {
+    var radius: CGFloat
+    var animatableData: CGFloat {
+        get { radius }
+        set { radius = newValue }
+    }
+    func body(content: Content) -> some View {
+        content.blur(radius: max(0, radius))
+    }
+}
+
 private struct IntelligenceEdgeGlow: View {
     /// Drives the iPhone-Apple-Intelligence-style activation
     /// animation. 0 = pre-appear (invisible). 1 = settled

@@ -251,6 +251,25 @@ private enum RowFillCache {
     static func store(_ key: Key, color: Color) { storage[key] = color }
 }
 
+extension Color {
+    /// "Editorial Calm" densify/desaturate: returns a deeper,
+    /// muted version of any colour so arbitrary ClickUp hues
+    /// (tags, API-supplied statuses) sit coherently next to the
+    /// warm cream/ink palette and the cinnabar accent — never
+    /// the raw vivid web colour. HSB: saturation capped and cut
+    /// (~×0.62), brightness slightly deepened with a floor so
+    /// already-dark hues don't collapse. Hue is preserved so the
+    /// colour stays semantically recognisable.
+    var editorialMuted: Color {
+        let base = NSColor(self).usingColorSpace(.sRGB) ?? .gray
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        base.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+        let ns = min(s, 0.70) * 0.62
+        let nb = max(0.34, min(b, 0.62))
+        return Color(NSColor(hue: h, saturation: ns, brightness: nb, alpha: 1))
+    }
+}
+
 extension NSColor {
     var hexString: String {
         guard let rgb = usingColorSpace(.sRGB) else { return "#4285F4" }

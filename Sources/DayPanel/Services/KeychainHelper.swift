@@ -198,6 +198,11 @@ enum KeychainHelper {
         static let clickupUserName    = "dp_clickup_user_name"
         static let clickupUserId      = "dp_clickup_user_id"   // numeric, stored as string
         static let clickupWorkspace   = "dp_clickup_workspace"
+        /// ClickUp team / workspace numeric id (stored as a
+        /// string). Needed for the cross-list "My Work" query
+        /// (`GET /team/{id}/task?assignees[]=…`). Captured at
+        /// connect time alongside the workspace name.
+        static let clickupWorkspaceId = "dp_clickup_workspace_id"
         /// Google AI Studio (Gemini) API key. Used by the in-app
         /// AI agent to call models like `gemini-2.0-flash`.
         static let geminiApiKey       = "dp_gemini_api_key"

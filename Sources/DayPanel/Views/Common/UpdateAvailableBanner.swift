@@ -36,59 +36,64 @@ struct UpdateAvailableBanner: View {
 
     @ViewBuilder
     private func bannerBody(for update: AvailableUpdate) -> some View {
+        // Prototype `PUpdateBanner`: ink surface, cream type, a
+        // single cinnabar dot, and a page-on-ink "Atualizar"
+        // button. No glass.
         HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.18))
-                    .frame(width: 28, height: 28)
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Color.accentColor)
-            }
+            Circle()
+                .fill(Editorial.accent)
+                .frame(width: 6, height: 6)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Apollo \(update.version) disponível")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text(secondaryLine(for: update))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
+            (Text("Apollo ")
+                .font(Editorial.serif(14).italic())
+             + Text(update.version)
+                .font(Editorial.serif(14, .medium))
+             + Text(" disponível")
+                .font(Editorial.serif(14).italic()))
+                .foregroundStyle(Editorial.page)
+
+            Text(secondaryLine(for: update))
+                .font(Editorial.sans(11.5))
+                .foregroundStyle(Editorial.page.opacity(0.5))
+                .lineLimit(1)
 
             Spacer(minLength: 12)
 
-            Button("Atualizar") {
+            Button {
                 updateService.presentUpdateUI()
+            } label: {
+                Text("Atualizar")
+                    .font(Editorial.sans(12, .semibold))
+                    .foregroundStyle(Editorial.ink)
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(Editorial.page))
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
             .keyboardShortcut(.return, modifiers: [])
 
             Button {
                 updateService.dismissBanner()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.secondary.opacity(0.75))
-                    .padding(6)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Editorial.page.opacity(0.6))
+                    .padding(4)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Dispensar até a próxima verificação")
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 6)
-        .padding(.vertical, 8)
+        .padding(.leading, 16)
+        .padding(.trailing, 10)
+        .padding(.vertical, 9)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.ultraThinMaterial)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Editorial.ink)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.18), radius: 14, y: 4)
-        .frame(maxWidth: 360)
+        .shadow(color: .black.opacity(0.22), radius: 18, y: 6)
+        .frame(maxWidth: 420)
     }
 
     /// Secondary line — friendly relative date if we have a

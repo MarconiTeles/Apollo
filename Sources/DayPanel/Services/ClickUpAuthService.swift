@@ -112,6 +112,11 @@ final class ClickUpAuthService: ObservableObject {
            let first = teams.first,
            let name  = first["name"] as? String {
             wsName = name
+            // Capture the team/workspace id too — the cross-list
+            // "Meu trabalho" query needs it.
+            if let wsId = first["id"] as? String {
+                KeychainHelper.save(wsId, for: KeychainHelper.Keys.clickupWorkspaceId)
+            }
         } else {
             wsName = "Workspace"
         }

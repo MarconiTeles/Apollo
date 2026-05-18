@@ -269,7 +269,14 @@ struct TaskCollectionView: NSViewRepresentable {
                                 at: [IndexPath(item: off, section: 0)])
                         }
                     }
-                }, completionHandler: nil)
+                }, completionHandler: { [weak self] _ in
+                    // Surviving parent cells aren't re-bound by
+                    // the batch update — refresh them so a row
+                    // just expanded/collapsed re-evaluates its
+                    // `bottomRule` (no line between a mother task
+                    // and its first subtask).
+                    self?.rebindVisibleParentCells()
+                })
 
                 // Stagger the implicit slide of surviving
                 // cells. `cv.animator().performBatchUpdates`
@@ -495,7 +502,27 @@ struct TaskCollectionView: NSViewRepresentable {
                 } else if let subtaskCell = cv.item(at: indexPath) as? SubtaskCellItem {
                     subtaskCell.bind(task: row.task,
                                      appState: appState,
-                                     depth: row.depth)
+                                     depth: row.depth,
+                                     isLast: row.isLastInSubtree)
+                }
+            }
+        }
+
+        /// Re-configure ONLY the visible top-level cells.
+        /// The expand/collapse path inserts/removes subtask
+        /// cells but never re-binds the surviving PARENT cell,
+        /// so a parent toggled open kept the `bottomRule`
+        /// visibility it had while collapsed (the hairline
+        /// between a mother task and its first subtask never
+        /// disappeared). Re-configuring just the parents after
+        /// the batch settles re-evaluates that rule without
+        /// touching the in-flight subtask cascade animations.
+        private func rebindVisibleParentCells() {
+            guard let cv = collection else { return }
+            for indexPath in cv.indexPathsForVisibleItems()
+            where indexPath.item < items.count {
+                if let parentCell = cv.item(at: indexPath) as? TaskRowCellItem {
+                    configure(cell: parentCell, with: items[indexPath.item])
                 }
             }
         }
@@ -611,7 +638,8 @@ struct TaskCollectionView: NSViewRepresentable {
                 ) as! SubtaskCellItem
                 item.bind(task: row.task,
                           appState: appState,
-                          depth: row.depth)
+                          depth: row.depth,
+                          isLast: row.isLastInSubtree)
                 return item
             } else {
                 let item = collectionView.makeItem(
@@ -694,10 +722,33 @@ final class SubtaskCellItem: NSCollectionViewItem {
     private var hosting: NSHostingView<SubtaskRow>?
     private var leadingConstraint: NSLayoutConstraint?
 
+    /// Closes an expanded subtree off from the next mother task
+    /// — shown ONLY on the last subtask of a group (there are no
+    /// rules between subtasks). Inset 12pt each side to line up
+    /// with the top-level row separators.
+    private let bottomRule: NSView = {
+        let v = NSView()
+        v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor(Editorial.rule).cgColor
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.isHidden = true
+        return v
+    }()
+
     override func loadView() {
         view = NSView()
         view.wantsLayer = true
         view.layer?.backgroundColor = .clear
+
+        view.addSubview(bottomRule)
+        NSLayoutConstraint.activate([
+            bottomRule.leadingAnchor.constraint(
+                equalTo: view.leadingAnchor, constant: 12),
+            bottomRule.trailingAnchor.constraint(
+                equalTo: view.trailingAnchor, constant: -12),
+            bottomRule.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            bottomRule.heightAnchor.constraint(equalToConstant: 1),
+        ])
     }
 
     override func prepareForReuse() {
@@ -715,17 +766,27 @@ final class SubtaskCellItem: NSCollectionViewItem {
         // invisible).
         view.layer?.removeAllAnimations()
         view.layer?.opacity = 1
+        bottomRule.isHidden = true
     }
 
-    func bind(task: CUTask, appState: AppState, depth: Int) {
+    func bind(task: CUTask, appState: AppState, depth: Int,
+              isLast: Bool = false) {
+        bottomRule.isHidden = !isLast
         hosting?.removeFromSuperview()
         let host = NSHostingView(rootView: SubtaskRow(task: task,
                                                       appState: appState))
         host.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(host)
+        // Parent task content is inset 26 (card leading 12 +
+        // `leadingPad` 14). The subtask DONE button sits at that
+        // 26 + a 14pt left padding (= 40); deeper levels still
+        // nest +16. The trailing is matched to the parent's
+        // right content inset (26) so the subtask date ends the
+        // same distance from the window edge as a top-level
+        // task's last item.
         let leading = host.leadingAnchor.constraint(
             equalTo: view.leadingAnchor,
-            constant: 12 + CGFloat(max(0, depth - 1)) * 16)
+            constant: 40 + CGFloat(max(0, depth - 1)) * 16)
         let pad = SubtaskCellItem.halfGap
         NSLayoutConstraint.activate([
             host.topAnchor.constraint(equalTo: view.topAnchor,
@@ -734,7 +795,7 @@ final class SubtaskCellItem: NSCollectionViewItem {
                                           constant: -pad),
             leading,
             host.trailingAnchor.constraint(equalTo: view.trailingAnchor,
-                                            constant: -12),
+                                            constant: -26),
         ])
         hosting = host
         leadingConstraint = leading

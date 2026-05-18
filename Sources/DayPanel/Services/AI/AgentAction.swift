@@ -25,7 +25,13 @@ enum AgentAction {
         priority: String?,
         due: String?,
         status: String?,
-        assignees: String?
+        assignees: String?,
+        description: String?,
+        start: String?,
+        tags: String?,
+        parent: String?,
+        links: String?,
+        attachments: String?
     )
 
     /// Mark a task complete. `taskRef` is matched against
@@ -55,7 +61,12 @@ enum AgentAction {
         end: String?,
         durationMinutes: String?,
         location: String?,
-        guests: String?
+        guests: String?,
+        notes: String?,
+        meetingURL: String?,
+        color: String?,
+        availability: String?,
+        alarm: String?
     )
 
     /// Delete an event. `eventRef` matches against title
@@ -79,18 +90,44 @@ enum AgentAction {
         durationMinutes: String
     )
 
+    /// Transform an event into a ClickUp task (the event is
+    /// removed; its notes/location/guests fold into the task
+    /// description, due = the event's start).
+    case convertEventToTask(eventRef: String)
+
+    /// Transform a ClickUp task into a calendar event (the task
+    /// is removed). `start`/`durationMinutes` are optional — the
+    /// app falls back to the task's own start/due window.
+    case convertTaskToEvent(taskRef: String,
+                            start: String?,
+                            durationMinutes: String?)
+
     // ── Extended task mutations ────────────────────────────
 
     case updateTaskDue(taskRef: String, due: String?)        // nil/"" clears
     case updateTaskStart(taskRef: String, start: String?)
     case updateTaskTitle(taskRef: String, newTitle: String)
-    case updateTaskDescription(taskRef: String, description: String)
+    /// `description` nil → keep the task's current body (only
+    /// append links / upload files). `links` are appended as
+    /// clickable URLs; `attachments` local paths are uploaded as
+    /// real task attachments, http(s) entries become links.
+    case updateTaskDescription(taskRef: String, description: String?,
+                               links: String?, attachments: String?)
     /// `add` and `remove` are comma-separated names/emails/ids.
     /// Either can be empty; both empty is a no-op.
     case updateTaskAssignees(taskRef: String, add: String?, remove: String?)
     case addTaskTag(taskRef: String, tag: String)
     case removeTaskTag(taskRef: String, tag: String)
-    case addTaskComment(taskRef: String, text: String)
+    /// Post a comment. `text` may be nil when only files are
+    /// sent. `attachments` local paths are uploaded onto the
+    /// comment; http(s) entries are appended to the comment text
+    /// as links.
+    case addTaskComment(taskRef: String, text: String?,
+                        attachments: String?)
+    /// Attach files to an existing task (no comment). Local
+    /// paths upload as real attachments; http(s) URLs are
+    /// recorded as a link comment.
+    case addTaskAttachment(taskRef: String, files: String)
     case createSubtask(parentRef: String, title: String,
                        priority: String?, due: String?, assignees: String?)
     case deleteTask(taskRef: String)

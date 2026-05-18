@@ -1,63 +1,789 @@
 import SwiftUI
 
+// MARK: - Settings (editorial, full-bleed two-pane)
+//
+// SwiftUI port of the prototype `PSettings` (prototype-settings.jsx):
+// a proper settings *surface* — 260pt folio sidebar + content pane,
+// eight numbered sections. Real Apollo controls are wired live; the
+// prototype rows Apollo can't do yet are still rendered (for visual
+// completeness) but tagged with an "em breve" badge and disabled.
+// All pre-existing functional subviews (ClickUp/Google/AI/App auth +
+// Keychain) are re-hosted verbatim so nothing stops working.
+
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.windowSize) private var windowSize
     var onClose: () -> Void = {}
 
-    @State private var showListPicker     = false
+    @State private var showListPicker = false
+    @State private var section: SettingsSection = .integracoes
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
     }
 
-    /// Cap the scrollable section so the whole popup never exceeds
-    /// ~87.5% of the window's height (was 70%; +25% per user
-    /// request) AND never bleeds into the macOS toolbar at the top
-    /// of the window after centering.
-    private var scrollMaxHeight: CGFloat {
-        let h = windowSize.height
-        guard h > 0 else { return 600 }   // sane default before measure (was 480; +25%)
-        let chrome: CGFloat = 70
-        let preferred = max(250, h * 0.875 - chrome)
-        let safeMax   = max(0,   h - 128 - chrome)
-        return min(preferred, safeMax)
+    /// Full-bleed: fills the window minus the prototype's
+    /// `left/right 60 · top/bottom 24` margins, clamped so it stays
+    /// readable on small windows.
+    private var popupSize: CGSize {
+        let w = windowSize.width  > 0 ? windowSize.width  : 1200
+        let h = windowSize.height > 0 ? windowSize.height : 820
+        return CGSize(width:  max(760, w - 120),
+                      height: max(520, h - 56))
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            GlassFormHeader(title: "Configurações", onClose: onClose)
-
-            // Body on a solid surface — header alone reads as
-            // translucent glass.
-            ScrollablePopupContent(maxHeight: scrollMaxHeight) {
-                VStack(spacing: 12) {
-                    // Calendar source = Google only (the
-                    // EventKit `CalendarSection` was removed
-                    // when Apollo dropped EventKit). The
-                    // Google card below is the single
-                    // calendar-connection surface.
-                    GoogleCalendarSection()
-                        .environmentObject(appState)
-                    ClickUpSection(showListPicker: $showListPicker)
-                        .environmentObject(appState)
-                    AISection()
-                        .environmentObject(appState)
-                    AppSection()
-                        .environmentObject(appState)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-            }
-            .background(Color(nsColor: .windowBackgroundColor))
+        HStack(spacing: 0) {
+            sidebar
+            Rectangle().fill(Editorial.rule).frame(width: 1)
+            content
         }
-        // Width bumped from 460 → 621 (+35%) per design tweak.
-        .frame(width: 621)
-        .fixedSize(horizontal: false, vertical: true)
-        .popupGlass(shape)
+        .frame(width: popupSize.width, height: popupSize.height)
+        .background(Editorial.popup, in: shape)
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
+        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
+        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
         .sheet(isPresented: $showListPicker) {
             CUListPickerSheet().environmentObject(appState)
         }
+    }
+
+    // MARK: Sidebar
+
+    private var appVersionString: String {
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+        let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+        return "Apollo · v\(v) (\(b))"
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Folio("Configurações")
+                Caption(appVersionString, size: 12)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.top, 22).padding(.bottom, 16)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Editorial.rule).frame(height: 1)
+            }
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(SettingsSection.allCases) { s in
+                        SetNavItem(item: s, active: s == section) { section = s }
+                    }
+                }
+                .padding(.vertical, 12)
+            }
+
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+            HStack(spacing: 10) {
+                SettingsAvatar(letter: accountInitial, size: 28)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(accountName)
+                        .font(Editorial.serif(13.5))
+                        .foregroundStyle(Editorial.ink)
+                        .lineLimit(1)
+                    Caption(accountSubtitle, size: 11)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+        }
+        .frame(width: 260)
+        .background(Editorial.card)
+    }
+
+    // MARK: Content
+
+    private var content: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                Text(section.folio + ".")
+                    .font(Editorial.serif(15).italic())
+                    .foregroundStyle(Editorial.inkMute)
+                Text(section.label)
+                    .font(Editorial.serif(28))
+                    .foregroundStyle(Editorial.ink)
+                    .tracking(-0.7)
+                Spacer(minLength: 0)
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(Editorial.inkSoft)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 40)
+            .padding(.top, 20).padding(.bottom, 16)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Editorial.rule).frame(height: 1)
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    switch section {
+                    case .conta:        contaSection
+                    case .integracoes:  integracoesSection
+                    case .ia:           iaSection
+                    case .aparencia:    aparenciaSection
+                    case .notificacoes: notificacoesSection
+                    case .atalhos:      atalhosSection
+                    case .avancado:     avancadoSection
+                    case .sobre:        sobreSection
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 40)
+                .padding(.top, 32).padding(.bottom, 40)
+            }
+            .background(Editorial.popup)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    // MARK: Account identity (real)
+
+    private var accountName: String {
+        appState.clickUpAuthService.userName ?? "Você"
+    }
+    private var accountInitial: String {
+        String(accountName.first.map(String.init) ?? "A").uppercased()
+    }
+    private var accountSubtitle: String {
+        appState.googleAuth.connectedEmail
+            ?? appState.clickUpAuthService.workspaceName
+            ?? "Apollo · macOS"
+    }
+
+    // MARK: - Sections
+
+    @ViewBuilder private var contaSection: some View {
+        SetSection(title: "Perfil") {
+            HStack(spacing: 18) {
+                SettingsAvatar(letter: accountInitial, size: 64)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(accountName)
+                        .font(Editorial.serif(22)).foregroundStyle(Editorial.ink)
+                        .tracking(-0.3)
+                    Caption(accountSubtitle + " · macOS · pt-BR", size: 13)
+                }
+                Spacer(minLength: 0)
+                SetButton("Trocar foto", emBreve: true) {}
+            }
+            .padding(.vertical, 8)
+            SetRow(label: "Nome de exibição",
+                   sub: "aparece em comentários e atribuições",
+                   emBreve: true) { SetInput(text: .constant(accountName)) }
+            SetRow(label: "Fuso horário",
+                   sub: "usado para calcular horários e lembretes",
+                   emBreve: true) {
+                SetSelect(selection: .constant("brt"),
+                          options: [("brt", "Brasília — GMT−03:00")])
+            }
+            SetRow(label: "Idioma",
+                   sub: "da interface · não afeta o conteúdo das tarefas",
+                   emBreve: true, divider: false) {
+                SetSelect(selection: .constant("pt"),
+                          options: [("pt", "Português (Brasil)")])
+            }
+        }
+        SetSection(title: "Sessão") {
+            SetRow(label: "Sair do Apollo",
+                   sub: "desconecta ClickUp e Google — você precisará reconectar",
+                   divider: false) {
+                SetButton("Sair", kind: .danger) {
+                    appState.clickUpAuthService.disconnect()
+                    appState.googleAuth.disconnect()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var integracoesSection: some View {
+        SetSection(title: "Serviços conectados") {
+            GoogleCalendarSection().environmentObject(appState)
+                .padding(.vertical, 4)
+            ClickUpSection(showListPicker: $showListPicker)
+                .environmentObject(appState)
+                .padding(.vertical, 4)
+        }
+        SetSection(title: "Disponíveis",
+                   sub: "conecte mais serviços para enriquecer o painel") {
+            SetRow(label: "Gmail",
+                   sub: "criar tarefa a partir do email",
+                   emBreve: true) { SetButton("Conectar", kind: .primary) {} }
+            SetRow(label: "Slack",
+                   sub: "compartilhar tarefas no canal #planejamento",
+                   emBreve: true, divider: false) {
+                SetButton("Conectar", kind: .primary) {}
+            }
+        }
+        SetSection(title: "Sincronização") {
+            SetRow(label: "Frequência",
+                   sub: "com que frequência Apollo busca mudanças nos serviços conectados") {
+                SetSelect(
+                    selection: Binding(
+                        get: { appState.autoSyncInterval },
+                        set: { appState.setAutoSyncInterval($0) }
+                    ),
+                    options: [(0, "Manual"), (5, "A cada 5 min"),
+                              (15, "A cada 15 min"), (30, "A cada 30 min"),
+                              (60, "A cada 1 hora")]
+                )
+            }
+            SetRow(label: "Sincronizar ao despertar",
+                   sub: "quando o Mac volta do sleep",
+                   emBreve: true) { SetToggle(isOn: .constant(true)) }
+            SetRow(label: "Modo offline",
+                   sub: "continuar editando sem internet — sincroniza quando voltar",
+                   emBreve: true, divider: false) { SetToggle(isOn: .constant(true)) }
+        }
+    }
+
+    @ViewBuilder private var iaSection: some View {
+        SetSection(title: "Provedor & modelo") {
+            AISection().environmentObject(appState)
+                .padding(.vertical, 4)
+        }
+        SetSection(title: "Comportamento") {
+            SetRow(label: "Pode executar ações",
+                   sub: "criar tarefa, mudar status, reagendar — sem confirmar a cada ação",
+                   emBreve: true) { SetToggle(isOn: .constant(true)) }
+            SetRow(label: "Sugestões proativas",
+                   sub: "Apollo abre um banner sutil quando notar algo (atraso, conflito, padrão)",
+                   emBreve: true) { SetToggle(isOn: .constant(true)) }
+            SetRow(label: "Voz das respostas",
+                   sub: "como Apollo conversa — afeta tom, não conteúdo",
+                   emBreve: true, divider: false) {
+                SetSelect(selection: .constant("ed"),
+                          options: [("ed", "Editorial — calmo, italic")])
+            }
+        }
+        SetSection(title: "Histórico") {
+            SetRow(label: "Manter histórico de conversas",
+                   sub: "local, no seu Mac · pode ser exportado em Markdown",
+                   emBreve: true) { SetToggle(isOn: .constant(true)) }
+            SetRow(label: "Apagar todo o histórico",
+                   sub: "ação irreversível · não afeta tarefas nem eventos",
+                   emBreve: true, divider: false) {
+                SetButton("Apagar histórico", kind: .danger) {}
+            }
+        }
+    }
+
+    @ViewBuilder private var aparenciaSection: some View {
+        SetSection(title: "Tema", sub: "Apollo é editorial-only por ora") {
+            SetRow(label: "Esquema de cor",
+                   sub: "claro · escuro · seguir o sistema",
+                   emBreve: true) {
+                SetSelect(selection: .constant("light"),
+                          options: [("light", "Claro (Editorial Calm)")])
+            }
+        }
+        SetSection(title: "Tipografia") {
+            SetRow(label: "Fonte do conteúdo",
+                   sub: "serif usada em títulos, descrição e comentários",
+                   emBreve: true) {
+                SetSelect(selection: .constant("ny"),
+                          options: [("ny", "New York (padrão)")])
+            }
+            SetRow(label: "Tamanho base",
+                   sub: "afeta toda a interface proporcionalmente",
+                   emBreve: true) {
+                SetSelect(selection: .constant("100"),
+                          options: [("100", "Normal · 100 %")])
+            }
+            SetRow(label: "Números tabulares",
+                   sub: "todos os dígitos ocupam a mesma largura — facilita comparar datas",
+                   emBreve: true, divider: false) { SetToggle(isOn: .constant(true)) }
+        }
+        SetSection(title: "Janela") {
+            SetRow(label: "Janela sempre por cima",
+                   sub: "útil ao alternar entre Apollo e outros apps",
+                   emBreve: true) { SetToggle(isOn: .constant(false)) }
+            SetRow(label: "Densidade",
+                   sub: "afeta o espaçamento vertical entre itens da lista",
+                   emBreve: true, divider: false) {
+                SetSelect(selection: .constant("conf"),
+                          options: [("conf", "Confortável")])
+            }
+        }
+    }
+
+    @ViewBuilder private var notificacoesSection: some View {
+        SetSection(title: "Canais",
+                   sub: "o sino sempre registra; o resto depende do contexto") {
+            SetRow(label: "Notificações do macOS",
+                   sub: "espelha as notificações do app no Centro de Notificações") {
+                SetToggle(isOn: Binding(
+                    get: { appState.nativeNotificationsEnabled },
+                    set: { appState.setNativeNotificationsEnabled($0) }
+                ))
+            }
+            SetRow(label: "Toast in-app",
+                   sub: "aparece no canto, 4 s, sem chrome — só com Apollo em foco",
+                   emBreve: true) { SetToggle(isOn: .constant(true)) }
+            SetRow(label: "Som",
+                   sub: "audível em qualquer canal",
+                   emBreve: true, divider: false) { SetToggle(isOn: .constant(false)) }
+        }
+        SetSection(title: "Eventos & tarefas") {
+            SetRow(label: "Reunião daqui a X minutos",
+                   sub: "lembrete antes do início",
+                   emBreve: true) {
+                SetSelect(selection: .constant("10"),
+                          options: [("10", "10 min antes")])
+            }
+            SetRow(label: "Tarefa atribuída a mim",
+                   sub: "alguém te coloca como responsável",
+                   emBreve: true) { SetToggle(isOn: .constant(true)) }
+            SetRow(label: "Tarefa vence hoje",
+                   sub: "resumo matinal das 9:00",
+                   emBreve: true, divider: false) { SetToggle(isOn: .constant(true)) }
+        }
+    }
+
+    @ViewBuilder private var atalhosSection: some View {
+        Caption("Atalhos do Apollo. O remapeamento por tecla chega em breve.",
+                size: 13)
+            .padding(.bottom, 22)
+        ForEach(Self.shortcutGroups, id: \.title) { group in
+            SetSection(title: group.title) {
+                ForEach(Array(group.items.enumerated()), id: \.offset) { idx, item in
+                    SetRow(label: item.0,
+                           divider: idx < group.items.count - 1) {
+                        KbdCombo(combo: item.1)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var avancadoSection: some View {
+        SetSection(title: "App") {
+            AppSection().environmentObject(appState)
+                .padding(.vertical, 4)
+            SetRow(label: "Reabrir tutorial",
+                   sub: "passa pelo wizard inicial de novo",
+                   divider: false) {
+                SetButton("Abrir") {
+                    appState.requestOpenOnboarding()
+                    onClose()
+                }
+            }
+        }
+        SetSection(title: "Performance & privacidade") {
+            SetRow(label: "Animações",
+                   sub: "transições de spring, fade in/out de popups",
+                   emBreve: true) { SetToggle(isOn: .constant(true)) }
+            SetRow(label: "Enviar telemetria anônima",
+                   sub: "apenas métricas de crash e performance — sem conteúdo de tarefas",
+                   emBreve: true, divider: false) { SetToggle(isOn: .constant(false)) }
+        }
+        SetSection(title: "Dados") {
+            SetRow(label: "Exportar tudo",
+                   sub: "Markdown + JSON · tarefas, eventos e histórico",
+                   emBreve: true) { SetButton("Exportar", kind: .primary) {} }
+            SetRow(label: "Limpar tudo",
+                   sub: "apaga cache e histórico · não afeta dados no ClickUp ou Calendar",
+                   emBreve: true, divider: false) {
+                SetButton("Limpar dados", kind: .danger) {}
+            }
+        }
+        SetSection(title: "Para desenvolvedores") {
+            SetRow(label: "Modo debug",
+                   sub: "abre o painel de logs",
+                   emBreve: true, divider: false) { SetToggle(isOn: .constant(false)) }
+        }
+    }
+
+    @ViewBuilder private var sobreSection: some View {
+        HStack(spacing: 22) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Editorial.popup)
+                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Editorial.rule, lineWidth: 1))
+                Text("a")
+                    .font(.system(size: 64, weight: .regular, design: .serif))
+                    .italic()
+                    .foregroundStyle(Editorial.accent)
+            }
+            .frame(width: 84, height: 84)
+            VStack(alignment: .leading, spacing: 8) {
+                (Text("Apollo ")
+                    .font(Editorial.serif(32)).foregroundStyle(Editorial.ink)
+                 + Text("— uma agenda que lê")
+                    .font(Editorial.serif(32).italic())
+                    .foregroundStyle(Editorial.inkSoft))
+                    .tracking(-0.8)
+                Caption("versão \(appVersionString)", size: 13)
+            }
+            Spacer(minLength: 0)
+            SetButton("Procurar atualizações", kind: .primary) {
+                NSApp.sendAction(Selector(("checkForUpdates:")), to: nil, from: nil)
+            }
+        }
+        .padding(.bottom, 24)
+        .overlay(alignment: .bottom) { Rectangle().fill(Editorial.rule).frame(height: 1) }
+        .padding(.bottom, 24)
+
+        SetSection(title: "Créditos & licenças") {
+            HStack(alignment: .top, spacing: 28) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Folio("Tecnologia")
+                    Text("SwiftUI · AppKit · Sparkle · Keychain Services")
+                        .font(Editorial.serif(14)).foregroundStyle(Editorial.ink)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Folio("APIs")
+                    Text("ClickUp v2 · Google Calendar v3 · Gemini · OpenAI · Groq")
+                        .font(Editorial.serif(14)).foregroundStyle(Editorial.ink)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        SetSection(title: "Notas") {
+            SetRow(label: "Ver changelog completo",
+                   sub: "histórico de versões e melhorias",
+                   emBreve: true, divider: false) {
+                SetButton("Abrir") {}
+            }
+        }
+    }
+
+    // Real, currently-supported shortcuts (display-only — exactly
+    // as the prototype presents them; remapping is "em breve").
+    private static let shortcutGroups: [(title: String, items: [(String, String)])] = [
+        ("Geral", [
+            ("Buscar / paleta de comandos", "⌘K"),
+            ("Sincronizar agora", "⌘R"),
+            ("Fechar overlay", "Esc"),
+            ("Confirmar / criar", "⌘↩"),
+        ]),
+        ("Tarefa & evento", [
+            ("Concluir / ação primária", "⌘↩"),
+            ("Cancelar formulário", "Esc"),
+        ]),
+    ]
+}
+
+// MARK: - Settings section model
+
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case conta, integracoes, ia, aparencia, notificacoes, atalhos, avancado, sobre
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .conta:        return "Conta"
+        case .integracoes:  return "Integrações"
+        case .ia:           return "Apollo IA"
+        case .aparencia:    return "Aparência"
+        case .notificacoes: return "Notificações"
+        case .atalhos:      return "Atalhos"
+        case .avancado:     return "Avançado"
+        case .sobre:        return "Sobre"
+        }
+    }
+    var folio: String {
+        switch self {
+        case .conta:        return "I"
+        case .integracoes:  return "II"
+        case .ia:           return "III"
+        case .aparencia:    return "IV"
+        case .notificacoes: return "V"
+        case .atalhos:      return "VI"
+        case .avancado:     return "VII"
+        case .sobre:        return "VIII"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .conta:        return "person.crop.circle"
+        case .integracoes:  return "list.bullet"
+        case .ia:           return "sparkles"
+        case .aparencia:    return "sun.max"
+        case .notificacoes: return "bell"
+        case .atalhos:      return "command"
+        case .avancado:     return "gearshape"
+        case .sobre:        return "info.circle"
+        }
+    }
+}
+
+// MARK: - Settings building blocks (prototype Set* components)
+
+private struct SetNavItem: View {
+    let item: SettingsSection
+    let active: Bool
+    let onTap: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                Text(item.folio + ".")
+                    .font(Editorial.serif(11.5).italic())
+                    .foregroundStyle(active ? Editorial.accent : Editorial.inkMute)
+                    .frame(width: 22, alignment: .trailing)
+                Text(item.label)
+                    .font(Editorial.serif(15, active ? .medium : .regular))
+                    .foregroundStyle(Editorial.ink)
+                    .tracking(-0.15)
+                Spacer(minLength: 0)
+                if active {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Editorial.accent)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(active ? Editorial.page
+                               : (hover ? Editorial.ink.opacity(0.04) : Color.clear))
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(active ? Editorial.accent : Color.clear)
+                    .frame(width: 2)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
+    }
+}
+
+private struct SetSection<Content: View>: View {
+    let title: String
+    var sub: String? = nil
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Folio(title)
+                if let sub { Caption("— " + sub, size: 12.5) }
+                Spacer(minLength: 0)
+            }
+            .padding(.bottom, 10)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Editorial.rule).frame(height: 1)
+            }
+            VStack(spacing: 0) { content() }
+                .padding(.top, 4)
+        }
+        .padding(.bottom, 36)
+    }
+}
+
+private struct SetRow<Control: View>: View {
+    let label: String
+    var sub: String? = nil
+    var emBreve: Bool = false
+    var divider: Bool = true
+    @ViewBuilder var control: () -> Control
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 24) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text(label)
+                            .font(Editorial.serif(15))
+                            .foregroundStyle(Editorial.ink)
+                            .tracking(-0.15)
+                        if emBreve { EmBreveBadge() }
+                    }
+                    if let sub {
+                        Caption(sub, size: 12.5)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: 520, alignment: .leading)
+                    }
+                }
+                Spacer(minLength: 0)
+                HStack(spacing: 10) { control() }
+                    .disabled(emBreve)
+                    .opacity(emBreve ? 0.5 : 1)
+            }
+            .padding(.vertical, 16)
+            if divider {
+                Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+            }
+        }
+    }
+}
+
+private struct EmBreveBadge: View {
+    var body: some View {
+        Text("EM BREVE")
+            .font(Editorial.sans(9, .semibold))
+            .tracking(0.8)
+            .foregroundStyle(Editorial.inkMute)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(Editorial.ruleSoft))
+    }
+}
+
+private struct SetToggle: View {
+    @Binding var isOn: Bool
+    var body: some View {
+        Button { isOn.toggle() } label: {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                Capsule()
+                    .fill(isOn ? Editorial.ink : Editorial.rule)
+                    .frame(width: 36, height: 20)
+                Circle()
+                    .fill(Editorial.page)
+                    .frame(width: 16, height: 16)
+                    .padding(2)
+                    .shadow(color: .black.opacity(0.20), radius: 1, y: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .animation(.easeInOut(duration: 0.15), value: isOn)
+    }
+}
+
+private struct SetSelect<T: Hashable>: View {
+    @Binding var selection: T
+    let options: [(value: T, label: String)]
+
+    var body: some View {
+        Menu {
+            ForEach(options, id: \.value) { o in
+                Button(o.label) { selection = o.value }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(options.first { $0.value == selection }?.label ?? "—")
+                    .font(Editorial.sans(12.5))
+                    .foregroundStyle(Editorial.ink)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Editorial.inkMute)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Editorial.page))
+            .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+}
+
+private struct SetButton: View {
+    enum Kind { case normal, primary, danger }
+    let title: String
+    var kind: Kind = .normal
+    var emBreve: Bool = false
+    let action: () -> Void
+
+    init(_ title: String, kind: Kind = .normal,
+         emBreve: Bool = false, action: @escaping () -> Void) {
+        self.title = title; self.kind = kind
+        self.emBreve = emBreve; self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(Editorial.sans(12.5, .medium))
+                .foregroundStyle(fg)
+                .padding(.horizontal, 14).padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(bg))
+                .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .disabled(emBreve)
+        .opacity(emBreve ? 0.5 : 1)
+    }
+
+    private var fg: Color {
+        switch kind {
+        case .primary: return Editorial.page
+        case .danger:  return Editorial.accent
+        case .normal:  return Editorial.ink
+        }
+    }
+    private var bg: Color {
+        kind == .primary ? Editorial.ink : Editorial.page
+    }
+    private var border: Color {
+        switch kind {
+        case .primary: return Editorial.ink
+        case .danger:  return Editorial.accent
+        case .normal:  return Editorial.rule
+        }
+    }
+}
+
+private struct SetInput: View {
+    @Binding var text: String
+    var mono: Bool = false
+    var body: some View {
+        TextField("", text: $text)
+            .textFieldStyle(.plain)
+            .font(mono ? Editorial.mono(12.5) : Editorial.serif(14))
+            .foregroundStyle(Editorial.ink)
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .frame(width: 220)
+            .background(RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Editorial.page))
+            .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1))
+    }
+}
+
+private struct KbdCombo: View {
+    let combo: String
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(combo.enumerated()), id: \.offset) { _, c in
+                Text(String(c))
+                    .font(Editorial.sans(11.5, .medium))
+                    .foregroundStyle(Editorial.ink)
+                    .frame(minWidth: 16)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(Editorial.card))
+        .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .strokeBorder(Editorial.rule, lineWidth: 1))
+    }
+}
+
+private struct SettingsAvatar: View {
+    let letter: String
+    var size: CGFloat
+    var body: some View {
+        ZStack {
+            Circle().fill(Editorial.accent.opacity(0.14))
+            Text(letter)
+                .font(Editorial.serif(size * 0.42, .medium))
+                .foregroundStyle(Editorial.accent)
+        }
+        .frame(width: size, height: size)
+        .overlay(Circle().strokeBorder(Editorial.rule, lineWidth: 1))
     }
 }
 
@@ -107,7 +833,7 @@ private struct ClickUpSection: View {
             GlassFormRow {
                 Image(systemName: "key.viewfinder")
                     .font(.callout)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Editorial.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Cole seu token do ClickUp")
                         .font(.subheadline.weight(.medium))
@@ -355,15 +1081,15 @@ private struct AISection: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .frame(maxWidth: .infinity)
-                    .foregroundStyle(active ? AnyShapeStyle(Color.accentColor)
+                    .foregroundStyle(active ? AnyShapeStyle(Editorial.accent)
                                             : AnyShapeStyle(Color.primary))
                     .background(
-                        active ? Color.accentColor.opacity(0.14) : Color.clear,
+                        active ? Editorial.accent.opacity(0.14) : Color.clear,
                         in: Capsule()
                     )
                     .overlay(
                         Capsule().strokeBorder(
-                            active ? Color.accentColor.opacity(0.40)
+                            active ? Editorial.accent.opacity(0.40)
                                    : Color.primary.opacity(0.10),
                             lineWidth: 0.6
                         )
@@ -456,7 +1182,7 @@ private struct GroqSettingsCard: View {
                                 ? "largecircle.fill.circle"
                                 : "circle")
                                 .foregroundStyle(active
-                                    ? Color.accentColor
+                                    ? Editorial.accent
                                     : Color.secondary)
                             VStack(alignment: .leading, spacing: 1) {
                                 HStack(spacing: 6) {
@@ -477,7 +1203,7 @@ private struct GroqSettingsCard: View {
                         .padding(.vertical, 5)
                         .background(
                             active
-                                ? Color.accentColor.opacity(0.10)
+                                ? Editorial.accent.opacity(0.10)
                                 : Color.clear,
                             in: RoundedRectangle(cornerRadius: 6, style: .continuous)
                         )
@@ -509,7 +1235,7 @@ private struct GroqSettingsCard: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(savedFlash ? Color.green : Color.accentColor, in: Capsule())
+                        .background(savedFlash ? Color.green : Editorial.accent, in: Capsule())
                 }
                 .buttonStyle(.plain).focusEffectDisabled()
 
@@ -571,7 +1297,7 @@ private struct GeminiSettingsCard: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(savedFlash ? Color.green : Color.accentColor, in: Capsule())
+                        .background(savedFlash ? Color.green : Editorial.accent, in: Capsule())
                 }
                 .buttonStyle(.plain).focusEffectDisabled()
 
@@ -638,7 +1364,7 @@ private struct OpenAISettingsCard: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(savedFlash ? Color.green : Color.accentColor, in: Capsule())
+                        .background(savedFlash ? Color.green : Editorial.accent, in: Capsule())
                 }
                 .buttonStyle(.plain).focusEffectDisabled()
 
@@ -671,7 +1397,7 @@ private struct OpenAISettingsCard: View {
                                   ? "largecircle.fill.circle"
                                   : "circle")
                                 .foregroundStyle(selectedModelId == opt.id
-                                                 ? Color.accentColor : .secondary)
+                                                 ? Editorial.accent : .secondary)
                                 .font(.callout)
                             VStack(alignment: .leading, spacing: 1) {
                                 HStack(spacing: 6) {
@@ -691,7 +1417,7 @@ private struct OpenAISettingsCard: View {
                         .background(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
                                 .fill(selectedModelId == opt.id
-                                      ? Color.accentColor.opacity(0.10)
+                                      ? Editorial.accent.opacity(0.10)
                                       : Color.primary.opacity(0.04))
                         )
                     }
@@ -777,7 +1503,7 @@ private struct OllamaSettingsCard: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Color.accentColor, in: Capsule())
+                        .background(Editorial.accent, in: Capsule())
                 }
                 .buttonStyle(.plain).focusEffectDisabled()
             }
@@ -932,7 +1658,7 @@ private struct GoogleCalendarSection: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .frame(height: 32)
-                        .background(Color.accentColor, in: Capsule())
+                        .background(Editorial.accent, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
@@ -1037,7 +1763,7 @@ private func accentButton(_ label: String, icon: String, action: @escaping () ->
             .font(.subheadline.weight(.medium))
             .foregroundStyle(Color.white)
             .frame(maxWidth: .infinity, minHeight: 36)
-            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Editorial.accent, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
     .buttonStyle(.plain)
     .focusEffectDisabled()
@@ -1061,6 +1787,12 @@ struct CUListPickerSheet: View {
     /// and pass `nil`, falling back to the system dismiss.
     var onClose: (() -> Void)? = nil
 
+    /// When true, render the toolbar DROPDOWN form: one narrow
+    /// column at a time (Workspace → Space → Lista) with a
+    /// tappable breadcrumb to step back, instead of the wide
+    /// 3-column tree used by Settings / Onboarding.
+    var compact: Bool = false
+
     private func close() {
         if let onClose { onClose() } else { dismiss() }
     }
@@ -1081,8 +1813,20 @@ struct CUListPickerSheet: View {
     @State private var restoringSelection = false
     @State private var error: String?
     @State private var listFilter: String = ""
+    /// Pinned lists, mirrored from `PinnedLists` so the row
+    /// stars + the "Fixadas" section re-render on toggle.
+    @State private var pinned: [PinnedLists.Entry] = PinnedLists.load()
 
     private var svc: ClickUpService { ClickUpService(auth: appState.clickUpAuthService) }
+
+    private func togglePin(_ list: CUList) {
+        PinnedLists.toggle(id: list.id, name: list.name)
+        pinned = PinnedLists.load()
+    }
+
+    private func isPinned(_ id: String) -> Bool {
+        pinned.contains { $0.id == id }
+    }
 
     private var filteredLists: [CUList] {
         let q = listFilter.trimmingCharacters(in: .whitespaces).lowercased()
@@ -1091,23 +1835,110 @@ struct CUListPickerSheet: View {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
+        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
     }
 
     var body: some View {
+        Group {
+            if compact { compactBody } else { wideBody }
+        }
+        // Editorial card chrome — near-neutral popup surface,
+        // hairline border, one soft ambient shadow.
+        .background(Editorial.popup, in: shape)
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
+        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
+        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .task { await loadWorkspaces() }
+    }
+
+    // MARK: - Wide (Settings / Onboarding) layout
+
+    private var wideBody: some View {
         VStack(spacing: 0) {
             header
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+            pinnedStrip
             columnsRow
             errorRow
-            Divider().opacity(0.5)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
             footer
         }
         .frame(width: 700, height: 460)
-        .background(.regularMaterial, in: shape)
-        .clipShape(shape)
-        .overlay(shape.strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.20), radius: 24, x: 0, y: 12)
-        .task { await loadWorkspaces() }
+    }
+
+    // MARK: - Compact (toolbar dropdown) layout
+
+    private var compactBody: some View {
+        VStack(spacing: 0) {
+            header
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+            compactNavBar
+            pinnedStrip
+            compactColumn
+            errorRow
+        }
+        .frame(width: 380, height: 460)
+    }
+
+    /// Step-back breadcrumb. Each crumb is tappable to climb back
+    /// up the Workspace → Space → Lista path. Hidden at root.
+    @ViewBuilder
+    private var compactNavBar: some View {
+        if selectedWorkspace != nil {
+            HStack(spacing: 7) {
+                Button {
+                    selectedWorkspace = nil
+                    selectedSpace     = nil
+                    spaces = []; lists = []
+                } label: {
+                    crumb(selectedWorkspace?.name ?? "Workspace",
+                          icon: "building.2", active: selectedSpace == nil)
+                }
+                .buttonStyle(.plain).focusEffectDisabled()
+
+                if selectedSpace != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(Editorial.inkFaint)
+                    Button {
+                        selectedSpace = nil
+                        lists = []
+                    } label: {
+                        crumb(selectedSpace?.name ?? "Space",
+                              icon: "folder", active: true)
+                    }
+                    .buttonStyle(.plain).focusEffectDisabled()
+                }
+                Spacer(minLength: 0)
+            }
+            .lineLimit(1)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 9)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+            }
+        }
+    }
+
+    private func crumb(_ text: String, icon: String, active: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon).font(.system(size: 9))
+            Text(text).font(Editorial.sans(11.5, .medium)).lineLimit(1)
+        }
+        .foregroundStyle(active ? Editorial.accent : Editorial.inkSoft)
+    }
+
+    /// One column at a time: deepest available level wins.
+    @ViewBuilder
+    private var compactColumn: some View {
+        if selectedSpace != nil {
+            listsColumn
+        } else if selectedWorkspace != nil {
+            spacesColumn
+        } else {
+            workspacesColumn
+        }
     }
 
     private var columnsRow: some View {
@@ -1124,9 +1955,9 @@ struct CUListPickerSheet: View {
     @ViewBuilder
     private var errorRow: some View {
         if let error {
-            Divider().opacity(0.5)
-            GlassWarningRow(error, tint: .red)
-                .padding(.horizontal, 16)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+            GlassWarningRow(error, tint: Editorial.accent)
+                .padding(.horizontal, 20)
                 .padding(.vertical, 8)
         }
     }
@@ -1177,51 +2008,43 @@ struct CUListPickerSheet: View {
     // MARK: - Header & footer
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.15))
-                Image(systemName: "list.bullet.rectangle.portrait.fill")
-                    .foregroundStyle(Color.accentColor)
-                    .font(.title3)
-            }
-            .frame(width: 40, height: 40)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Selecionar Lista")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Text("Escolha onde suas tarefas serão lidas no Apollo.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Folio("Selecionar lista")
+                Caption("onde suas tarefas serão lidas no Apollo", size: 13)
             }
 
-            Spacer()
+            Spacer(minLength: 0)
 
             Button { close() } label: {
                 Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(Editorial.inkSoft)
                     .frame(width: 22, height: 22)
-                    .background(.regularMaterial, in: Circle())
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain).focusEffectDisabled()
+            .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
     }
 
     private var footer: some View {
         HStack(spacing: 10) {
             // Breadcrumb of the current selection
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
                 breadcrumbChip(text: selectedWorkspace?.name ?? "—",
-                               icon: "building.2.fill")
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                               icon: "building.2")
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Editorial.inkFaint)
                 breadcrumbChip(text: selectedSpace?.name ?? "—",
-                               icon: "folder.fill")
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                               icon: "folder")
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Editorial.inkFaint)
                 breadcrumbChip(text: currentListName ?? "—",
                                icon: "list.bullet")
             }
@@ -1232,14 +2055,17 @@ struct CUListPickerSheet: View {
 
             Button { close() } label: {
                 Text("Fechar")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(.regularMaterial, in: Capsule())
+                    .font(Editorial.sans(12.5, .medium))
+                    .foregroundStyle(Editorial.ink)
+                    .padding(.horizontal, 14).padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Editorial.page))
+                    .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(Editorial.rule, lineWidth: 1))
             }
             .buttonStyle(.plain).focusEffectDisabled()
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 20)
         .padding(.vertical, 12)
     }
 
@@ -1249,14 +2075,11 @@ struct CUListPickerSheet: View {
     }
 
     private func breadcrumbChip(text: String, icon: String) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 5) {
             Image(systemName: icon).font(.system(size: 9))
-            Text(text).font(.caption.weight(.medium))
+            Text(text).font(Editorial.sans(11.5, .medium))
         }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.white.opacity(0.10), lineWidth: 0.5))
+        .foregroundStyle(Editorial.inkSoft)
     }
 
     // MARK: - Lists column (with search)
@@ -1268,19 +2091,20 @@ struct CUListPickerSheet: View {
                          count: filteredLists.count)
 
             if selectedSpace != nil && !lists.isEmpty {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
-                        .font(.caption).foregroundStyle(.tertiary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Editorial.inkMute)
                     TextField("Buscar lista", text: $listFilter)
                         .textFieldStyle(.plain)
-                        .font(.caption)
+                        .font(Editorial.serif(13))
+                        .foregroundStyle(Editorial.ink)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(.regularMaterial,
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(.white.opacity(0.10), lineWidth: 0.5))
-                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Editorial.rule).frame(height: 1)
+                }
+                .padding(.horizontal, 12)
                 .padding(.bottom, 6)
             }
 
@@ -1299,10 +2123,7 @@ struct CUListPickerSheet: View {
                         ScrollView {
                             VStack(spacing: 4) {
                                 ForEach(filteredLists) { list in
-                                    row(name: list.name,
-                                        icon: "list.bullet",
-                                        selected: selectedListId == list.id,
-                                        action: { pick(list) })
+                                    listRow(list)
                                         .id(list.id)
                                 }
                             }
@@ -1334,7 +2155,7 @@ struct CUListPickerSheet: View {
     // MARK: - Reusable bits
 
     private var divider: some View {
-        Rectangle().fill(.separator.opacity(0.5)).frame(width: 0.5)
+        Rectangle().fill(Editorial.rule).frame(width: 1)
     }
 
     @ViewBuilder
@@ -1377,76 +2198,57 @@ struct CUListPickerSheet: View {
         }
     }
 
-    private func columnHeader(title: String, icon: String, count: Int) -> some View {
+    private func columnHeader(title: String, icon _: String, count: Int) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
             Text(title.uppercased())
-                .font(.system(size: 10, weight: .heavy))
-                .foregroundStyle(.secondary)
-                .tracking(0.6)
+                .font(Editorial.sans(10, .semibold))
+                .foregroundStyle(Editorial.inkMute)
+                .tracking(1.2)
             if count > 0 {
                 Text("\(count)")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white)
+                    .font(Editorial.sans(9, .bold))
+                    .foregroundStyle(Editorial.inkSoft)
                     .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(.secondary.opacity(0.55), in: Capsule())
+                    .background(Capsule().fill(Editorial.rule))
             }
             Spacer()
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
+        .padding(.horizontal, 14).padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.04))
-        .overlay(Rectangle().fill(.separator.opacity(0.4))
-            .frame(height: 0.5), alignment: .bottom)
+        .background(Editorial.card)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+        }
+    }
+
+    /// List row with a trailing pin/unpin star. The star is a
+    /// separate hit target from the main row body so clicking
+    /// it toggles the pin WITHOUT also selecting the list.
+    private func listRow(_ list: CUList) -> some View {
+        ListPickerRow(
+            name: list.name,
+            icon: "list.bullet",
+            selected: selectedListId == list.id,
+            pinned: isPinned(list.id),
+            onPinToggle: { togglePin(list) },
+            action: { pick(list) }
+        )
     }
 
     private func row(name: String, icon: String, selected: Bool,
                      action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.caption)
-                    .foregroundStyle(selected ? Color.accentColor : .secondary)
-                    .frame(width: 16)
-                Text(name)
-                    .font(.subheadline.weight(selected ? .semibold : .regular))
-                    .foregroundStyle(selected ? .primary : .primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 0)
-                if selected {
-                    Image(systemName: "checkmark")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(selected
-                        ? AnyShapeStyle(Color.accentColor.opacity(0.14))
-                        : AnyShapeStyle(Color.clear),
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(selected ? Color.accentColor.opacity(0.30) : .clear,
-                                  lineWidth: 0.5)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
+        ListPickerRow(name: name, icon: icon, selected: selected,
+                      action: action)
     }
 
     private func emptyHint(icon: String, text: String) -> some View {
         VStack(spacing: 8) {
             Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(.tertiary)
+                .font(.system(size: 18, weight: .regular))
+                .foregroundStyle(Editorial.inkMute)
             Text(text)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .font(Editorial.serif(13).italic())
+                .foregroundStyle(Editorial.inkMute)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1470,11 +2272,80 @@ struct CUListPickerSheet: View {
     }
 
     private func pick(_ list: CUList) {
-        selectedListId = list.id
-        KeychainHelper.save(list.id,   for: KeychainHelper.Keys.clickupListId)
-        KeychainHelper.save(list.name, for: KeychainHelper.Keys.clickupListName)
+        pickById(id: list.id, name: list.name)
+    }
+
+    /// Shared selection path — used by both the tree rows and
+    /// the "Fixadas" quick-pick chips (which only have the
+    /// cached id+name, not a full CUList / its parent space).
+    private func pickById(id: String, name: String) {
+        selectedListId = id
+        KeychainHelper.save(id,   for: KeychainHelper.Keys.clickupListId)
+        KeychainHelper.save(name, for: KeychainHelper.Keys.clickupListName)
+        // Flipping to a specific list implies leaving the
+        // cross-list "Meu trabalho" mode — otherwise picking a
+        // list would appear to do nothing.
+        appState.taskViewMode = .activeList
         Task { await appState.sync() }
         close()
+    }
+
+    /// Quick-pick strip of pinned lists. Renders above the
+    /// workspace/space/list tree so the user's real working
+    /// set is one click away without re-navigating. Hidden
+    /// when nothing is pinned.
+    @ViewBuilder
+    private var pinnedStrip: some View {
+        if !pinned.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 5) {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(Editorial.accent)
+                    Folio("Fixadas")
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(pinned.sorted { $0.name < $1.name }) { entry in
+                            let sel = selectedListId == entry.id
+                            Button {
+                                pickById(id: entry.id, name: entry.name)
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "list.bullet")
+                                        .font(.system(size: 9))
+                                    Text(entry.name)
+                                        .font(Editorial.sans(11.5, .medium))
+                                        .lineLimit(1)
+                                }
+                                .foregroundStyle(sel ? Editorial.accent : Editorial.ink)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(
+                                    Capsule().fill(sel
+                                        ? Editorial.accent.opacity(0.10)
+                                        : Editorial.page)
+                                )
+                                .overlay(
+                                    Capsule().strokeBorder(
+                                        sel ? Editorial.accent : Editorial.rule,
+                                        lineWidth: 1)
+                                )
+                                .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .focusEffectDisabled()
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 8)
+                }
+                Rectangle().fill(Editorial.rule).frame(height: 1)
+            }
+        }
     }
 
     /// When the picker reopens, walk the workspace → space → list
@@ -1577,5 +2448,76 @@ struct CUListPickerSheet: View {
         } catch {
             await MainActor.run { self.error = error.localizedDescription; loadingLists = false }
         }
+    }
+}
+
+// MARK: - Editorial list-picker row (prototype `PListPicker`)
+
+/// One row in any of the three columns. Editorial: no fill —
+/// the active row reads through a cinnabar glyph + cinnabar
+/// check + serif title (prototype `PListPicker`); a hover wash
+/// gives pointer feedback; rows self-divide with a `ruleSoft`
+/// hairline. `listRow` also passes a pin star (cinnabar when
+/// pinned) on a separate hit target.
+private struct ListPickerRow: View {
+    let name: String
+    let icon: String
+    let selected: Bool
+    var pinned: Bool? = nil
+    var onPinToggle: (() -> Void)? = nil
+    let action: () -> Void
+
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: action) {
+                HStack(spacing: 10) {
+                    Image(systemName: icon)
+                        .font(.system(size: 12))
+                        .foregroundStyle(selected ? Editorial.accent : Editorial.inkSoft)
+                        .frame(width: 16)
+                    Text(name)
+                        .font(Editorial.serif(15))
+                        .foregroundStyle(Editorial.ink)
+                        .tracking(-0.15)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                    if selected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Editorial.accent)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+
+            if let pinned, let onPinToggle {
+                Button(action: onPinToggle) {
+                    Image(systemName: pinned ? "star.fill" : "star")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(pinned ? Editorial.accent : Editorial.inkMute)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help(pinned ? "Desafixar lista" : "Fixar lista pra acesso rápido")
+                .opacity(pinned || hover ? 1 : 0.35)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(hover ? Editorial.ink.opacity(0.04) : Color.clear)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+        }
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
     }
 }

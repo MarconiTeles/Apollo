@@ -336,35 +336,22 @@ struct TaskCommentsSection: View, Equatable {
     // MARK: - Header
 
     private var sectionHeader: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            // Header label tracks ClickUp's own panel
-            // ("Activity" in EN). Comments are still by far
-            // the most-used entry type, but the section also
-            // surfaces uploads, status moves, assignment
-            // changes and so on — calling it "Comentários"
-            // would now under-promise.
-            Text("Atividade")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-            if !timeline.isEmpty {
-                Text("\(timeline.count)")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5).padding(.vertical, 1.5)
-                    .background(Color.secondary.opacity(0.6), in: Capsule())
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            // Editorial: a "Notas · N" folio, like a magazine
+            // section opener — no icon, no filled count badge.
+            Text(timeline.isEmpty ? "NOTAS" : "NOTAS · \(timeline.count)")
+                .font(Editorial.sans(10.5, .semibold))
+                .tracking(1.4)
+                .foregroundStyle(Editorial.inkMute)
             Spacer()
             Button {
                 Task { await refresh() }
             } label: {
                 Image(systemName: loading
-                      ? "arrow.triangle.2.circlepath.circle.fill"
+                      ? "arrow.triangle.2.circlepath"
                       : "arrow.clockwise")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Editorial.inkFaint)
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
@@ -386,19 +373,19 @@ struct TaskCommentsSection: View, Equatable {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(c.userName ?? "Sem nome")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .font(Editorial.sans(12.5, .semibold))
+                        .foregroundStyle(Editorial.ink)
                     Text(relative(c.date))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(Editorial.serif(11).italic())
+                        .foregroundStyle(Editorial.inkMute)
                     Spacer(minLength: 0)
                     rowMenu(for: c)
                 }
 
                 if c.text.isEmpty && c.attachments.isEmpty {
                     Text("(vazio)")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(Editorial.serif(13).italic())
+                        .foregroundStyle(Editorial.inkMute)
                 } else {
                     CommentBodyView(text: c.text,
                                     attachments: c.attachments,
@@ -429,11 +416,11 @@ struct TaskCommentsSection: View, Equatable {
                     } label: {
                         HStack(spacing: 3) {
                             Image(systemName: "arrowshape.turn.up.left")
-                                .font(.caption2)
+                                .font(.system(size: 10))
                             Text(c.replyCount > 0 ? "Responder · \(c.replyCount)" : "Responder")
-                                .font(.caption2)
+                                .font(Editorial.sans(11))
                         }
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Editorial.inkSoft)
                     }
                     .buttonStyle(.plain).focusEffectDisabled()
                 }
@@ -443,27 +430,17 @@ struct TaskCommentsSection: View, Equatable {
                     threadView(parentId: c.id)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.leading, 12)
+            .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // PERF: solid tinted background instead of
-            // `.regularMaterial`. Each material allocates a
-            // `CABackdropFilter` that re-blurs whenever
-            // anything beneath it changes (e.g. scrolling
-            // the comment list). With N visible comments,
-            // that's N backdrop filter passes per scroll
-            // frame. The flat tint reads close enough to the
-            // material on a stable popup surface and lets
-            // the comment list scroll without per-frame
-            // GPU blur work.
-            .background(
-                Color.primary.opacity(0.06),
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
-            )
+            // Editorial: a marginal "note" — no card, no
+            // material. A 2pt cinnabar rule on the leading edge
+            // (blockquote feel) instead.
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(Editorial.accent.opacity(0.55))
+                    .frame(width: 2)
+            }
         }
     }
 
@@ -504,16 +481,16 @@ struct TaskCommentsSection: View, Equatable {
                             .font(.system(size: 11))
                         Text("\(r.userIds.count)")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(mine ? Color.accentColor : .secondary)
+                            .foregroundStyle(mine ? Editorial.accent : .secondary)
                     }
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(
-                        mine ? AnyShapeStyle(Color.accentColor.opacity(0.15))
+                        mine ? AnyShapeStyle(Editorial.accent.opacity(0.15))
                              : AnyShapeStyle(Color.secondary.opacity(0.10)),
                         in: Capsule()
                     )
                     .overlay(Capsule().strokeBorder(
-                        mine ? Color.accentColor.opacity(0.45)
+                        mine ? Editorial.accent.opacity(0.45)
                              : Color.secondary.opacity(0.25),
                         lineWidth: 0.5))
                 }
@@ -647,7 +624,7 @@ struct TaskCommentsSection: View, Equatable {
                     .font(.caption)
                     .foregroundStyle(.white)
                     .frame(width: 24, height: 24)
-                    .background(Color.accentColor, in: Circle())
+                    .background(Editorial.accent, in: Circle())
             }
             .buttonStyle(.plain).focusEffectDisabled()
             .disabled(((replyDrafts[parentId] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)).isEmpty)
@@ -726,7 +703,8 @@ struct TaskCommentsSection: View, Equatable {
                 .focused($draftFocused)
                 .focusEffectDisabled()
                 .textFieldStyle(.plain)
-                .font(.caption)
+                .font(Editorial.serif(13))
+                .foregroundStyle(Editorial.ink)
                 .lineLimit(1...8)
                 .padding(.horizontal, 12)
                 .padding(.top, pendingAttachments.isEmpty ? 10 : 8)
@@ -756,20 +734,10 @@ struct TaskCommentsSection: View, Equatable {
                         pickFilesIntoPending()
                     } label: {
                         Image(systemName: "paperclip")
-                            .font(.callout)
-                            .foregroundStyle(Color.accentColor)
-                            .frame(width: 28, height: 28)
-                            .background(
-                                Circle().fill(Color.accentColor.opacity(0.14))
-                            )
-                            .overlay(
-                                Circle().strokeBorder(
-                                    Color.accentColor.opacity(0.28),
-                                    lineWidth: 0.5)
-                            )
-                            .shadow(color: Color.accentColor.opacity(0.40),
-                                    radius: 5, x: 0, y: 1)
-                            .contentShape(Circle())
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Editorial.inkSoft)
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).focusEffectDisabled()
                     .disabled(uploading || posting)
@@ -781,12 +749,12 @@ struct TaskCommentsSection: View, Equatable {
                         Task { await send() }
                     } label: {
                         Image(systemName: posting
-                              ? "ellipsis.circle.fill" : "paperplane.fill")
-                            .font(.callout)
+                              ? "ellipsis" : "paperplane.fill")
+                            .font(.system(size: 13, weight: .regular))
                             .foregroundStyle(canSend
-                                             ? Color.accentColor
-                                             : .secondary.opacity(0.5))
-                            .frame(width: 28, height: 28)
+                                             ? Editorial.accent
+                                             : Editorial.inkFaint)
+                            .frame(width: 24, height: 24)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).focusEffectDisabled()
@@ -796,26 +764,19 @@ struct TaskCommentsSection: View, Equatable {
                 .padding(.horizontal, 6)
                 .padding(.bottom, 4)
             }
+            // Editorial: a paper input — white surface, hairline
+            // rule, near-square corners (prototype composer).
             .background(
-                Color.primary.opacity(0.06),
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                Editorial.page,
+                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
             )
             .overlay(
-                // Accent-tinted border when the editor is focused so
-                // the box clearly enters "active" mode the instant
-                // the user clicks anywhere in it (not only when the
-                // first keystroke registers). The drop-hover state
-                // (`isDropTargeted`) takes precedence visually:
-                // the same ring thickens + brightens so the user
-                // knows the file will land if released.
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .strokeBorder(
-                        isDropTargeted
-                            ? Color.accentColor.opacity(0.85)
-                            : (draftFocused
-                               ? Color.accentColor.opacity(0.55)
-                               : .white.opacity(0.15)),
-                        lineWidth: isDropTargeted ? 1.6 : (draftFocused ? 1.25 : 0.5)
+                        isDropTargeted || draftFocused
+                            ? Editorial.accent.opacity(0.55)
+                            : Editorial.rule,
+                        lineWidth: isDropTargeted ? 1.5 : 1
                     )
             )
             // Accept file drops anywhere on the composer surface.
@@ -904,7 +865,7 @@ struct TaskCommentsSection: View, Equatable {
         case "csv", "xlsx", "xls", "numbers":             return .green
         case "key", "ppt", "pptx":                        return .orange
         case "doc", "docx", "pages":                      return .blue
-        default:                                          return Color.accentColor
+        default:                                          return Editorial.accent
         }
     }
 
@@ -970,7 +931,7 @@ struct TaskCommentsSection: View, Equatable {
         HStack(spacing: 10) {
             Image(systemName: "arrow.up.doc.fill")
                 .font(.callout)
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(Editorial.accent)
                 .frame(width: 22)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -992,7 +953,7 @@ struct TaskCommentsSection: View, Equatable {
                 }
                 ProgressView(value: uploadProgress)
                     .progressViewStyle(.linear)
-                    .tint(Color.accentColor)
+                    .tint(Editorial.accent)
             }
         }
         .padding(.horizontal, 10)
@@ -1042,33 +1003,35 @@ struct TaskCommentsSection: View, Equatable {
                     insertMention(m)
                 } label: {
                     HStack(spacing: 8) {
-                        let bg = m.color.flatMap { Color(hex: $0) } ?? .blue
+                        let bg = (m.color.flatMap { Color(hex: $0) }
+                                  ?? Editorial.inkMute).editorialMuted
                         ZStack {
                             Circle().fill(bg)
                             Text(m.initials ?? String(m.username.prefix(2)).uppercased())
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.white)
+                                .font(Editorial.sans(8, .bold))
+                                .foregroundStyle(Editorial.page)
                         }
                         .frame(width: 18, height: 18)
                         Text("@" + m.username)
-                            .font(.caption.weight(.medium))
+                            .font(Editorial.sans(12, .medium))
+                            .foregroundStyle(Editorial.ink)
                         Spacer()
                     }
-                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).focusEffectDisabled()
                 if m.id != filteredMembers(matching: query).last?.id {
-                    Rectangle().fill(.separator.opacity(0.3)).frame(height: 0.5)
+                    Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
                 }
             }
         }
         .background(
-            Color(NSColor.controlBackgroundColor).opacity(0.95),
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            Editorial.page,
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
         )
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .strokeBorder(Editorial.rule, lineWidth: 1))
         .padding(.leading, 40)
     }
 
@@ -1241,8 +1204,8 @@ struct TaskCommentsSection: View, Equatable {
                     eventSummary(event)
                     Spacer(minLength: 4)
                     Text(relative(event.date))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(Editorial.serif(11).italic())
+                        .foregroundStyle(Editorial.inkMute)
                         .lineLimit(1)
                         .fixedSize()
                 }
@@ -1257,10 +1220,10 @@ struct TaskCommentsSection: View, Equatable {
     /// visually down a single column.
     private func eventIconBubble(_ event: TaskActivityEvent) -> some View {
         ZStack {
-            Circle().fill(Color.secondary.opacity(0.18))
+            Circle().fill(Editorial.ruleSoft)
             Image(systemName: event.iconName)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(Editorial.inkMute)
         }
         .frame(width: 22, height: 22)
     }
@@ -1355,10 +1318,10 @@ struct TaskCommentsSection: View, Equatable {
     /// out as one wrappable line instead of two HStack pieces
     /// that would force-fit on narrow popups.
     private func eventLine(_ actor: String, _ rest: String) -> some View {
-        (Text(actor).font(.caption2.weight(.semibold))
-            .foregroundColor(.primary)
-         + Text(" \(rest)").font(.caption2)
-            .foregroundColor(.secondary))
+        (Text(actor).font(Editorial.sans(12.5, .semibold))
+            .foregroundColor(Editorial.ink)
+         + Text(" \(rest)").font(Editorial.sans(12.5))
+            .foregroundColor(Editorial.inkSoft))
         .lineLimit(2)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -1377,14 +1340,16 @@ struct TaskCommentsSection: View, Equatable {
     /// else in the app (`Color(hex:)` over an opaque capsule
     /// with white uppercase text).
     private func statusChip(_ ref: TaskActivityEvent.StatusRef) -> some View {
-        let color = ref.hex.flatMap { Color(hex: $0) } ?? Color.secondary
-        return Text(ref.name.uppercased())
-            .font(.system(size: 8, weight: .heavy))
-            .tracking(0.4)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1.5)
-            .background(Capsule().fill(color))
+        // Editorial: status as a muted dot + word, never a
+        // white-on-saturated capsule.
+        let color = ref.hex.flatMap { Color(hex: $0).editorialMuted }
+            ?? Editorial.inkMute
+        return HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(ref.name)
+                .font(Editorial.sans(11, .medium))
+                .foregroundStyle(Editorial.inkSoft)
+        }
     }
 
     /// Date formatter used by date-change rows. Lighter than
@@ -1418,45 +1383,52 @@ struct TaskCommentsSection: View, Equatable {
     /// tighter timeline row).
     private func attachmentEventCard(_ att: CUTask.Attachment) -> some View {
         let url = URL(string: att.url) ?? URL(fileURLWithPath: "/")
-        let tint = Color(hex: att.accentHex)
+        // Muted file-type accent — coherent with the global
+        // editorial densify/desaturate rule.
+        let accent = Color(hex: att.accentHex).editorialMuted
         return Button {
             NSWorkspace.shared.open(url)
         } label: {
-            HStack(spacing: 8) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(tint.opacity(0.18))
-                    Image(systemName: att.icon)
-                        .font(.caption)
-                        .foregroundStyle(tint)
-                }
-                .frame(width: 28, height: 32)
+            HStack(alignment: .center, spacing: 12) {
+                // Editorial: a small uppercase file-type tag in
+                // the muted type colour over a faint tint — no
+                // glossy/coloured icon plate.
+                Text(att.ext.isEmpty ? "FILE" : att.ext.uppercased())
+                    .font(Editorial.sans(9, .semibold))
+                    .tracking(0.4)
+                    .foregroundStyle(accent)
+                    .frame(width: 38, height: 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(accent.opacity(0.12)))
 
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(att.title)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(Editorial.serif(13))
+                        .foregroundStyle(Editorial.ink)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                     if let s = att.sizeString, !s.isEmpty {
                         Text(s)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .font(Editorial.sans(10.5))
+                            .foregroundStyle(Editorial.inkMute)
+                            .monospacedDigit()
                     }
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "arrow.up.right.square")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Editorial.inkMute)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.primary.opacity(0.04))
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Editorial.card)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(Editorial.rule, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)

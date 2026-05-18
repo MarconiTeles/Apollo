@@ -39,6 +39,13 @@ final class AppState: ObservableObject {
     /// Built alongside `eventsByDay` in `rebuildEventIndex`.
     @Published private(set) var calendarContacts: [CalendarContact] = []
 
+    /// Google Workspace meeting rooms (resource calendars) seen
+    /// as attendees on loaded events — emails ending in
+    /// `@resource.calendar.google.com`. Powers the LOCAL field's
+    /// room autocomplete so the integration matches Google
+    /// Calendar's own room picker. Built in `rebuildEventIndex`.
+    @Published private(set) var calendarRooms: [CalendarRoom] = []
+
     // MARK: - Shared (overlay) calendars
     //
     // Apollo can surface other people's calendars as ghost
@@ -70,6 +77,19 @@ final class AppState: ObservableObject {
         var id: String { email.lowercased() }
         let name: String
         let email: String
+    }
+    /// A bookable Google Workspace resource (meeting room). The
+    /// `email` is the `@resource.calendar.google.com` address
+    /// that must be added as an attendee for Google to actually
+    /// book the room; `name` is the human label ("3. Sala…").
+    struct CalendarRoom: Identifiable, Hashable {
+        var id: String { email.lowercased() }
+        let name: String
+        let email: String
+    }
+    /// True for Google Workspace resource-calendar addresses.
+    static func isRoomEmail(_ email: String) -> Bool {
+        email.lowercased().hasSuffix("@resource.calendar.google.com")
     }
     /// Tasks keyed by id so a TaskRowView can read the latest version
     /// without scanning the whole array.
@@ -141,6 +161,14 @@ final class AppState: ObservableObject {
         for t in tasks {
             appendRows(of: t, depth: 0, into: &out)
         }
+        // Mark the last row of each expanded subtree: a depth>0
+        // row immediately followed by a top-level (depth 0) row,
+        // or the final row. That row carries the hairline that
+        // closes the subtree off from the next mother task.
+        for i in out.indices where out[i].depth > 0 {
+            let isLast = (i == out.count - 1) || out[i + 1].depth == 0
+            if isLast { out[i].isLastInSubtree = true }
+        }
         flattenCacheKey   = key
         flattenCacheValue = out
         return out
@@ -178,6 +206,30 @@ final class AppState: ObservableObject {
     @Published var availableTags:     [CUTask.Tag]    = []
     @Published var selectedTaskStatus: String?        = nil   // active status filter (nil = all)
     @Published var taskFilters:        TaskFilters    = TaskFilters()  // priority/assignee/tags/due
+
+    /// Which task source the right column shows.
+    ///   • `.activeList` — tasks of the single ClickUp list the
+    ///     user picked (the historical behavior).
+    ///   • `.myWork` — every task across the workspace assigned
+    ///     to the connected user, regardless of list. Uses the
+    ///     filtered team-tasks endpoint.
+    /// Toggled from the toolbar; persisted so the choice
+    /// survives relaunch.
+    enum TaskViewMode: String { case activeList, myWork }
+    /// Pinned to `.activeList` for now: picking a list must show
+    /// ALL of its tasks, not only the ones assigned to the
+    /// connected user. The toolbar "Meu trabalho" toggle was
+    /// removed in the editorial redesign; until it's
+    /// re-implemented we ignore any stale persisted `myWork`
+    /// value so the user is never stranded in an assignee-
+    /// filtered view with no way out. The `didSet` still
+    /// persists, so a future re-added toggle keeps working.
+    @Published var taskViewMode: TaskViewMode = .activeList {
+        didSet {
+            UserDefaults.standard.set(taskViewMode.rawValue,
+                                      forKey: "dp_task_view_mode")
+        }
+    }
     /// Which dimension drives the horizontal pill bar. Switching this
     /// re-renders the bar (Status / Prioridade / Etiquetas / Responsável)
     /// and clears any active selection in the previous dimension so the
@@ -1013,6 +1065,11 @@ final class AppState: ObservableObject {
         // events. Names are kept as-typed (the first time we
         // see each email) so display order is the user's own.
         var contactsByEmail: [String: String] = [:]
+        // Resource calendars (meeting rooms) harvested the same
+        // way — kept OUT of `contactsByEmail` so rooms don't
+        // pollute the people roster (AI @-mentions, guest
+        // picker) and instead feed the LOCAL room autocomplete.
+        var roomsByEmail: [String: String] = [:]
 
         for e in events {
             let day = cal.startOfDay(for: e.startDate)
@@ -1020,10 +1077,22 @@ final class AppState: ObservableObject {
 
             for attendee in e.attendees {
                 guard let email = attendee.email,
-                      !email.isEmpty,
-                      !attendee.name.isEmpty
+                      !email.isEmpty
                 else { continue }
                 let key = email.lowercased()
+                if Self.isRoomEmail(email) {
+                    if roomsByEmail[key] == nil {
+                        // Google sends the room's label as
+                        // displayName; fall back to the local
+                        // part if a name is somehow missing.
+                        roomsByEmail[key] = attendee.name.isEmpty
+                            ? String(email.split(separator: "@").first
+                                ?? "Sala")
+                            : attendee.name
+                    }
+                    continue
+                }
+                guard !attendee.name.isEmpty else { continue }
                 if contactsByEmail[key] == nil {
                     contactsByEmail[key] = attendee.name
                 }
@@ -1041,6 +1110,12 @@ final class AppState: ObservableObject {
         calendarContacts = contactsByEmail
             .map { (email, name) in
                 CalendarContact(name: name, email: email)
+            }
+            .sorted { $0.name.lowercased() < $1.name.lowercased() }
+
+        calendarRooms = roomsByEmail
+            .map { (email, name) in
+                CalendarRoom(name: name, email: email)
             }
             .sorted { $0.name.lowercased() < $1.name.lowercased() }
 
@@ -1530,6 +1605,19 @@ final class AppState: ObservableObject {
                        taskId:   task.id)
         }
 
+        // User-set per-task reminders (Apollo-native — ClickUp's
+        // API doesn't expose readable reminders, so these live
+        // locally). One-shot: fire through the same path as the
+        // due-date reminders, then delete so it can't refire.
+        for r in TaskReminders.due(asOf: now) {
+            notifyTask(.info,
+                       title:    r.taskTitle,
+                       subtitle: "Lembrete",
+                       message:  (r.note?.isEmpty == false) ? r.note : nil,
+                       taskId:   r.taskId)
+            TaskReminders.remove(id: r.id)
+        }
+
         // Prune so items that drift out of the window (event passed,
         // task completed, due date pushed forward) can fire again
         // later if they re-enter the window. Also bounds the sets.
@@ -1548,6 +1636,19 @@ final class AppState: ObservableObject {
                 }
                 .map(\.id))
         )
+    }
+
+    /// Team/workspace id for the cross-list "Meu trabalho" query.
+    /// New connections capture it at connect time; connections
+    /// that predate that capture would otherwise make the toggle a
+    /// silent no-op, so resolve it once on demand and cache it.
+    private func resolveWorkspaceId() async -> String? {
+        if let cached = KeychainHelper.load(for: KeychainHelper.Keys.clickupWorkspaceId) {
+            return cached
+        }
+        guard let ws = try? await cuSvc.getWorkspaces().first else { return nil }
+        KeychainHelper.save(ws.id, for: KeychainHelper.Keys.clickupWorkspaceId)
+        return ws.id
     }
 
     // MARK: - Sync
@@ -1591,11 +1692,29 @@ final class AppState: ObservableObject {
         }
         if cuConfigured {
             do {
-                async let tasksReq    = cuSvc.listTasks()
+                // Task source depends on the view mode. "Meu
+                // trabalho" hits the cross-list team endpoint
+                // filtered by the connected user; "Lista ativa"
+                // hits the single picked list. Statuses/members/
+                // tags still come from the active-list space
+                // either way — they drive the filter pills, and
+                // a cross-list status set would be a noisy union.
+                let mode = await MainActor.run { taskViewMode }
+
                 async let statusesReq = cuSvc.getListStatuses()
                 async let membersReq  = cuSvc.getMembers()
                 async let tagsReq     = cuSvc.getSpaceTags()
-                let (t, s, m, tg) = try await (tasksReq, statusesReq, membersReq, tagsReq)
+
+                let t: [CUTask]
+                if mode == .myWork,
+                   let uid  = clickUpAuthService.userId,
+                   let wsId = await resolveWorkspaceId() {
+                    t = try await cuSvc.listMyTasks(workspaceId: wsId,
+                                                    userId: uid)
+                } else {
+                    t = try await cuSvc.listTasks()
+                }
+                let (s, m, tg) = try await (statusesReq, membersReq, tagsReq)
                 fetchedTasks = t
                 await MainActor.run {
                     availableStatuses = s
@@ -2452,6 +2571,57 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Toggle a checklist item resolved/unresolved with an
+    /// optimistic local flip + ClickUp PUT. Rolls back the
+    /// local state if the request fails. Mutates the matching
+    /// item inside `tasks[idx].checklists` so the detail
+    /// popup's checkbox updates instantly.
+    func toggleChecklistItem(taskId: String,
+                             checklistId: String,
+                             itemId: String,
+                             to resolved: Bool) async {
+        // Optimistic local flip.
+        await MainActor.run {
+            guard let tIdx = tasks.firstIndex(where: { $0.id == taskId })
+            else { return }
+            guard let cIdx = tasks[tIdx].checklists
+                    .firstIndex(where: { $0.id == checklistId })
+            else { return }
+            guard let iIdx = tasks[tIdx].checklists[cIdx].items
+                    .firstIndex(where: { $0.id == itemId })
+            else { return }
+            tasks[tIdx].checklists[cIdx].items[iIdx].resolved = resolved
+        }
+
+        do {
+            try await cuSvc.setChecklistItem(
+                checklistId: checklistId,
+                itemId:      itemId,
+                resolved:    resolved
+            )
+            await MainActor.run { bumpTaskSnapshot(for: taskId) }
+        } catch {
+            Log.error("toggleChecklistItem: \(error)")
+            // Roll back.
+            await MainActor.run {
+                guard let tIdx = tasks.firstIndex(where: { $0.id == taskId }),
+                      let cIdx = tasks[tIdx].checklists
+                          .firstIndex(where: { $0.id == checklistId }),
+                      let iIdx = tasks[tIdx].checklists[cIdx].items
+                          .firstIndex(where: { $0.id == itemId })
+                else { return }
+                tasks[tIdx].checklists[cIdx].items[iIdx].resolved = !resolved
+            }
+            let api = error as? APIError
+            notifyTask(.error,
+                       title: tasksById[taskId]?.title ?? "Tarefa",
+                       subtitle: api?.userFacingTitle ?? "Falha no checklist",
+                       message: api?.userFacingMessage
+                            ?? "Não consegui atualizar o item.",
+                       taskId: taskId)
+        }
+    }
+
     /// Duplicates a task by reading its fields and creating a
     /// new one with the same metadata. ClickUp's native
     /// duplicate endpoint isn't part of the public v2 API on
@@ -2547,13 +2717,15 @@ final class AppState: ObservableObject {
         }
         do {
             try await googleCalendar.updateEvent(
-                eventId:   event.id,
-                title:     newTitle,
-                startDate: newStart,
-                endDate:   newEnd,
-                location:  newLocation,
-                notes:     nil,
-                attendees: attendees
+                eventId:    event.id,
+                calendarId: event.calendarId.isEmpty
+                    ? "primary" : event.calendarId,
+                title:      newTitle,
+                startDate:  newStart,
+                endDate:    newEnd,
+                location:   newLocation,
+                notes:      nil,
+                attendees:  attendees
             )
             // Build the patched local copy from the original
             // + applied deltas. Google's PATCH response is
@@ -2887,28 +3059,214 @@ final class AppState: ObservableObject {
                 // moved on locally via optimistic updates.
                 var merged = tasks[idx]
                 merged.attachments = fresh.attachments
+                // Checklists + custom fields + dependencies are
+                // ALSO list-endpoint-omitted (or value-less) —
+                // the same getTask call carries them, so hydrate
+                // them in the same pass instead of extra
+                // round-trips.
+                merged.checklists     = fresh.checklists
+                merged.customFields   = fresh.customFields
+                merged.dependencies   = fresh.dependencies
+                merged.linkedTaskIds  = fresh.linkedTaskIds
                 tasks[idx] = merged
             }
             // If the popup is currently showing this task, swap
             // the snapshot it holds so the SwiftUI body
-            // recomputes with the freshly-loaded files.
+            // recomputes with the freshly-loaded files +
+            // checklists + custom fields.
             if detailTask?.id == taskId {
                 var copy = detailTask!
-                copy.attachments = fresh.attachments
+                copy.attachments   = fresh.attachments
+                copy.checklists    = fresh.checklists
+                copy.customFields  = fresh.customFields
+                copy.dependencies  = fresh.dependencies
+                copy.linkedTaskIds = fresh.linkedTaskIds
                 detailTask = copy
             }
             // Update any task in the subtask navigation stack
-            // (not just the topmost), so freshly hydrated
-            // attachments propagate to whichever level the
-            // user navigates back to next.
+            // (not just the topmost), so freshly hydrated data
+            // propagates to whichever level the user navigates
+            // back to next.
             for i in detailSubtaskStack.indices where detailSubtaskStack[i].id == taskId {
                 var copy = detailSubtaskStack[i]
-                copy.attachments = fresh.attachments
+                copy.attachments   = fresh.attachments
+                copy.checklists    = fresh.checklists
+                copy.customFields  = fresh.customFields
+                copy.dependencies  = fresh.dependencies
+                copy.linkedTaskIds = fresh.linkedTaskIds
                 detailSubtaskStack[i] = copy
             }
             attachmentHydration[taskId] = .loaded(count: fresh.attachments.count)
+            // Time tracking lives on a separate endpoint — fetch
+            // it without blocking the attachment banner.
+            Task { await hydrateTaskTime(taskId: taskId) }
+            // Resolve titles/status for the tasks this one
+            // depends on / links to, for the dependencies UI.
+            let depIds = Set(fresh.dependencies.map(\.otherTaskId))
+                .union(fresh.linkedTaskIds)
+            if !depIds.isEmpty {
+                Task { await resolveDependencyTasks(Array(depIds)) }
+            }
         } catch {
             attachmentHydration[taskId] = .error("\(error)")
+        }
+    }
+
+    // MARK: - Time tracking
+
+    struct RunningTimer: Equatable {
+        let taskId: String
+        let startedAt: Date
+    }
+
+    /// Total tracked milliseconds per task id (hydrated lazily
+    /// when the detail popup opens). Drives the "tempo
+    /// registrado" line.
+    @Published var taskTrackedMs: [String: Int] = [:]
+    /// The connected user's single running timer, if any.
+    /// ClickUp allows only one at a time per user.
+    @Published var runningTimer: RunningTimer? = nil
+
+    // MARK: - Dependency task resolution
+
+    /// Resolved snapshots (title + status) of tasks referenced
+    /// by a dependency / linked-task relation, keyed by id. Lets
+    /// the dependencies UI show a real title + status pill
+    /// instead of a bare id. Filled best-effort.
+    @Published var depTaskCache: [String: CUTask] = [:]
+
+    /// Populates `depTaskCache` for the given ids: cheap hits
+    /// from the already-loaded set first, then a bounded set of
+    /// getTask calls for the rest (capped so a pathological
+    /// dependency fan-out can't storm the API). Read-only.
+    @MainActor
+    func resolveDependencyTasks(_ ids: [String]) async {
+        let missing = ids.filter {
+            depTaskCache[$0] == nil
+        }
+        // Fast path: anything already in the main set.
+        for id in missing {
+            if let t = tasksById[id] { depTaskCache[id] = t }
+        }
+        let stillMissing = missing.filter { depTaskCache[$0] == nil }
+        // Bounded fetch — dependency lists are tiny in practice;
+        // the cap is just a safety valve.
+        for id in stillMissing.prefix(12) {
+            if let t = try? await cuSvc.getTask(id: id) {
+                depTaskCache[id] = t
+            }
+        }
+    }
+
+    /// Fetches the task's tracked total and refreshes the
+    /// running-timer state. Cheap, best-effort: failures leave
+    /// the previous values untouched rather than flipping the UI
+    /// to an error — time tracking is auxiliary, not load-bearing.
+    @MainActor
+    func hydrateTaskTime(taskId: String) async {
+        if let ms = try? await cuSvc.taskTrackedMs(id: taskId) {
+            taskTrackedMs[taskId] = ms
+        }
+        await refreshRunningTimer()
+    }
+
+    @MainActor
+    func refreshRunningTimer() async {
+        guard let wsId = await resolveWorkspaceId() else { return }
+        do {
+            let cur = try await cuSvc.currentTimer(workspaceId: wsId)
+            runningTimer = cur.map { RunningTimer(taskId: $0.taskId,
+                                                  startedAt: $0.startedAt) }
+        } catch {
+            // Transient failure — keep the previous state rather
+            // than flapping the timer UI to "not running".
+        }
+    }
+
+    /// Start the timer on `taskId`, or stop it if it's already
+    /// the running task. ClickUp implicitly stops any other
+    /// running timer when a new one starts, so the optimistic
+    /// state just mirrors that single-timer invariant.
+    @MainActor
+    func toggleTimer(for taskId: String) async {
+        guard let wsId = await resolveWorkspaceId() else {
+            notifyTask(.error,
+                       title: tasksById[taskId]?.title ?? "Tarefa",
+                       subtitle: "Time tracking",
+                       message: "Workspace não resolvido.",
+                       taskId: taskId)
+            return
+        }
+        let wasRunningHere = runningTimer?.taskId == taskId
+        do {
+            if wasRunningHere {
+                runningTimer = nil
+                try await cuSvc.stopTimer(workspaceId: wsId)
+            } else {
+                runningTimer = RunningTimer(taskId: taskId,
+                                            startedAt: Date())
+                try await cuSvc.startTimer(workspaceId: wsId,
+                                           taskId: taskId)
+            }
+            // Re-sync from the server so the total + running
+            // state reflect ClickUp's truth (e.g. it stopped a
+            // different task's timer for us).
+            await hydrateTaskTime(taskId: taskId)
+        } catch {
+            Log.error("toggleTimer: \(error)")
+            await refreshRunningTimer()   // roll back to truth
+            let api = error as? APIError
+            notifyTask(.error,
+                       title: tasksById[taskId]?.title ?? "Tarefa",
+                       subtitle: api?.userFacingTitle ?? "Time tracking",
+                       message: api?.userFacingMessage
+                            ?? "Não consegui atualizar o timer.",
+                       taskId: taskId)
+        }
+    }
+
+    /// Optimistically set a drop_down custom field, then PUT it.
+    /// Mirrors `toggleChecklistItem`: flip locally everywhere the
+    /// task is mirrored, roll back + notify on failure.
+    @MainActor
+    func setTaskCustomField(taskId: String,
+                            fieldId: String,
+                            option: CUTask.CustomField.Option) async {
+        func apply(_ optId: String?, _ display: String) {
+            func patch(_ t: inout CUTask) {
+                guard let fi = t.customFields
+                        .firstIndex(where: { $0.id == fieldId }) else { return }
+                t.customFields[fi].selectedOptionId = optId
+                t.customFields[fi].displayValue     = display
+            }
+            if let i = tasks.firstIndex(where: { $0.id == taskId }) { patch(&tasks[i]) }
+            if detailTask?.id == taskId { patch(&detailTask!) }
+            for i in detailSubtaskStack.indices
+                where detailSubtaskStack[i].id == taskId { patch(&detailSubtaskStack[i]) }
+        }
+
+        // Snapshot prior value for rollback.
+        let prior = (detailTask?.id == taskId ? detailTask
+                     : tasksById[taskId])?
+            .customFields.first(where: { $0.id == fieldId })
+
+        apply(option.id, option.name)
+
+        do {
+            try await cuSvc.setCustomField(taskId: taskId,
+                                           fieldId: fieldId,
+                                           optionOrderIndex: option.orderIndex)
+            bumpTaskSnapshot(for: taskId)
+        } catch {
+            Log.error("setTaskCustomField: \(error)")
+            apply(prior?.selectedOptionId, prior?.displayValue ?? "")
+            let api = error as? APIError
+            notifyTask(.error,
+                       title: tasksById[taskId]?.title ?? "Tarefa",
+                       subtitle: api?.userFacingTitle ?? "Campo personalizado",
+                       message: api?.userFacingMessage
+                            ?? "Não consegui atualizar o campo.",
+                       taskId: taskId)
         }
     }
 
@@ -3089,14 +3447,16 @@ final class AppState: ObservableObject {
         }
         do {
             try await googleCalendar.updateEvent(
-                eventId:   event.id,
-                title:     title,
-                startDate: startDate,
-                endDate:   endDate,
-                location:  location,
-                notes:     notes,
-                attendees: guestEmails,
-                colorId:   colorId
+                eventId:    event.id,
+                calendarId: event.calendarId.isEmpty
+                    ? "primary" : event.calendarId,
+                title:      title,
+                startDate:  startDate,
+                endDate:    endDate,
+                location:   location,
+                notes:      notes,
+                attendees:  guestEmails,
+                colorId:    colorId
             )
             // Optimistic local update so the dashboard
             // reflects the change immediately, while a
@@ -3419,6 +3779,98 @@ final class AppState: ObservableObject {
                    title:    title,
                    subtitle: "Falha ao criar subtarefa")
         }
+    }
+
+    // MARK: - Event ↔ Task conversion
+
+    /// Turns a calendar event into a ClickUp task. The task's
+    /// due date is the event's start; notes/location/guests are
+    /// folded into the description. When `deleteOriginal` (the
+    /// default — "transform", not "copy") the source event is
+    /// removed afterwards.
+    @discardableResult
+    func convertEventToTask(_ event: CalendarEvent,
+                            deleteOriginal: Bool = true)
+        async -> CUTask? {
+        var lines: [String] = []
+        if let n = event.notes?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !n.isEmpty { lines.append(n) }
+        if let loc = event.location?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !loc.isEmpty { lines.append("Local: \(loc)") }
+        if let url = event.meetingURL {
+            lines.append("Link: \(url.absoluteString)")
+        }
+        let guests = event.attendees
+            .map { $0.name.isEmpty ? ($0.email ?? "") : $0.name }
+            .filter { !$0.isEmpty }
+        if !guests.isEmpty {
+            lines.append("Participantes: \(guests.joined(separator: ", "))")
+        }
+        lines.append("— Convertido de um evento do calendário.")
+        let task = await createTask(
+            title:       event.title,
+            description: lines.joined(separator: "\n"),
+            status:      nil,
+            priority:    0,
+            startDate:   event.isAllDay ? nil : event.startDate,
+            dueDate:     event.startDate
+        )
+        if task != nil, deleteOriginal {
+            await deleteEvent(event)
+        }
+        return task
+    }
+
+    /// Turns a ClickUp task into a calendar event. `start`
+    /// overrides the slot (else: task start → due → next hour);
+    /// `durationMinutes` overrides the length (else: the task's
+    /// start→due span, capped at 8 h, else 60 min). When
+    /// `deleteOriginal` the source task is removed afterwards.
+    @discardableResult
+    func convertTaskToEvent(_ task: CUTask,
+                            start: Date? = nil,
+                            durationMinutes: Int? = nil,
+                            deleteOriginal: Bool = true)
+        async -> CalendarEvent? {
+        let cal = Calendar.current
+        let now = Date()
+        let startDate: Date = {
+            if let s = start { return s }
+            if let s = task.startDate, s > now.addingTimeInterval(-86_400) {
+                return s
+            }
+            if let d = task.dueDate { return d }
+            var c = cal.dateComponents([.year, .month, .day, .hour],
+                                       from: now)
+            c.minute = 0
+            let base = cal.date(from: c) ?? now
+            return cal.date(byAdding: .hour, value: 1, to: base) ?? now
+        }()
+        let minutes: Int = {
+            if let m = durationMinutes, m > 0 { return m }
+            if let s = task.startDate, let d = task.dueDate, d > s {
+                return min(Int(d.timeIntervalSince(s) / 60), 8 * 60)
+            }
+            return 60
+        }()
+        let endDate = startDate
+            .addingTimeInterval(TimeInterval(minutes * 60))
+        var note = task.description?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !note.isEmpty { note += "\n\n" }
+        note += "— Convertido da tarefa do ClickUp · \(task.priorityLabel)."
+        let event = await createEvent(
+            title:     task.title,
+            startDate: startDate,
+            endDate:   endDate,
+            notes:     note
+        )
+        if event != nil, deleteOriginal {
+            await deleteTask(task)
+        }
+        return event
     }
 
     // MARK: - Filtered accessors (call on main thread)

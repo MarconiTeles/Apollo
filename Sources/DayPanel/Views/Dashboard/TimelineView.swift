@@ -106,12 +106,11 @@ struct TimelineView: View {
                     .id(date)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    // Vertical insets total to 14pt between
-                    // rows (7 + 7), matching LazyVStack's
-                    // `spacing: 14`. Horizontal mirrors the
-                    // previous `.padding(.horizontal, 14)`.
-                    .listRowInsets(EdgeInsets(top: 7, leading: 14,
-                                              bottom: 7, trailing: 14))
+                    // Left gutter between the window edge and the
+                    // events list (17 → 26, +50%). Inter-day gap is
+                    // the day row's own `marginBottom: 22`.
+                    .listRowInsets(EdgeInsets(top: 0, leading: 26,
+                                              bottom: 0, trailing: 32))
                 }
             }
             .listStyle(.plain)
@@ -122,7 +121,7 @@ struct TimelineView: View {
             // with the content (the empty space above the
             // first row scrolls upward and out of view, just
             // like padding inside the LazyVStack).
-            .contentMargins(.top, 24, for: .scrollContent)
+            .contentMargins(.top, 28, for: .scrollContent)
             .contentMargins(.bottom, 60, for: .scrollContent)
             // NSScrollView introspect — listens to the
             // underlying NSClipView's `boundsDidChange`
@@ -423,17 +422,26 @@ private struct AgendaDaySection: View, Equatable {
 
     private var isToday: Bool { Calendar.current.isDateInToday(date) }
 
+    /// `EditorialMainV2.EditorialDayRow`: past days dim to 0.55.
+    private var isPast: Bool {
+        Calendar.current.startOfDay(for: date)
+            < Calendar.current.startOfDay(for: Date())
+    }
+
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        // Date column + gap trimmed from the prototype's `72px`/
+        // gap-24; the day-number→time gap is now 17 (11 → 17,
+        // +50%) and the column 48pt.
+        HStack(alignment: .top, spacing: 17) {
             dateColumn
 
-            VStack(spacing: 6) {
+            VStack(spacing: 0) {
                 if events.isEmpty {
-                    Text("Sem compromissos")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                    Text("— Sem compromissos")
+                        .font(Editorial.serif(13.5).italic())
+                        .foregroundStyle(Editorial.inkMute)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
+                        .padding(.top, 10)
                 } else {
                     // Sequential vertical stack — events sorted
                     // by startDate (already sorted upstream by
@@ -477,36 +485,63 @@ private struct AgendaDaySection: View, Equatable {
             // without dragging in geometry-driven re-layouts.
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        // Today's section gets a bit of breathing room above
-        // it so it stands apart from the previous day's
-        // entries. Was 35pt; reduced 35% → ~23pt for a
-        // tighter visual emphasis.
-        .padding(.top, isToday ? 23 : 0)
+        // macOS `List` rows hug their content — without this the
+        // day row never stretches to the column width, so the
+        // event title's `1fr` collapsed and truncated to a few
+        // characters with dead space after it. Force the row to
+        // fill the full column so the title uses all the space
+        // (prototype grid `72px 1fr`).
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Prototype: each day row has `marginBottom: 22` and
+        // past days fade to 0.55.
+        .opacity(isPast ? 0.55 : 1)
+        .padding(.bottom, 22)
     }
 
     private var dateColumn: some View {
-        VStack(spacing: 2) {
-            Text(date.formatted(.dateTime.weekday(.abbreviated)).uppercased())
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(isToday ? Color.accentColor : .secondary)
+        // Editorial: small-caps weekday, an outsized serif
+        // numeral, and — for today — a cinnabar underline plus
+        // an italic "↳ hoje" cue. No filled accent disc.
+        VStack(alignment: .leading, spacing: 4) {
+            Text(date.formatted(.dateTime.weekday(.abbreviated)
+                .locale(Locale(identifier: "pt_BR")))
+                .uppercased()
+                .replacingOccurrences(of: ".", with: ""))
+                .font(Editorial.sans(10.5, .semibold))
+                .tracking(1.2)
+                .foregroundStyle(isToday ? Editorial.accent : Editorial.inkMute)
 
-            ZStack {
-                if isToday {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 28, height: 28)
-                        .shadow(color: Color.accentColor.opacity(0.35),
-                                radius: 4, x: 0, y: 2)
+            Text(date.formatted(.dateTime.day()))
+                .font(Editorial.serif(38))
+                .foregroundStyle(Editorial.ink)
+                .tracking(-1.4)
+                .monospacedDigit()
+                // Prototype `lineHeight: 0.95` — clip the serif's
+                // natural leading so the numeral doesn't inflate
+                // the row's height.
+                .padding(.vertical, -4)
+                .overlay(alignment: .bottom) {
+                    if isToday {
+                        Rectangle()
+                            .fill(Editorial.accent)
+                            .frame(height: 2)
+                            .offset(y: 6)
+                    }
                 }
-                Text(date.formatted(.dateTime.day()))
-                    .font(.system(size: 16, weight: .semibold,
-                                  design: .rounded))
-                    .foregroundStyle(isToday ? Color.white : .primary)
-                    .monospacedDigit()
+
+            if isToday {
+                Text("↳ hoje")
+                    .font(Editorial.serif(11).italic())
+                    .foregroundStyle(Editorial.accent)
+                    .padding(.top, 2)
             }
         }
-        .frame(width: 44)
-        .padding(.top, 4)
+        // 72 → 48: just wide enough for the serif day numeral +
+        // weekday, killing the unused trailing slack in the
+        // column (kept fixed so the time column stays aligned
+        // across single- and two-digit days).
+        .frame(width: 48, alignment: .leading)
+        .padding(.top, 6)
     }
 
     /// Click handler for `AgendaEventCard`. Lives on the
@@ -540,6 +575,10 @@ struct AgendaEventCard: View, Equatable {
     /// now reads ZERO state from AppState; the parent
     /// `AgendaDaySection` wires the click action.
     let onTap: (CalendarEvent) -> Void
+
+    /// Editorial hover wash (not compared by `==` — @State is
+    /// intentionally excluded from the Equatable short-circuit).
+    @State private var hover = false
 
     /// PERF: Equatable short-circuits SwiftUI body re-evaluation
     /// when the event hasn't changed. With ~15-20 cards visible
@@ -646,97 +685,137 @@ struct AgendaEventCard: View, Equatable {
         // event's fields don't change (which is true for
         // the entire scroll), the cached texture is just
         // re-blitted instead of re-rasterised. Reverted.
+        // Exact prototype `PEventLine`:
+        //   grid 88 | 1fr | auto · gap 16 · baseline ·
+        //   padding 10px 8px · margin 0 -8px · borderRadius 4 ·
+        //   borderTop 1px ruleSoft · hover → bg E.card.
+        // The 88pt time column WRAPS "HH:MM → HH:MM" to two lines
+        // ("09:30 →" / "10:00"). The title is serif 16/500 and
+        // WRAPS naturally (never tail-truncated); the location
+        // rides inline as an italic Caption and wraps onto its
+        // own line. The avatar is a SOLID colour disc.
         Button {
             onTap(event)
         } label: {
-            HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(event.title)
-                        // .callout (12pt) × 1.15 = 13.8pt —
-                        // event titles bumped 15% in lockstep
-                        // with the task-list title bump.
-                        .font(.system(size: 13.8, weight: .semibold))
-                        .foregroundStyle(isAccepted ? Color.white : .primary)
-                        .strikethrough(isDeclined, color: .secondary)
-                        .lineLimit(1)
+            // spacing 0 + explicit leading paddings so the
+            // time→title gap (2) and title→avatar gap (16) are
+            // tuned independently — the prototype's uniform 16
+            // left too much air between the time and the title.
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Text("\(timeStart) → \(timeEnd)")
+                    .font(Editorial.sans(12, .medium))
+                    .monospacedDigit()
+                    .tracking(0.3)
+                    .foregroundStyle(isDeclined ? Editorial.inkMute
+                                                : Editorial.inkSoft)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 88, alignment: .leading)
 
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(isAccepted
-                                         ? Color.white.opacity(0.85)
-                                         : .secondary)
-                        .lineLimit(1)
-                }
-                .opacity(isDeclined ? 0.6 : 1)
+                titleParagraph
+                    .multilineTextAlignment(.leading)
+                    // An event is at most 2 lines: the title wraps
+                    // once, then tail-truncates (the inline italic
+                    // location rides along and truncates with it).
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .padding(.leading, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                Spacer(minLength: 0)
-
-                if let first = event.attendees.first {
-                    avatar(for: first)
-                }
+                avatarDisc
+                    .padding(.leading, 16)
+                    .alignmentGuide(.firstTextBaseline) {
+                        $0[VerticalAlignment.center] + 5
+                    }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .opacity(isDeclined ? 0.45 : 1)
+            .padding(.vertical, 10)
+            // Fill the events column so the title (1fr) uses ALL
+            // remaining width — no dead gap before the avatar.
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Solid Google-palette fill when accepted;
-            // tinted-color fill (not material) when not, so
-            // `.drawingGroup()` below can rasterise the
-            // tree without losing backdrop-material content.
-            .background {
-                if isAccepted {
-                    shape.fill(color)
-                } else {
-                    shape.fill(color.opacity(0.14))
-                }
+            // Prototype `padding:10px 8px; margin:0 -8px` — the
+            // hover wash + top rule bleed 8pt into the gutter on
+            // each side while the content stays at the column
+            // edge (background/overlay extended, not the content).
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(hover ? Editorial.card : Color.clear)
+                    .padding(.horizontal, -8)
+            )
+            .overlay(alignment: .top) {
+                Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+                    .padding(.horizontal, -8)
             }
-            .overlay {
-                if borderWidth > 0 {
-                    shape.strokeBorder(borderColour, lineWidth: borderWidth)
-                }
-            }
-            // PERF: `.drawingGroup()` rasterises the card's
-            // visual tree into a Metal-backed texture that
-            // gets reused across scroll frames. With
-            // `Equatable + .equatable()` short-circuiting
-            // body re-eval when the event's fields haven't
-            // changed, the cached texture survives the
-            // entire scroll session and shadow blur is
-            // computed exactly once per card.
-            .drawingGroup()
-            .shadow(color: isAccepted ? .black.opacity(0.18)
-                                      : color.opacity(0.45),
-                    radius: 4, x: 0, y: 1)
-            .contentShape(shape)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .interactivePillFeedback(
-            accent: color,
-            cornerRadius: 13,
-            glow: true,
-            hoverScale: 1.015,
-            pulseFromClick: true
-        )
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) { hover = hovering }
+        }
     }
 
-    @ViewBuilder
-    private func avatar(for a: CalendarEvent.Attendee) -> some View {
-        let initials = a.name
-            .split(separator: " ")
-            .prefix(2)
-            .compactMap { $0.first.map(String.init) }
-            .joined()
-            .uppercased()
-        ZStack {
-            Circle().fill(Color.accentColor.opacity(isAccepted ? 0.35 : 0.20))
-            Text(initials.isEmpty ? "?" : initials)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(isAccepted ? Color.white : Color.accentColor)
+    /// Time pieces (the column wraps the two on its own).
+    private var timeStart: String {
+        event.isAllDay ? "Dia inteiro"
+            : SharedDateFormatters.shortTime24h.string(from: event.startDate)
+    }
+    private var timeEnd: String {
+        event.isAllDay ? ""
+            : SharedDateFormatters.shortTime24h.string(from: event.endDate)
+    }
+
+    /// Serif title + inline italic "· local", as one wrapping
+    /// paragraph (matches the prototype's `<span> + <Caption>`).
+    private var titleParagraph: Text {
+        var t = Text(event.title)
+            .font(Editorial.serif(16))
+            .foregroundColor(Editorial.ink)
+            .tracking(-0.15)
+        if isDeclined {
+            t = t.strikethrough(true, color: Editorial.inkMute)
         }
-        .frame(width: 22, height: 22)
-        .overlay(Circle().strokeBorder(
-            isAccepted ? Color.white.opacity(0.5) : Color.clear,
-            lineWidth: 0.5))
+        if let loc = event.location, !loc.isEmpty {
+            t = t + Text("  ·  \(loc)")
+                .font(Editorial.serif(12.5).italic())
+                .foregroundColor(Editorial.inkSoft)
+        }
+        return t
+    }
+
+    /// Colour disc with a letter. Confirmed (RSVP accepted, or
+    /// no attendees so nothing to confirm) → SOLID fill, white
+    /// letter. Not yet confirmed → HOLLOW: paper fill, a 1.5pt
+    /// ring in the colour, the letter in the colour.
+    private var avatarDisc: some View {
+        let letter: String = {
+            if let n = event.attendees.first?.name,
+               let c = n.split(separator: " ").first?.first {
+                return String(c).uppercased()
+            }
+            return String(event.title.first ?? "•").uppercased()
+        }()
+        return Group {
+            if isAccepted {
+                Circle()
+                    .fill(color)
+                    .overlay(
+                        Text(letter)
+                            .font(Editorial.sans(9.5, .semibold))
+                            .foregroundStyle(.white)
+                    )
+            } else {
+                Circle()
+                    .fill(Editorial.paper)
+                    .overlay(Circle().strokeBorder(color, lineWidth: 1.5))
+                    .overlay(
+                        Text(letter)
+                            .font(Editorial.sans(9.5, .semibold))
+                            .foregroundStyle(color)
+                    )
+            }
+        }
+        .frame(width: 20, height: 20)
     }
 }
 

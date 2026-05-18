@@ -26,15 +26,13 @@ struct OnboardingView: View {
     @State private var pastedClickUpToken: String = ""
 
     enum Step: Int, CaseIterable {
-        // AI / aiPreview steps removed per design — the
-        // wizard no longer pitches the optional AI feature
-        // during onboarding. A `swipe` step takes their
-        // place to teach the trackpad-swipe gesture on task
-        // cards (otherwise hard to discover); a `palette`
-        // step right after teaches the ⌘K command palette
-        // — the second discoverability win, and the one
-        // power users keep coming back to.
-        case welcome, calendar, clickup, list, swipe, palette, done
+        // Google + ClickUp are connected together on a single
+        // `integrations` screen (the prototype's "explanation
+        // on top, content below" full-width layout — no more
+        // two-pane spread). `swipe` then teaches the trackpad
+        // gesture and `palette` the ⌘K command palette — the
+        // two discoverability wins power users keep returning to.
+        case welcome, integrations, list, swipe, palette, done
     }
 
     /// Whether the user has a Gemini API key configured. The
@@ -77,7 +75,7 @@ struct OnboardingView: View {
     @State private var openaiSavedFlash: Bool = false
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
+        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
     }
 
     /// "Calendar step" passes when the user is connected to
@@ -102,39 +100,37 @@ struct OnboardingView: View {
     }
 
     var body: some View {
+        // Prototype `POnboarding` — a full-bleed editorial page:
+        // a hairline progress bar across the top, then ONE
+        // single-width column — kicker + display headline + body
+        // explanation up top, the step's interactive content
+        // below it, and the navigation spanning the full window
+        // width along the bottom. No two-pane spread.
         VStack(spacing: 0) {
-            header
-            stepIndicator
-                .padding(.horizontal, 22)
-                .padding(.bottom, 18)
-
-            Group {
-                switch step {
-                case .welcome:  welcomeStep
-                case .calendar: calendarStep
-                case .clickup:  clickupStep
-                case .list:     listStep
-                case .swipe:    swipeStep
-                case .palette:  paletteStep
-                case .done:     doneStep
-                }
+            progressBar
+            page
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Editorial.paper)
+        .overlay(alignment: .topTrailing) {
+            Button { dismissPermanently() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(Editorial.inkSoft)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
             }
-            .padding(.horizontal, 22)
-            .padding(.bottom, 14)
-            .frame(minHeight: 280, alignment: .top)
-
-            footer
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .padding(.top, 16)
+            .padding(.trailing, 20)
         }
-        .frame(width: 460)
-        .fixedSize(horizontal: false, vertical: true)
-        .popupGlass(shape)
+        .animation(.spring(response: 0.4, dampingFraction: 0.86), value: step)
         // Auto-advance the moment a step's prerequisite is satisfied.
-        .onChange(of: calendarReady) { _, ok in
-            if ok, step == .calendar { advance() }
-        }
-        .onChange(of: clickupReady) { _, ok in
-            if ok, step == .clickup { advance() }
-        }
+        // The merged integrations step only advances once BOTH
+        // sources are connected.
+        .onChange(of: calendarReady) { _, _ in advanceIfIntegrationsDone() }
+        .onChange(of: clickupReady)  { _, _ in advanceIfIntegrationsDone() }
         .onChange(of: listReady) { _, ok in
             if ok, step == .list { advance() }
         }
@@ -143,32 +139,181 @@ struct OnboardingView: View {
         }
     }
 
+    // MARK: - Spread chrome
+
+    private var progressBar: some View {
+        let total = max(1, Step.allCases.count)
+        let frac  = CGFloat(step.rawValue + 1) / CGFloat(total)
+        return GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Editorial.rule)
+                Rectangle().fill(Editorial.accent)
+                    .frame(width: max(0, geo.size.width * frac))
+            }
+        }
+        .frame(height: 3)
+        .animation(.spring(response: 0.4, dampingFraction: 0.9), value: step)
+    }
+
+    // MARK: - Page (single full-width editorial column)
+
+    /// One column, full window width: editorial kicker + display
+    /// headline + body explanation up top, the step's interactive
+    /// content directly below it, then the navigation row running
+    /// the full width along the bottom.
+    private var page: some View {
+        let copy = stepCopy(step)
+        return VStack(alignment: .leading, spacing: 0) {
+            Folio(copy.kicker)
+
+            Spacer(minLength: 30)
+
+            VStack(alignment: .leading, spacing: 20) {
+                copy.headline
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(copy.body)
+                    .font(Editorial.serif(17))
+                    .foregroundStyle(Editorial.inkSoft)
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 680, alignment: .leading)
+
+                stepWidget
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 14)
+            }
+
+            Spacer(minLength: 30)
+
+            // Footer nav — a 60×1 ink rule, then the controls
+            // stretched across the full content width.
+            Rectangle().fill(Editorial.ink).frame(width: 60, height: 1)
+                .padding(.bottom, 20)
+            footerNav
+        }
+        .padding(.top, 60)
+        .padding(.horizontal, 72)
+        .padding(.bottom, 46)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// The step's interactive content, shown below the editorial
+    /// explanation. Welcome + Done are copy-only (no widget).
+    @ViewBuilder
+    private var stepWidget: some View {
+        switch step {
+        case .welcome, .done:
+            EmptyView()
+        case .integrations:
+            integrationsStep
+        case .list:
+            listStep.frame(maxWidth: 380, alignment: .leading)
+        case .swipe:
+            swipeStep.frame(maxWidth: 640, alignment: .leading)
+        case .palette:
+            paletteStep.frame(maxWidth: 640, alignment: .leading)
+        }
+    }
+
+    /// Bottom navigation, full content width: back / skip on the
+    /// left, the "n de N" marker + primary CTA on the right.
+    private var footerNav: some View {
+        HStack(spacing: 18) {
+            if step.rawValue > 0 {
+                Button { goBack() } label: {
+                    Text("← Voltar")
+                        .font(Editorial.sans(13, .medium))
+                        .foregroundStyle(Editorial.inkSoft)
+                }
+                .buttonStyle(.plain).focusEffectDisabled()
+            }
+            if step != .done {
+                Button { dismissPermanently() } label: {
+                    Text("Pular tutorial")
+                        .font(Editorial.sans(13, .medium))
+                        .foregroundStyle(Editorial.inkMute)
+                }
+                .buttonStyle(.plain).focusEffectDisabled()
+            }
+            Spacer(minLength: 0)
+            Text("\(step.rawValue + 1) de \(Step.allCases.count)")
+                .font(Editorial.serif(13).italic())
+                .foregroundStyle(Editorial.inkMute)
+            primaryCTA
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Per-step editorial copy
+
+    private func stepCopy(_ s: Step)
+        -> (kicker: String, headline: Text, body: String) {
+        func h(_ a: String, _ italic: String, _ b: String) -> Text {
+            Text(a).font(Editorial.serif(42)).foregroundStyle(Editorial.ink)
+            + Text(italic).font(Editorial.serif(42).italic())
+                .foregroundStyle(Editorial.inkSoft)
+            + Text(b).font(Editorial.serif(42)).foregroundStyle(Editorial.ink)
+        }
+        switch s {
+        case .welcome:
+            return ("Apollo · edição inaugural",
+                    h("Apollo,\n", "uma agenda ", "que lê."),
+                    "Junto seu calendário e suas tarefas do ClickUp numa única superfície — e respondo sobre elas em português, sem você abrir três apps.")
+        case .integrations:
+            return ("I · Conectar",
+                    h("Suas contas,\n", "num só ", "lugar."),
+                    "Conecte o Google Calendar e o ClickUp aqui mesmo. O Google é OAuth nativo; o ClickUp é um token pessoal que fica só na sua máquina. Eventos com convidados saem com convite por email — direto pela API.")
+        case .list:
+            return ("II · Escolher",
+                    h("Escolha a ", "lista", " principal."),
+                    "Apollo precisa saber qual lista do ClickUp aparece no painel. Você troca a qualquer hora pela toolbar — e sim, suporta múltiplos workspaces.")
+        case .swipe:
+            return ("III · Gestos",
+                    h("Aprenda ", "com a mão", "."),
+                    "Deslize uma tarefa com dois dedos no trackpad: para a direita conclui, para a esquerda volta o status. Tente no cartão abaixo.")
+        case .palette:
+            return ("IV · Atalhos",
+                    h("Tudo a um ", "⌘K", " de distância."),
+                    "Busca universal de tarefa, evento ou comando. ⌘J pergunta direto pro Apollo. Funciona com ou sem acento.")
+        case .done:
+            return ("Pronto",
+                    h("Bom ", "trabalho", "."),
+                    "Setup completo. Você pode reabrir este tutorial em Configurações · Avançado sempre que quiser.")
+        }
+    }
+
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .center) {
-            HStack(spacing: 8) {
-                Image(systemName: "moon.stars.fill")
-                    .font(.title3)
-                    .foregroundStyle(Color.accentColor)
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Folio("Apollo · edição inaugural")
+                    betaPill(compact: true)
+                }
                 Text("Bem-vindo ao Apollo")
-                    .font(.title3.weight(.semibold))
-                betaPill(compact: true)
+                    .font(Editorial.serif(24))
+                    .foregroundStyle(Editorial.ink)
+                    .tracking(-0.4)
             }
-            Spacer()
+            Spacer(minLength: 0)
             Button { dismissPermanently() } label: {
                 Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(Editorial.inkSoft)
                     .frame(width: 22, height: 22)
-                    .background(.regularMaterial, in: Circle())
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 18)
-        .padding(.bottom, 14)
+        .padding(.horizontal, 28)
+        .padding(.top, 20)
+        .padding(.bottom, 16)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+        }
     }
 
     /// Small "BETA" capsule used next to the wordmark in both the
@@ -178,23 +323,13 @@ struct OnboardingView: View {
     /// step's hero block.
     private func betaPill(compact: Bool) -> some View {
         Text("BETA")
-            .font(.system(size: compact ? 9 : 11,
-                          weight: .heavy,
-                          design: .rounded))
-            .tracking(1.2)
-            .foregroundStyle(.white)
-            .padding(.horizontal, compact ? 6 : 8)
+            .font(Editorial.sans(compact ? 9 : 10, .semibold))
+            .tracking(1.4)
+            .foregroundStyle(Editorial.page)
+            .padding(.horizontal, compact ? 6 : 7)
             .padding(.vertical, compact ? 2 : 3)
-            .background(
-                LinearGradient(
-                    colors: [Color.accentColor, Color(hex: "#FF8A4C")],
-                    startPoint: .topLeading,
-                    endPoint:   .bottomTrailing
-                ),
-                in: Capsule()
-            )
-            .shadow(color: Color.accentColor.opacity(0.30),
-                    radius: 4, x: 0, y: 1)
+            .background(Editorial.accent,
+                        in: RoundedRectangle(cornerRadius: 2, style: .continuous))
     }
 
     // MARK: - Step indicator (•──•──•──✓)
@@ -206,23 +341,23 @@ struct OnboardingView: View {
                 let active   = i <= step.rawValue
                 let complete = isStepComplete(s)
                 Circle()
-                    .fill(complete ? Color.accentColor :
-                          active   ? Color.accentColor.opacity(0.45)
-                                   : Color.secondary.opacity(0.25))
-                    .frame(width: 9, height: 9)
+                    .fill(complete ? Editorial.accent :
+                          active   ? Editorial.accent.opacity(0.40)
+                                   : Editorial.inkFaint)
+                    .frame(width: 8, height: 8)
                     .overlay {
                         if complete {
                             Image(systemName: "checkmark")
-                                .font(.system(size: 6, weight: .bold))
-                                .foregroundStyle(.white)
+                                .font(.system(size: 5.5, weight: .bold))
+                                .foregroundStyle(Editorial.page)
                         }
                     }
                 if i != Step.allCases.count - 1 {
                     Rectangle()
                         .fill((complete && isStepComplete(Step.allCases[i+1]))
-                              ? Color.accentColor
-                              : Color.secondary.opacity(0.20))
-                        .frame(height: 1.5)
+                              ? Editorial.accent
+                              : Editorial.rule)
+                        .frame(height: 1)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -231,10 +366,9 @@ struct OnboardingView: View {
 
     private func isStepComplete(_ s: Step) -> Bool {
         switch s {
-        case .welcome:  return step.rawValue > Step.welcome.rawValue
-        case .calendar: return calendarReady
-        case .clickup:  return clickupReady
-        case .list:     return listReady
+        case .welcome:      return step.rawValue > Step.welcome.rawValue
+        case .integrations: return calendarReady && clickupReady
+        case .list:         return listReady
         // Swipe + palette are purely informational —
         // counts as complete the moment the user has
         // advanced past each.
@@ -276,94 +410,129 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Step 1 — Google Calendar
+    // MARK: - Step 1 — Integrations (Google + ClickUp, one screen)
 
-    private var calendarStep: some View {
-        StepLayout(
-            icon:  "calendar",
-            tint:  .red,
-            title: "Conecte sua conta Google",
-            bodyText: "Apollo lê e cria eventos diretamente no seu **Google Calendar**. Quando você criar uma reunião com convidados pelo Apollo, eles vão receber o invite por email automaticamente — sem mexer no Calendar do Mac."
-        ) {
-            if !appState.googleAuth.hasClientId {
-                Text("Build do Apollo sem credenciais Google embutidas. Atualize `GoogleAuthService.embeddedClientId` no código fonte.")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            } else {
-                actionButton(appState.googleAuth.inProgress
-                             ? "Conectando…"
-                             : "Conectar Google",
-                             icon: "link",
-                             tint: Color.accentColor) {
-                    Task {
-                        await appState.googleAuth.connect()
-                        if appState.googleAuth.isConnected {
-                            await appState.sync()
-                        }
+    /// Both connections live side by side on a single screen so
+    /// the user wires up Apollo's two data sources without a
+    /// page turn between them.
+    private var integrationsStep: some View {
+        HStack(alignment: .top, spacing: 18) {
+            integrationTile(label: "Google Calendar",
+                            connected: calendarReady) {
+                googleConnectControl
+            }
+            integrationTile(label: "ClickUp",
+                            connected: clickupReady) {
+                clickupConnectControl
+            }
+        }
+        .frame(maxWidth: 760, alignment: .leading)
+    }
+
+    /// One bordered editorial tile per integration: small-caps
+    /// label + a connected check, then the connect control.
+    private func integrationTile<C: View>(
+        label: String,
+        connected: Bool,
+        @ViewBuilder content: () -> C
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Text(label.uppercased())
+                    .font(Editorial.sans(10.5, .semibold))
+                    .tracking(1.2)
+                    .foregroundStyle(Editorial.inkMute)
+                Spacer(minLength: 0)
+                if connected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.green)
+                }
+            }
+            content()
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Editorial.page,
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var googleConnectControl: some View {
+        if !appState.googleAuth.hasClientId {
+            Text("Build do Apollo sem credenciais Google embutidas. Atualize `GoogleAuthService.embeddedClientId` no código fonte.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        } else {
+            actionButton(appState.googleAuth.inProgress
+                         ? "Conectando…"
+                         : "Conectar Google",
+                         icon: "link",
+                         tint: Editorial.accent) {
+                Task {
+                    await appState.googleAuth.connect()
+                    if appState.googleAuth.isConnected {
+                        await appState.sync()
                     }
                 }
-                if let err = appState.googleAuth.lastError {
-                    Text(err)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .padding(.top, 4)
-                }
             }
-            if calendarReady {
-                let email = appState.googleAuth.connectedEmail
-                successBadge("Conectado\(email.map { " · \($0)" } ?? "")")
+            if let err = appState.googleAuth.lastError {
+                Text(err)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .padding(.top, 4)
             }
+        }
+        if calendarReady {
+            let email = appState.googleAuth.connectedEmail
+            successBadge("Conectado\(email.map { " · \($0)" } ?? "")")
         }
     }
 
-    // MARK: - Step 2 — ClickUp
-
-    private var clickupStep: some View {
-        StepLayout(
-            icon:  "checkmark.circle",
-            tint:  .indigo,
-            title: "Conecte sua conta ClickUp",
-            bodyText: "Suas tarefas vêm do ClickUp. Vamos abrir uma página onde você gera um token pessoal e cola aqui — leva uns 30 segundos."
-        ) {
-            if appState.clickUpAuthService.isWaitingForToken {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Cole o token do ClickUp:")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 8) {
-                        SecureField("pk_…", text: $pastedClickUpToken)
-                            .textFieldStyle(.roundedBorder)
-                            .focusEffectDisabled()
-                            .onSubmit { confirmPastedClickUpToken() }
-                        Button("Conectar") { confirmPastedClickUpToken() }
-                            .keyboardShortcut(.return, modifiers: [])
-                            .disabled(pastedClickUpToken
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
-                                .isEmpty)
-                    }
-                    Button {
-                        appState.clickUpAuthService.cancelConnection()
-                    } label: {
-                        Text("Cancelar").font(.caption.weight(.medium)).foregroundStyle(.red)
-                    }
-                    .buttonStyle(.plain).focusEffectDisabled()
+    @ViewBuilder
+    private var clickupConnectControl: some View {
+        if appState.clickUpAuthService.isWaitingForToken {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Cole o token do ClickUp:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    SecureField("pk_…", text: $pastedClickUpToken)
+                        .textFieldStyle(.roundedBorder)
+                        .focusEffectDisabled()
+                        .onSubmit { confirmPastedClickUpToken() }
+                    Button("Conectar") { confirmPastedClickUpToken() }
+                        .keyboardShortcut(.return, modifiers: [])
+                        .disabled(pastedClickUpToken
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .isEmpty)
                 }
-            } else {
-                actionButton("Conectar com ClickUp",
-                             icon: "link",
-                             tint: Color.accentColor) {
-                    appState.clickUpAuthService.startConnection()
+                Button {
+                    appState.clickUpAuthService.cancelConnection()
+                } label: {
+                    Text("Cancelar").font(.caption.weight(.medium)).foregroundStyle(.red)
                 }
-                if let err = appState.clickUpAuthService.connectionError {
-                    Text(err)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .padding(.top, 6)
-                }
+                .buttonStyle(.plain).focusEffectDisabled()
             }
-            if clickupReady {
-                successBadge("Conectado como \(appState.clickUpAuthService.userName ?? "usuário ClickUp")")
+        } else {
+            actionButton("Conectar com ClickUp",
+                         icon: "link",
+                         tint: Editorial.accent) {
+                appState.clickUpAuthService.startConnection()
             }
+            if let err = appState.clickUpAuthService.connectionError {
+                Text(err)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .padding(.top, 6)
+            }
+        }
+        if clickupReady {
+            successBadge("Conectado como \(appState.clickUpAuthService.userName ?? "usuário ClickUp")")
         }
     }
 
@@ -378,7 +547,7 @@ struct OnboardingView: View {
         ) {
             actionButton("Selecionar lista",
                          icon: "list.bullet",
-                         tint: Color.accentColor) {
+                         tint: Editorial.accent) {
                 showListPicker = true
             }
             if listReady {
@@ -398,7 +567,7 @@ struct OnboardingView: View {
     private var swipeStep: some View {
         StepLayout(
             icon:  "hand.draw.fill",
-            tint:  Color.accentColor,
+            tint:  Editorial.accent,
             title: "Gestos de trackpad",
             bodyText: "Em qualquer tarefa da lista, deslize com **dois dedos no trackpad**: para **avançar** o status ou **voltar** ao anterior. Tente abaixo — a tarefa precisa cruzar o limite para o gesto valer."
         ) {
@@ -426,7 +595,7 @@ struct OnboardingView: View {
     private var paletteStep: some View {
         StepLayout(
             icon:  "command",
-            tint:  Color.accentColor,
+            tint:  Editorial.accent,
             title: "Busca rápida com ⌘K",
             bodyText: "A qualquer momento, em qualquer tela, **⌘K** abre a busca universal. Encontre tarefas, eventos ou comandos digitando o nome — funciona com ou sem acentos."
         ) {
@@ -444,7 +613,7 @@ struct OnboardingView: View {
     private var aiStep: some View {
         StepLayout(
             icon:  "sparkles",
-            tint:  Color.accentColor,
+            tint:  Editorial.accent,
             title: "Apollo IA (opcional)",
             bodyText: "Escolha o motor que vai responder suas perguntas. Cada opção tem trade-offs diferentes — privacidade, velocidade, qualidade. Você pode trocar a qualquer momento nas Configurações."
         ) {
@@ -470,11 +639,11 @@ struct OnboardingView: View {
                     HStack(alignment: .center, spacing: 10) {
                         Image(systemName: backend.systemImage)
                             .font(.callout)
-                            .foregroundStyle(active ? Color.white : Color.accentColor)
+                            .foregroundStyle(active ? Color.white : Editorial.accent)
                             .frame(width: 28, height: 28)
                             .background(
                                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(active ? Color.accentColor : Color.accentColor.opacity(0.15))
+                                    .fill(active ? Editorial.accent : Editorial.accent.opacity(0.15))
                             )
                         VStack(alignment: .leading, spacing: 1) {
                             Text(backend.label)
@@ -490,19 +659,19 @@ struct OnboardingView: View {
                         if active {
                             Image(systemName: "checkmark.circle.fill")
                                 .font(.callout)
-                                .foregroundStyle(Color.accentColor)
+                                .foregroundStyle(Editorial.accent)
                         }
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(active ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.04))
+                            .fill(active ? Editorial.accent.opacity(0.10) : Color.primary.opacity(0.04))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 9, style: .continuous)
                             .strokeBorder(
-                                active ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.10),
+                                active ? Editorial.accent.opacity(0.55) : Color.primary.opacity(0.10),
                                 lineWidth: active ? 1 : 0.5
                             )
                     )
@@ -575,7 +744,7 @@ struct OnboardingView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(openaiSavedFlash ? Color.green : Color.accentColor,
+                        .background(openaiSavedFlash ? Color.green : Editorial.accent,
                                     in: Capsule())
                 }
                 .buttonStyle(.plain).focusEffectDisabled()
@@ -638,7 +807,7 @@ struct OnboardingView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(groqSavedFlash ? Color.green : Color.accentColor,
+                        .background(groqSavedFlash ? Color.green : Editorial.accent,
                                     in: Capsule())
                 }
                 .buttonStyle(.plain).focusEffectDisabled()
@@ -785,7 +954,7 @@ struct OnboardingView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(geminiSavedFlash ? Color.green : Color.accentColor,
+                        .background(geminiSavedFlash ? Color.green : Editorial.accent,
                                     in: Capsule())
                 }
                 .buttonStyle(.plain)
@@ -835,7 +1004,7 @@ struct OnboardingView: View {
     private var doneStep: some View {
         StepLayout(
             icon:  "moon.stars.fill",
-            tint:  Color.accentColor,
+            tint:  Editorial.accent,
             title: "Tudo pronto!",
             bodyText: "Você pode criar eventos e tarefas pelos botões da barra superior, expandir uma tarefa para editar, e arrastar para mudar o tamanho do painel à direita.\n\nBoa produtividade ✨"
         ) {
@@ -861,7 +1030,7 @@ struct OnboardingView: View {
                 Circle()
                     .fill(
                         RadialGradient(
-                            colors: [Color.accentColor.opacity(0.30), .clear],
+                            colors: [Editorial.accent.opacity(0.30), .clear],
                             center: .center,
                             startRadius: 4,
                             endRadius: 60
@@ -872,12 +1041,12 @@ struct OnboardingView: View {
                     .font(.system(size: 48, weight: .semibold))
                     .foregroundStyle(
                         LinearGradient(
-                            colors: [Color.accentColor, Color(hex: "#FF8A4C")],
+                            colors: [Editorial.accent, Color(hex: "#FF8A4C")],
                             startPoint: .topLeading,
                             endPoint:   .bottomTrailing
                         )
                     )
-                    .shadow(color: Color.accentColor.opacity(0.45),
+                    .shadow(color: Editorial.accent.opacity(0.45),
                             radius: 14, x: 0, y: 6)
             }
 
@@ -888,7 +1057,7 @@ struct OnboardingView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(Color.accentColor, in: Capsule())
+                        .background(Editorial.accent, in: Capsule())
                     Text("IA no Apollo")
                         .font(.title2.weight(.semibold))
                 }
@@ -931,10 +1100,10 @@ struct OnboardingView: View {
             if step.rawValue > 0 {
                 Button { goBack() } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "chevron.left").font(.caption2.weight(.bold))
-                        Text("Voltar").font(.caption.weight(.medium))
+                        Image(systemName: "chevron.left").font(.system(size: 9, weight: .semibold))
+                        Text("Voltar").font(Editorial.sans(12, .medium))
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Editorial.inkSoft)
                 }
                 .buttonStyle(.plain).focusEffectDisabled()
             }
@@ -945,8 +1114,8 @@ struct OnboardingView: View {
             if step != .done {
                 Button { dismissPermanently() } label: {
                     Text("Pular configuração")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .font(Editorial.sans(12, .medium))
+                        .foregroundStyle(Editorial.inkMute)
                 }
                 .buttonStyle(.plain).focusEffectDisabled()
             }
@@ -960,9 +1129,11 @@ struct OnboardingView: View {
             // skippable because its prerequisite isn't yet met).
             primaryCTA
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 12)
-        .background(Color.secondary.opacity(0.06))
+        .padding(.horizontal, 28)
+        .padding(.vertical, 14)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+        }
     }
 
     /// Can the user skip the current step without satisfying its
@@ -984,6 +1155,13 @@ struct OnboardingView: View {
         withAnimation(.spring(duration: 0.3, bounce: 0.15)) { step = prev }
     }
 
+    /// The merged integrations step only auto-advances once BOTH
+    /// Google and ClickUp are connected — connecting just one
+    /// leaves the user on the screen to finish the other.
+    private func advanceIfIntegrationsDone() {
+        if step == .integrations, calendarReady, clickupReady { advance() }
+    }
+
     /// Bottom-right primary call-to-action. Same accent-filled capsule
     /// across every step; only the label and tap action change.
     private var primaryCTA: some View {
@@ -1000,16 +1178,17 @@ struct OnboardingView: View {
         }()
 
         return Button(action: action) {
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
                 Text(label)
-                    .font(.caption.weight(.semibold))
+                    .font(Editorial.sans(12.5, .medium))
                 Image(systemName: icon)
-                    .font(.caption2.weight(.bold))
+                    .font(.system(size: 10, weight: .semibold))
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(Color.accentColor, in: Capsule())
+            .foregroundStyle(Editorial.page)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Editorial.ink))
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -1060,32 +1239,43 @@ private struct StepLayout<Content: View>: View {
     let tint: Color
     let title: String
     let bodyText: String
+    /// In the editorial two-pane spread the LEFT page already
+    /// carries the headline + body, so the RIGHT page renders
+    /// only the interactive widget — `spread` drops the
+    /// redundant icon tile / title / body. Default `true`:
+    /// `StepLayout` is used only inside the onboarding spread.
+    var spread: Bool = true
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(tint.opacity(0.15))
-                    Image(systemName: icon)
-                        .font(.title2)
-                        .foregroundStyle(tint)
-                }
-                .frame(width: 42, height: 42)
-                Text(title)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
-            }
-
-            Text(LocalizedStringKey(bodyText))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
+        if spread {
             content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(tint.opacity(0.15))
+                        Image(systemName: icon)
+                            .font(.title2)
+                            .foregroundStyle(tint)
+                    }
+                    .frame(width: 42, height: 42)
+                    Text(title)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.primary)
+                }
+
+                Text(LocalizedStringKey(bodyText))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1166,77 +1356,18 @@ private struct WelcomeStepView: View {
     /// Three soft radial gradients stacked behind the content.
     /// Each one drifts at a slightly different cadence so the
     /// composition shimmers without ever repeating cleanly.
+    /// A single whisper-soft cinnabar halo that breathes — the
+    /// only chromatic element (replaces the tri-colour aurora).
     private var aurora: some View {
-        ZStack {
-            // Top-left accent halo.
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color.accentColor.opacity(0.45),
-                            Color.accentColor.opacity(0.10),
-                            .clear
-                        ],
-                        center: .center,
-                        startRadius: 8,
-                        endRadius: 220
-                    )
-                )
-                .frame(width: 360, height: 360)
-                .blur(radius: 24)
-                .offset(x: auroraSlow ? -110 : -90,
-                        y: auroraSlow ? -150 : -130)
-                .scaleEffect(auroraSlow ? 1.15 : 0.95)
-                .opacity(auroraSlow ? 0.95 : 0.65)
-
-            // Bottom-right warm halo.
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color(hex: "#FF8A4C").opacity(0.55),
-                            Color(hex: "#FF5E8A").opacity(0.20),
-                            .clear
-                        ],
-                        center: .center,
-                        startRadius: 8,
-                        endRadius: 220
-                    )
-                )
-                .frame(width: 320, height: 320)
-                .blur(radius: 22)
-                .offset(x: auroraFast ? 130 : 110,
-                        y: auroraFast ? 140 : 120)
-                .scaleEffect(auroraFast ? 1.12 : 0.92)
-                .opacity(auroraFast ? 0.85 : 0.55)
-
-            // Top-right purple wash.
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color(hex: "#A875FF").opacity(0.40),
-                            Color(hex: "#5AC8FA").opacity(0.15),
-                            .clear
-                        ],
-                        center: .center,
-                        startRadius: 6,
-                        endRadius: 180
-                    )
-                )
-                .frame(width: 280, height: 280)
-                .blur(radius: 20)
-                .offset(x: auroraFast ? 150 : 130,
-                        y: auroraSlow ? -110 : -90)
-                .scaleEffect(auroraFast ? 1.08 : 0.92)
-                .opacity(auroraFast ? 0.75 : 0.45)
-                .rotationEffect(.degrees(hueDrift))
-        }
-        .compositingGroup()
-        // Whole-aurora hue rotation so the colours shift over
-        // time — same trick as the AI chat orb, scaled down so
-        // it stays subtle on a wider canvas.
-        .hueRotation(.degrees(hueDrift * 0.06))
+        RadialGradient(
+            colors: [Editorial.accent.opacity(0.09), .clear],
+            center: .center,
+            startRadius: 10,
+            endRadius: 420
+        )
+        .frame(width: 520, height: 520)
+        .blur(radius: 32)
+        .scaleEffect(iconBreath ? 1.06 : 0.94)
         .allowsHitTesting(false)
     }
 
@@ -1247,71 +1378,44 @@ private struct WelcomeStepView: View {
     /// breathing slowly so the icon feels "alive" even after
     /// the cascade is done.
     private var heroIcon: some View {
+        // Editorial mark — serif-italic cinnabar "a" on a paper
+        // tile with a hairline rule (same glyph as the splash and
+        // Settings · Sobre).
         ZStack {
-            // Halo bloom — appears with the icon, then keeps
-            // breathing forever.
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color.accentColor.opacity(0.35),
-                            Color(hex: "#FF8A4C").opacity(0.18),
-                            .clear
-                        ],
-                        center: .center,
-                        startRadius: 10,
-                        endRadius: 90
-                    )
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Editorial.page)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .strokeBorder(Editorial.rule, lineWidth: 1)
                 )
-                .frame(width: 180, height: 180)
-                .blur(radius: 6)
-                .scaleEffect(iconBreath ? 1.08 : 0.92)
-                .opacity(iconBreath ? 0.95 : 0.55)
-
-            // High-res .icns load — the previous workspace
-            // icon served a tiny Finder-cache rep, producing a
-            // blurry result on the welcome step.
-            AppIconLoader.image
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 96, height: 96)
-                .shadow(color: .black.opacity(0.20), radius: 14, x: 0, y: 6)
-                .scaleEffect(iconBreath ? 1.02 : 0.99)
+            Text("a")
+                .font(.system(size: 60, weight: .regular, design: .serif))
+                .italic()
+                .foregroundStyle(Editorial.accent)
         }
+        .frame(width: 96, height: 96)
+        .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 9)
+        .scaleEffect(iconBreath ? 1.015 : 0.99)
     }
 
     // MARK: - Title block
 
     private var titleBlock: some View {
         VStack(spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                // Wordmark with a subtle gradient — picks up the
-                // accent + warm orange used everywhere else in
-                // the app's identity.
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text("Apollo")
-                    .font(.title.weight(.semibold))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [
-                                Color.primary,
-                                Color.accentColor,
-                                Color(hex: "#FF8A4C")
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
+                    .font(Editorial.serif(34))
+                    .foregroundStyle(Editorial.ink)
+                    .tracking(-0.8)
                 betaPill
-                    .scaleEffect(phase >= 4 ? 1 : 0.6)
                     .opacity(phase >= 4 ? 1 : 0)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.6)
-                                .delay(1.10),
+                    .animation(.easeOut(duration: 0.4).delay(1.10),
                                value: phase)
             }
 
-            Text("Sua agenda + tarefas em um só lugar.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            Text("uma agenda que lê")
+                .font(Editorial.serif(15).italic())
+                .foregroundStyle(Editorial.inkSoft)
                 .multilineTextAlignment(.center)
                 .opacity(phase >= 4 ? 1 : 0)
                 .offset(y: phase >= 4 ? 0 : 8)
@@ -1320,11 +1424,11 @@ private struct WelcomeStepView: View {
                            value: phase)
 
             Text("Você está usando uma versão Beta — algumas peças ainda estão sendo afinadas.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .font(Editorial.sans(11.5))
+                .foregroundStyle(Editorial.inkMute)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
-                .padding(.top, 2)
+                .padding(.top, 4)
                 .opacity(phase >= 4 ? 1 : 0)
                 .offset(y: phase >= 4 ? 0 : 8)
                 .animation(.spring(response: 0.55, dampingFraction: 0.82)
@@ -1371,31 +1475,28 @@ private struct WelcomeStepView: View {
         // loops to register before the user starts interacting.
         let delay = 1.85 + Double(index) * 0.30
 
-        return HStack(alignment: .top, spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(tint.opacity(0.15))
-                Image(systemName: icon)
-                    .foregroundStyle(tint)
-                    .font(.callout)
-            }
-            .frame(width: 30, height: 30)
-            // Tiny scale beat so the icon feels like it lands
-            // with weight rather than just appearing.
-            .scaleEffect(visible ? 1 : 0.7)
+        return HStack(alignment: .top, spacing: 12) {
+            // Editorial marginalia: a muted tone dot instead of a
+            // saturated colour tile.
+            Circle()
+                .fill(tint.editorialMuted)
+                .frame(width: 7, height: 7)
+                .padding(.top, 6)
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(Editorial.serif(14))
+                    .foregroundStyle(Editorial.ink)
                 Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Editorial.serif(12).italic())
+                    .foregroundStyle(Editorial.inkSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            Spacer(minLength: 0)
         }
         .opacity(visible ? 1 : 0)
-        .offset(x: visible ? 0 : -16)
-        .animation(.spring(response: 0.55, dampingFraction: 0.78)
+        .offset(x: visible ? 0 : -14)
+        .animation(.spring(response: 0.55, dampingFraction: 0.80)
                     .delay(delay),
                    value: phase)
     }
@@ -1427,24 +1528,11 @@ private struct WelcomeStepView: View {
             }
         }
 
-        // Continuous loops — start them at appear time so they
-        // ramp up alongside the cascade. Different cadences so
-        // the composition never lines up to the same frame.
-        withAnimation(.easeInOut(duration: 5.0)
-                        .repeatForever(autoreverses: true)) {
-            auroraSlow = true
-        }
-        withAnimation(.easeInOut(duration: 3.6)
-                        .repeatForever(autoreverses: true)) {
-            auroraFast = true
-        }
-        withAnimation(.easeInOut(duration: 3.0)
+        // One calm breathing loop drives both the cinnabar halo
+        // and the mark — no aurora, no hue drift.
+        withAnimation(.easeInOut(duration: 3.4)
                         .repeatForever(autoreverses: true)) {
             iconBreath = true
-        }
-        withAnimation(.linear(duration: 22)
-                        .repeatForever(autoreverses: false)) {
-            hueDrift = 360
         }
     }
 }
@@ -1649,11 +1737,11 @@ private struct SwipeDemoCard: View {
 
     private func fingerDot() -> some View {
         Circle()
-            .fill(Color.accentColor.opacity(0.55))
+            .fill(Editorial.accent.opacity(0.55))
             .frame(width: 8, height: 8)
             .overlay(
                 Circle()
-                    .strokeBorder(Color.accentColor.opacity(0.30),
+                    .strokeBorder(Editorial.accent.opacity(0.30),
                                   lineWidth: 1)
                     .modifier(PulseHint(active: !hasInteracted))
             )
@@ -2196,21 +2284,21 @@ private struct CommandPaletteDemoCard: View {
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(pressed
-                          ? Color.accentColor
+                          ? Editorial.accent
                           : Color.primary.opacity(0.10))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .strokeBorder(
                         pressed
-                            ? Color.accentColor
+                            ? Editorial.accent
                             : Color.primary.opacity(0.18),
                         lineWidth: 0.6
                     )
             )
             .scaleEffect(pressed ? 0.92 : 1.0)
             .shadow(color: pressed
-                    ? Color.accentColor.opacity(0.55)
+                    ? Editorial.accent.opacity(0.55)
                     : Color.clear,
                     radius: 6, x: 0, y: 0)
             .animation(
@@ -2335,7 +2423,7 @@ private struct CommandPaletteDemoCard: View {
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(isFirst
-                    ? Color.accentColor.opacity(0.18)
+                    ? Editorial.accent.opacity(0.18)
                     : Color.clear)
         )
     }

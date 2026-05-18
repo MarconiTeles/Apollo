@@ -36,33 +36,54 @@ struct CommandPaletteView: View {
     /// in-content scale is what reads as "popping in".
     @State private var entered: Bool = false
 
+    /// Respect the system "Reduce Motion" setting — when on, the
+    /// palette still fades but skips scale/blur/slide so it can't
+    /// induce motion discomfort.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Springs tuned for a Raycast/Linear-grade feel. `selSpring`
+    /// drives the moving highlight + chevron; `enterSpring` the
+    /// drop-in.
+    private var selSpring: Animation {
+        reduceMotion ? .easeInOut(duration: 0.12)
+                     : .spring(response: 0.28, dampingFraction: 0.82)
+    }
+    private var enterSpring: Animation {
+        .spring(response: 0.34, dampingFraction: 0.80)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             searchHeader
-            Divider().opacity(0.6)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
             resultsList
+            Rectangle().fill(Editorial.rule).frame(height: 1)
             footer
         }
-        .frame(width: 640, height: 420)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .frame(width: 680, height: 540)
+        // Editorial card (prototype `PPalette` / `PPopup`):
+        // near-neutral popup surface, hairline border, soft
+        // ambient shadow — no glass.
+        .background(Editorial.popup)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
         )
-        // Entrance: scale up from 0.94 + fade in. The
-        // anchor is `.top` so the palette appears to drop
-        // into place from above its final position rather
-        // than balloon out from the centre — reads as
-        // "command bar lands" instead of "modal alert
-        // pops".
-        .scaleEffect(entered ? 1.0 : 0.94, anchor: .top)
+        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
+        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        // Entrance: a confident "command bar lands" — scales up
+        // from 0.96 anchored at the top, lifts 10pt, and a brief
+        // 6→0 blur sharpens it into focus. Reduce Motion → fade
+        // only.
+        .scaleEffect(reduceMotion ? 1 : (entered ? 1.0 : 0.96), anchor: .top)
+        .offset(y: reduceMotion ? 0 : (entered ? 0 : -10))
+        .blur(radius: reduceMotion ? 0 : (entered ? 0 : 6))
         .opacity(entered ? 1 : 0)
         .onAppear {
             queryFocused = true
-            withAnimation(
-                .spring(response: 0.32, dampingFraction: 0.78)
-            ) {
+            withAnimation(reduceMotion ? .easeOut(duration: 0.18)
+                                       : enterSpring) {
                 entered = true
             }
         }
@@ -71,18 +92,25 @@ struct CommandPaletteView: View {
     // MARK: - Header
 
     private var searchHeader: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
-            TextField("Buscar tarefa ou comando…",
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("COMANDO")
+                .font(Editorial.sans(10.5, .semibold))
+                .tracking(1)
+                .foregroundStyle(model.query.isEmpty
+                                 ? Editorial.inkMute : Editorial.accent)
+                .animation(.easeInOut(duration: 0.2),
+                           value: model.query.isEmpty)
+            TextField("Buscar tarefa, evento ou comando…",
                       text: $model.query)
                 .textFieldStyle(.plain)
-                .font(.system(size: 16))
+                .font(Editorial.serif(26).italic())
+                .foregroundStyle(Editorial.ink)
+                .tracking(-0.6)
                 .focused($queryFocused)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 28)
+        .padding(.top, 20)
+        .padding(.bottom, 14)
     }
 
     // MARK: - Results
@@ -94,7 +122,7 @@ struct CommandPaletteView: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 1) {
+                    LazyVStack(spacing: 0) {
                         ForEach(Array(model.items.enumerated()),
                                 id: \.element.id) { idx, item in
                             row(item,
@@ -164,7 +192,7 @@ struct CommandPaletteView: View {
                                 }
                         }
                     }
-                    .padding(8)
+                    .padding(.vertical, 10)
                 }
                 // Reset to the top whenever the candidate
                 // list itself changes — `itemsVersion` is
@@ -232,124 +260,119 @@ struct CommandPaletteView: View {
     private func row(_ item: CommandPaletteItem,
                      isSelected: Bool,
                      isHovered: Bool) -> some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 6,
-                                  style: .continuous)
-                    .fill(item.tint.opacity(0.18))
-                Image(systemName: item.icon)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(item.tint)
-            }
-            .frame(width: 26, height: 26)
+        // Prototype `PPalette` row, refined: a 2px cinnabar
+        // accent bar grows in on the active row, the kind word +
+        // chevron pick up the accent, the content steps 4pt to
+        // the right, and a soft handoff crossfades the wash
+        // between the old and new rows (no matchedGeometry —
+        // robust under LazyVStack recycling). All motion springs;
+        // Reduce Motion collapses it to a quick fade.
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            Text(item.kind.badge)
+                .font(Editorial.sans(10.5, .semibold))
+                .tracking(0.8)
+                .foregroundStyle(isSelected ? Editorial.accent : Editorial.inkMute)
+                .frame(width: 64, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .font(Editorial.serif(17))
+                    .foregroundStyle(Editorial.ink)
+                    .tracking(-0.2)
                     .lineLimit(1)
                 if let sub = item.subtitle, !sub.isEmpty {
-                    Text(sub)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                    Caption(sub, size: 12.5)
                         .lineLimit(1)
                 }
             }
 
             Spacer(minLength: 0)
 
-            // Section badge — minor signal so users learn
-            // which results are tasks vs. events vs. app
-            // commands.
-            Text(item.kind.badge)
-                .font(.system(size: 9, weight: .heavy))
-                .tracking(0.5)
-                .foregroundStyle(.tertiary)
-
-            if isSelected {
-                Image(systemName: "return")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 4)
-            }
+            // Always present so the row width never reflows —
+            // it slides + fades in on selection.
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Editorial.accent)
+                .opacity(isSelected ? 1 : 0)
+                .offset(x: isSelected ? 0 : (reduceMotion ? 0 : 6))
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        // The active row steps forward — a small but premium
+        // "this is where you are" cue.
+        .offset(x: (isSelected && !reduceMotion) ? 4 : 0)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            // Two-tier highlight. Keyboard selection wins
-            // when both are true (the user is steering with
-            // the keys; the cursor's position is incidental).
-            // Hover-only paints a softer secondary tint so
-            // the user gets feedback that the mouse IS over
-            // a row but doesn't lose track of where the
-            // keyboard cursor is.
-            RoundedRectangle(cornerRadius: 8,
-                              style: .continuous)
-                .fill(
-                    isSelected
-                        ? Color.accentColor.opacity(0.20)
-                        : isHovered
-                            ? Color.primary.opacity(0.06)
-                            : Color.clear
-                )
+            (isSelected
+                ? Editorial.ink.opacity(0.05)
+                : isHovered
+                    ? Editorial.ink.opacity(0.035)
+                    : Color.clear)
         )
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Editorial.accent)
+                .frame(width: 2)
+                .scaleEffect(y: isSelected ? 1 : 0, anchor: .center)
+                .opacity(isSelected ? 1 : 0)
+        }
+        // Per-row animation keyed to BOTH states → moving the
+        // selection animates the leaving row out and the arriving
+        // row in simultaneously (the "soft handoff").
+        .animation(selSpring, value: isSelected)
+        .animation(reduceMotion ? .easeInOut(duration: 0.1)
+                                : .easeOut(duration: 0.14),
+                   value: isHovered)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 28, weight: .light))
-                .foregroundStyle(.tertiary)
-            Text(model.query.isEmpty
-                 ? "Comece a digitar para buscar tarefas ou comandos"
-                 : "Nenhum resultado para “\(model.query)”")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(20)
+        Text(model.query.isEmpty
+             ? "Comece a digitar para buscar tarefas, eventos ou comandos."
+             : "Nada encontrado para “\(model.query)”.")
+            .font(Editorial.serif(14).italic())
+            .foregroundStyle(Editorial.inkMute)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 40)
     }
 
     // MARK: - Footer (key hints)
 
     private var footer: some View {
-        HStack(spacing: 14) {
-            keyHint(symbol: "↑↓", label: "navegar")
-            keyHint(symbol: "↩", label: "abrir")
-            keyHint(symbol: "esc", label: "fechar")
-            Spacer()
+        HStack(spacing: 18) {
+            keyHint(symbols: ["↑", "↓"], label: "navegar")
+            keyHint(symbols: ["⏎"],      label: "abrir")
+            keyHint(symbols: ["esc"],    label: "fechar")
+            Spacer(minLength: 0)
             Text("\(model.items.count) resultado\(model.items.count == 1 ? "" : "s")")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
+                .font(Editorial.sans(11))
+                .foregroundStyle(Editorial.inkSoft)
+                .contentTransition(.numericText())
+                .animation(.snappy(duration: 0.25), value: model.items.count)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(.thickMaterial.opacity(0.5))
-        .overlay(
-            Rectangle()
-                .frame(height: 0.5)
-                .foregroundStyle(.primary.opacity(0.06)),
-            alignment: .top
-        )
+        .padding(.horizontal, 28)
+        .padding(.vertical, 12)
     }
 
-    private func keyHint(symbol: String, label: String) -> some View {
-        HStack(spacing: 4) {
-            Text(symbol)
-                .font(.system(size: 10, weight: .semibold,
-                              design: .monospaced))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(
-                    RoundedRectangle(cornerRadius: 3,
-                                      style: .continuous)
-                        .fill(Color.primary.opacity(0.06))
-                )
+    private func keyHint(symbols: [String], label: String) -> some View {
+        HStack(spacing: 5) {
+            HStack(spacing: 3) {
+                ForEach(symbols, id: \.self) { s in
+                    Text(s)
+                        .font(Editorial.sans(10.5, .medium))
+                        .foregroundStyle(Editorial.ink)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(Editorial.rule)
+                        )
+                }
+            }
             Text(label)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
+                .font(Editorial.sans(11))
+                .foregroundStyle(Editorial.inkSoft)
         }
     }
 }
@@ -375,22 +398,29 @@ private struct RowAppearance: ViewModifier {
     let index: Int
 
     @State private var appeared: Bool = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Per-step delay, capped after a handful of rows so
     /// long result lists don't trail off.
-    private static let stagger: Double = 0.022
+    private static let stagger: Double = 0.024
     private static let maxStaggerSlots: Int = 12
 
     func body(content: Content) -> some View {
         content
             .opacity(appeared ? 1 : 0)
-            .offset(y: appeared ? 0 : -6)
+            // Slightly larger lift + a hair of scale so the
+            // cascade reads as a deliberate "deal the cards"
+            // beat rather than a flat fade. Reduce Motion →
+            // fade only, no offset/scale, no stagger.
+            .offset(y: (appeared || reduceMotion) ? 0 : -8)
+            .scaleEffect((appeared || reduceMotion) ? 1 : 0.985,
+                         anchor: .topLeading)
             .onAppear {
+                guard !reduceMotion else { appeared = true; return }
                 let slot = min(index, Self.maxStaggerSlots)
                 let delay = Double(slot) * Self.stagger
                 withAnimation(
-                    .spring(response: 0.30,
-                             dampingFraction: 0.85)
+                    .spring(response: 0.32, dampingFraction: 0.86)
                         .delay(delay)
                 ) {
                     appeared = true

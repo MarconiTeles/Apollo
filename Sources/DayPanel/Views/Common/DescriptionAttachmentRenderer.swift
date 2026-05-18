@@ -247,12 +247,27 @@ enum DescriptionAttachmentRenderer {
         // measured. Long names that survive that cap still fit
         // because the text is drawn into a rect clipped at
         // `maxWidth` minus padding.
-        let cardFont = NSFont.systemFont(ofSize: font.pointSize - 1,
-                                         weight: .medium)
+        // Editorial: New York italic in the app's cinnabar accent
+        // on a paper chip — not white on a saturated emerald fill.
+        let editorialAccent = NSColor(srgbRed: 0.780, green: 0.196,
+                                      blue: 0.106, alpha: 1.0)   // #C7321B
+        let editorialCard = NSColor(srgbRed: 0.988, green: 0.980,
+                                    blue: 0.961, alpha: 1.0)   // #FCFAF5
+        let editorialRule = NSColor(srgbRed: 0.078, green: 0.075,
+                                    blue: 0.059, alpha: 0.10)  // ink @ 10%
+        // New York (system serif) italic.
+        let cardFont: NSFont = {
+            let size = font.pointSize - 1
+            let base = NSFont.systemFont(ofSize: size)
+            var d = base.fontDescriptor
+            if let serif = d.withDesign(.serif) { d = serif }
+            d = d.withSymbolicTraits(.italic)
+            return NSFont(descriptor: d, size: size) ?? base
+        }()
         let truncated = truncateMiddle(filename, maxChars: 36)
         let textAttrs: [NSAttributedString.Key: Any] = [
             .font:            cardFont,
-            .foregroundColor: NSColor.white,
+            .foregroundColor: editorialAccent,
         ]
         let textString = NSAttributedString(string: truncated, attributes: textAttrs)
         let textSize = textString.size()
@@ -269,17 +284,12 @@ enum DescriptionAttachmentRenderer {
 
         let rect = NSRect(x: 0, y: 0, width: width, height: height)
         let path = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5),
-                                xRadius: 5, yRadius: 5)
-        // ClickUp's web pill is roughly mint-teal at ~70% opacity.
-        // We pick a tone that reads in both light and dark mode —
-        // a saturated emerald with full opacity, since the white
-        // text needs solid contrast.
-        NSColor(srgbRed: 0.12, green: 0.71, blue: 0.55, alpha: 1.0).setFill()
+                                xRadius: 4, yRadius: 4)
+        // Editorial chip: off-white paper fill + a single
+        // hairline rule — no saturated emerald block.
+        editorialCard.setFill()
         path.fill()
-
-        // Subtle dark border for definition on both light and dark
-        // backgrounds.
-        NSColor.black.withAlphaComponent(0.10).setStroke()
+        editorialRule.setStroke()
         path.lineWidth = 1
         path.stroke()
 
@@ -297,7 +307,7 @@ enum DescriptionAttachmentRenderer {
         paragraph.alignment     = .center
         let drawingAttrs: [NSAttributedString.Key: Any] = [
             .font:            cardFont,
-            .foregroundColor: NSColor.white,
+            .foregroundColor: editorialAccent,
             .paragraphStyle:  paragraph,
         ]
         (truncated as NSString).draw(in: textRect, withAttributes: drawingAttrs)

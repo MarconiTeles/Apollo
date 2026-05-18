@@ -39,58 +39,32 @@ struct UnifiedDatePickerPopover: View {
     var body: some View {
         VStack(spacing: 0) {
             tabs
-            Rectangle().fill(.separator.opacity(0.5)).frame(height: 0.5)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
 
             HStack(spacing: 0) {
                 shortcutsColumn.frame(width: 180)
-                Rectangle().fill(.separator.opacity(0.5)).frame(width: 0.5)
+                Rectangle().fill(Editorial.rule).frame(width: 1)
                 calendarColumn
             }
 
-            Rectangle().fill(.separator.opacity(0.5)).frame(height: 0.5)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
             actions
         }
         .frame(width: 500)
         .fixedSize(horizontal: true, vertical: true)
+        .background(Editorial.paper)
     }
 
     // MARK: - Tabs
 
     private var tabs: some View {
-        HStack(spacing: 8) {
-            tabButton(title: "Data inicial",      icon: "calendar",                isActive: mode == .start, isOn: startOn) { mode = .start }
-            tabButton(title: "Data de vencimento", icon: "calendar.badge.checkmark", isActive: mode == .due,   isOn: dueOn)   { mode = .due }
+        HStack(spacing: 20) {
+            editorialDateTab(title: "Data inicial",       isActive: mode == .start, isOn: startOn) { mode = .start }
+            editorialDateTab(title: "Data de vencimento", isActive: mode == .due,   isOn: dueOn)   { mode = .due }
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-    }
-
-    private func tabButton(title: String, icon: String, isActive: Bool, isOn: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.caption)
-                    .foregroundStyle(isOn ? Color.accentColor : .secondary)
-                Text(title)
-                    .font(.subheadline.weight(isActive ? .medium : .regular))
-                    .foregroundStyle(.primary)
-                Spacer()
-            }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .frame(maxWidth: .infinity)
-            .background(
-                isActive
-                    ? AnyShapeStyle(Color.accentColor.opacity(0.12))
-                    : AnyShapeStyle(Color.clear),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isActive ? Color.accentColor.opacity(0.3) : .white.opacity(0.1), lineWidth: 0.5)
-            )
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
+        .padding(.horizontal, 18)
+        .padding(.top, 14)
     }
 
     // MARK: - Shortcuts
@@ -103,19 +77,23 @@ struct UnifiedDatePickerPopover: View {
                         applyShortcut(sc)
                     } label: {
                         HStack {
-                            Text(sc.label).font(.callout).foregroundStyle(.primary)
+                            Text(sc.label)
+                                .font(Editorial.serif(14))
+                                .foregroundStyle(Editorial.ink)
                             Spacer()
-                            Text(sc.dayLabel).font(.caption).foregroundStyle(.secondary)
+                            Text(sc.dayLabel)
+                                .font(Editorial.sans(11))
+                                .foregroundStyle(Editorial.inkMute)
                         }
-                        .padding(.horizontal, 14).padding(.vertical, 12)
+                        .padding(.horizontal, 16).padding(.vertical, 11)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
 
                     if sc != .eightWeeks {
-                        Rectangle().fill(.separator.opacity(0.3)).frame(height: 0.5)
-                            .padding(.horizontal, 14)
+                        Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+                            .padding(.horizontal, 16)
                     }
                 }
             }
@@ -138,27 +116,33 @@ struct UnifiedDatePickerPopover: View {
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .labelsHidden()
+                    .tint(Editorial.accent)
                 Text(currentEnabled.wrappedValue
                      ? currentDate.wrappedValue.formatted(.dateTime.day().month(.wide).year())
                      : "Sem data")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(currentEnabled.wrappedValue ? .primary : .secondary)
+                    .font(Editorial.serif(15))
+                    .foregroundStyle(currentEnabled.wrappedValue ? Editorial.ink : Editorial.inkMute)
                 Spacer()
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
 
-            Rectangle().fill(.separator.opacity(0.4)).frame(height: 0.5)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
 
             ClickUpStyleCalendar(date: currentDate, isEnabled: currentEnabled.wrappedValue)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
 
-            Rectangle().fill(.separator.opacity(0.4)).frame(height: 0.5)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
 
             HStack {
-                Image(systemName: "clock").font(.caption).foregroundStyle(.secondary)
-                Text("Horário").font(.caption).foregroundStyle(.secondary)
+                Image(systemName: "clock")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Editorial.inkMute)
+                Text("Horário")
+                    .font(Editorial.sans(10.5, .semibold))
+                    .tracking(1.1)
+                    .foregroundStyle(Editorial.inkMute)
                 Spacer()
                 DatePicker("", selection: currentDate, displayedComponents: [.hourAndMinute])
                     .labelsHidden()
@@ -193,8 +177,8 @@ struct UnifiedDatePickerPopover: View {
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.red)
+            .font(Editorial.sans(12, .medium))
+            .foregroundStyle(Editorial.accent)
 
             Spacer()
 
@@ -206,16 +190,17 @@ struct UnifiedDatePickerPopover: View {
                 dismiss()
             } label: {
                 Text("Aplicar")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18).frame(height: 28)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .font(Editorial.sans(12.5, .medium))
+                    .foregroundStyle(Editorial.page)
+                    .padding(.horizontal, 16).padding(.vertical, 7)
+                    .background(Editorial.ink,
+                                in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     // MARK: - Defaults
@@ -263,52 +248,30 @@ struct EventDatePickerPopover: View {
     var body: some View {
         VStack(spacing: 0) {
             tabs
-            Rectangle().fill(.separator.opacity(0.5)).frame(height: 0.5)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
             HStack(spacing: 0) {
                 shortcutsColumn.frame(width: 180)
-                Rectangle().fill(.separator.opacity(0.5)).frame(width: 0.5)
+                Rectangle().fill(Editorial.rule).frame(width: 1)
                 calendarColumn
             }
-            Rectangle().fill(.separator.opacity(0.5)).frame(height: 0.5)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
             actions
         }
         .frame(width: 500)
         .fixedSize(horizontal: true, vertical: true)
+        .background(Editorial.paper)
     }
 
     // MARK: Tabs
 
     private var tabs: some View {
-        HStack(spacing: 8) {
-            tabButton(title: "Início", icon: "calendar",                isActive: mode == .start) { mode = .start }
-            tabButton(title: "Fim",    icon: "calendar.badge.checkmark", isActive: mode == .end)   { mode = .end }
+        HStack(spacing: 20) {
+            editorialDateTab(title: "Início", isActive: mode == .start, isOn: true) { mode = .start }
+            editorialDateTab(title: "Fim",    isActive: mode == .end,   isOn: true) { mode = .end }
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-    }
-
-    private func tabButton(title: String, icon: String, isActive: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).font(.caption).foregroundStyle(Color.accentColor)
-                Text(title)
-                    .font(.subheadline.weight(isActive ? .medium : .regular))
-                    .foregroundStyle(.primary)
-                Spacer()
-            }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .frame(maxWidth: .infinity)
-            .background(
-                isActive ? AnyShapeStyle(Color.accentColor.opacity(0.12))
-                         : AnyShapeStyle(Color.clear),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isActive ? Color.accentColor.opacity(0.3) : .white.opacity(0.1), lineWidth: 0.5)
-            )
-        }
-        .buttonStyle(.plain).focusEffectDisabled()
+        .padding(.horizontal, 18)
+        .padding(.top, 14)
     }
 
     // MARK: Shortcuts
@@ -319,18 +282,22 @@ struct EventDatePickerPopover: View {
                 ForEach(Shortcut.allCases) { sc in
                     Button { applyShortcut(sc) } label: {
                         HStack {
-                            Text(sc.label).font(.callout).foregroundStyle(.primary)
+                            Text(sc.label)
+                                .font(Editorial.serif(14))
+                                .foregroundStyle(Editorial.ink)
                             Spacer()
-                            Text(sc.dayLabel).font(.caption).foregroundStyle(.secondary)
+                            Text(sc.dayLabel)
+                                .font(Editorial.sans(11))
+                                .foregroundStyle(Editorial.inkMute)
                         }
-                        .padding(.horizontal, 14).padding(.vertical, 12)
+                        .padding(.horizontal, 16).padding(.vertical, 11)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).focusEffectDisabled()
 
                     if sc != .eightWeeks {
-                        Rectangle().fill(.separator.opacity(0.3)).frame(height: 0.5)
-                            .padding(.horizontal, 14)
+                        Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+                            .padding(.horizontal, 16)
                     }
                 }
             }
@@ -356,22 +323,28 @@ struct EventDatePickerPopover: View {
             HStack(spacing: 8) {
                 Text(currentDate.wrappedValue
                      .formatted(.dateTime.day().month(.wide).year()))
-                    .font(.subheadline.weight(.medium))
+                    .font(Editorial.serif(15))
+                    .foregroundStyle(Editorial.ink)
                 Spacer()
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
 
-            Rectangle().fill(.separator.opacity(0.4)).frame(height: 0.5)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
 
             ClickUpStyleCalendar(date: currentDate, isEnabled: true)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
 
-            Rectangle().fill(.separator.opacity(0.4)).frame(height: 0.5)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
 
             HStack {
-                Image(systemName: "clock").font(.caption).foregroundStyle(.secondary)
-                Text("Horário").font(.caption).foregroundStyle(.secondary)
+                Image(systemName: "clock")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Editorial.inkMute)
+                Text("Horário")
+                    .font(Editorial.sans(10.5, .semibold))
+                    .tracking(1.1)
+                    .foregroundStyle(Editorial.inkMute)
                 Spacer()
                 DatePicker("", selection: currentDate, displayedComponents: [.hourAndMinute])
                     .labelsHidden()
@@ -407,15 +380,55 @@ struct EventDatePickerPopover: View {
                 dismiss()
             } label: {
                 Text("Aplicar")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18).frame(height: 28)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .font(Editorial.sans(12.5, .medium))
+                    .foregroundStyle(Editorial.page)
+                    .padding(.horizontal, 16).padding(.vertical, 7)
+                    .background(Editorial.ink,
+                                in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             }
             .buttonStyle(.plain).focusEffectDisabled()
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .padding(.horizontal, 16).padding(.vertical, 12)
     }
+}
+
+// MARK: - Editorial date tab
+
+/// Shared tab control for the date/time popovers — prototype
+/// `tabPT`: text-only, ink + 2px ink underline when active,
+/// `inkSoft` when not. A small status dot (filled cinnabar when
+/// the date is set, hollow ring otherwise) precedes the label.
+private func editorialDateTab(
+    title: String,
+    isActive: Bool,
+    isOn: Bool,
+    action: @escaping () -> Void
+) -> some View {
+    Button(action: action) {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(isOn ? Editorial.accent : Color.clear)
+                .frame(width: 6, height: 6)
+                .overlay(
+                    Circle().strokeBorder(
+                        isOn ? Color.clear : Editorial.inkFaint,
+                        lineWidth: 1.5
+                    )
+                )
+            Text(title)
+                .font(Editorial.sans(12.5, isActive ? .semibold : .regular))
+                .foregroundStyle(isActive ? Editorial.ink : Editorial.inkSoft)
+        }
+        .padding(.bottom, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(isActive ? Editorial.ink : Color.clear)
+                .frame(height: 2)
+        }
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .focusEffectDisabled()
 }
 
 // MARK: - Shortcut definitions
@@ -516,13 +529,13 @@ struct ClickUpStyleCalendar: View {
     private var header: some View {
         HStack(spacing: 6) {
             Text(displayMonth.formatted(.dateTime.month(.wide).year()))
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.primary)
+                .font(Editorial.serif(16))
+                .foregroundStyle(Editorial.ink)
             Spacer()
             Button { goToToday() } label: {
                 Text("Hoje")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .font(Editorial.sans(11, .medium))
+                    .foregroundStyle(Editorial.inkSoft)
                     .padding(.horizontal, 8).frame(height: 24)
                     .contentShape(Rectangle())
             }
@@ -535,8 +548,8 @@ struct ClickUpStyleCalendar: View {
     private func navButton(systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Editorial.inkMute)
                 .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
         }
@@ -550,8 +563,9 @@ struct ClickUpStyleCalendar: View {
         return LazyVGrid(columns: columns, spacing: 4) {
             ForEach(weekdayLabels, id: \.self) { label in
                 Text(label)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .font(Editorial.sans(10, .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(Editorial.inkMute)
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, 4)
             }
@@ -571,14 +585,14 @@ struct ClickUpStyleCalendar: View {
 
         Button { select(d) } label: {
             Text("\(dayNum)")
-                .font(.system(size: 13, weight: isSelected || isToday ? .semibold : .regular))
+                .font(Editorial.sans(13, isSelected || isToday ? .semibold : .regular))
                 .foregroundStyle(textColor(selected: isSelected, today: isToday, currentMonth: isCurrentMonth, past: isPast))
                 .frame(width: 28, height: 28)
                 .background {
                     if isSelected {
-                        Circle().fill(Color.accentColor)
+                        Circle().fill(Editorial.accent)
                     } else if isToday {
-                        Circle().strokeBorder(Color.accentColor, lineWidth: 1.5)
+                        Circle().strokeBorder(Editorial.accent, lineWidth: 1.5)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -587,11 +601,11 @@ struct ClickUpStyleCalendar: View {
     }
 
     private func textColor(selected: Bool, today: Bool, currentMonth: Bool, past: Bool) -> Color {
-        if selected     { return .white }
-        if !currentMonth { return Color(NSColor.tertiaryLabelColor) }
-        if today        { return .accentColor }
-        if past         { return .secondary }
-        return .primary
+        if selected      { return Editorial.page }
+        if !currentMonth { return Editorial.inkFaint }
+        if today         { return Editorial.accent }
+        if past          { return Editorial.inkMute }
+        return Editorial.ink
     }
 
     // MARK: Computations

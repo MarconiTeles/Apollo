@@ -56,6 +56,17 @@ struct RichTextEditor: NSViewRepresentable {
     /// the editor stay unchanged.
     var renderAttachmentCards: Bool = false
 
+    /// Exact substrings (e.g. `@Lucas Lima`) to render link-like —
+    /// cinnabar + semibold — so an @-mention reads as a link.
+    var mentionStrings: [String] = []
+
+    /// Files dropped onto the editor. When set, a file drag is
+    /// intercepted *before* NSTextView's default handler dumps the
+    /// raw POSIX path into the prose — the host turns the URLs into
+    /// proper editorial attachments instead. Receives every file in
+    /// a multi-file drop.
+    var onFileDrop: (([URL]) -> Void)? = nil
+
     // MARK: - NSViewRepresentable
 
     func makeNSView(context: Context) -> IntrinsicTextScrollView {
@@ -105,7 +116,7 @@ struct RichTextEditor: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.font = NSFont.systemFont(ofSize: fontSize)
-        textView.textColor = NSColor.labelColor
+        textView.textColor = NSColor(srgbRed: 0.078, green: 0.075, blue: 0.059, alpha: 1.0)
         textView.isRichText = true
         textView.usesFontPanel = false
         textView.usesRuler = false
@@ -119,9 +130,17 @@ struct RichTextEditor: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.textContainerInset = NSSize(width: 5, height: 8)
         textView.linkTextAttributes = [
-            .foregroundColor: NSColor.linkColor,
+            // Editorial cinnabar (#C7321B) instead of system blue.
+            .foregroundColor: NSColor(srgbRed: 0.780, green: 0.196,
+                                      blue: 0.106, alpha: 1.0),
             .cursor:          NSCursor.pointingHand,
         ]
+
+        // Intercept file drags so a dropped file becomes a proper
+        // editorial attachment instead of a raw path pasted into
+        // the prose. Only active when the host wired `onFileDrop`.
+        textView.onFileDrop = onFileDrop
+        textView.registerForDraggedTypes([.fileURL])
 
         scrollView.documentView = textView
 
@@ -175,6 +194,10 @@ struct RichTextEditor: NSViewRepresentable {
             textView.font = NSFont.systemFont(ofSize: fontSize)
         }
 
+        // Keep the drop callback fresh — it captures SwiftUI state
+        // that changes between renders.
+        (textView as? LinkifiedTextView)?.onFileDrop = onFileDrop
+
         // Sync focus state from outer SwiftUI binding.
         // - isFocused = true and we're not yet first responder
         //   → promote the textView to first responder so the
@@ -208,7 +231,7 @@ struct RichTextEditor: NSViewRepresentable {
             let attributed = DescriptionAttachmentRenderer.render(
                 text,
                 font: NSFont.systemFont(ofSize: fontSize),
-                textColor: NSColor.labelColor
+                textColor: NSColor(srgbRed: 0.078, green: 0.075, blue: 0.059, alpha: 1.0)
             )
             textView.textStorage?.setAttributedString(attributed)
             // In display mode the user can't accidentally type
@@ -221,6 +244,7 @@ struct RichTextEditor: NSViewRepresentable {
             // Re-apply data-detector links so plain URLs in the
             // raw markdown still come back as clickable.
             Self.applyLinks(to: textView)
+            Self.applyMentions(to: textView, mentions: mentionStrings)
             textView.isEditable = true
             textView.isSelectable = true
         }
@@ -251,6 +275,7 @@ struct RichTextEditor: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
             RichTextEditor.applyLinks(to: textView)
+            RichTextEditor.applyMentions(to: textView, mentions: parent.mentionStrings)
             scrollView?.invalidateIntrinsicContentSize()
         }
 
@@ -314,6 +339,43 @@ struct RichTextEditor: NSViewRepresentable {
         }
         storage.endEditing()
     }
+
+    /// Render exact `@mention` substrings link-like: editorial
+    /// cinnabar + semibold. Foreground/font are first reset to the
+    /// editor defaults across the whole string so deleting or
+    /// editing a mention reverts cleanly; real links keep their
+    /// look via the text view's `linkTextAttributes` (which the
+    /// `.link` attribute drives independently of `.foregroundColor`).
+    static func applyMentions(to textView: NSTextView, mentions: [String]) {
+        guard let storage = textView.textStorage else { return }
+        let ns = storage.string as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        guard full.length > 0 else { return }
+
+        let defaultColor = textView.textColor
+            ?? NSColor(srgbRed: 0.078, green: 0.075, blue: 0.059, alpha: 1.0)
+        let defaultFont = textView.font ?? NSFont.systemFont(ofSize: 13)
+        let mentionColor = NSColor(srgbRed: 0.780, green: 0.196,
+                                   blue: 0.106, alpha: 1.0)
+        let mentionFont = NSFont.systemFont(ofSize: defaultFont.pointSize,
+                                            weight: .semibold)
+
+        storage.beginEditing()
+        storage.addAttribute(.foregroundColor, value: defaultColor, range: full)
+        storage.addAttribute(.font, value: defaultFont, range: full)
+        for mention in mentions where !mention.isEmpty {
+            var cursor = 0
+            while cursor < ns.length {
+                let scan = NSRange(location: cursor, length: ns.length - cursor)
+                let r = ns.range(of: mention, options: [], range: scan)
+                if r.location == NSNotFound { break }
+                storage.addAttribute(.foregroundColor, value: mentionColor, range: r)
+                storage.addAttribute(.font, value: mentionFont, range: r)
+                cursor = r.location + max(1, r.length)
+            }
+        }
+        storage.endEditing()
+    }
 }
 
 // MARK: - Custom NSScrollView with intrinsic content size
@@ -366,6 +428,63 @@ final class LinkifiedTextView: NSTextView {
     /// The display→edit swap now flows through
     /// `textDidBeginEditing` only.
     var onBecomeFirstResponder: (() -> Void)?
+
+    /// Set by `RichTextEditor` when the host wants dropped files
+    /// turned into attachments rather than pasted as a path string.
+    var onFileDrop: (([URL]) -> Void)?
+
+    // MARK: - File-drag interception
+    //
+    // NSTextView's default file-drop inserts the absolute POSIX
+    // path as literal text ("/Users/…/B _ Editorial Calm.html").
+    // When the host provides `onFileDrop`, we claim file drags here
+    // and hand the URLs off so they become proper editorial
+    // attachment chips/cards — and the prose stays clean. Non-file
+    // drags (text, RTF, the editor's own selection) fall through to
+    // the default behavior untouched.
+
+    private func droppedFileURLs(_ sender: NSDraggingInfo) -> [URL] {
+        let pb = sender.draggingPasteboard
+        let opts: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true
+        ]
+        let objs = pb.readObjects(forClasses: [NSURL.self], options: opts)
+        return (objs as? [URL]) ?? []
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if onFileDrop != nil, !droppedFileURLs(sender).isEmpty { return .copy }
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if onFileDrop != nil, !droppedFileURLs(sender).isEmpty { return .copy }
+        return super.draggingUpdated(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if onFileDrop != nil, !droppedFileURLs(sender).isEmpty { return true }
+        return super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if let onFileDrop {
+            let urls = droppedFileURLs(sender)
+            if !urls.isEmpty {
+                DispatchQueue.main.async { onFileDrop(urls) }
+                return true   // claimed — NSTextView never sees it
+            }
+        }
+        return super.performDragOperation(sender)
+    }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        if onFileDrop != nil,
+           let sender, !droppedFileURLs(sender).isEmpty {
+            return   // nothing to finalize; we handled it ourselves
+        }
+        super.concludeDragOperation(sender)
+    }
 
     override func mouseDown(with event: NSEvent) {
         // Description-attachment cards carry a custom URL via

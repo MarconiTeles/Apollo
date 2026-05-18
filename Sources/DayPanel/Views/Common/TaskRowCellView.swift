@@ -77,12 +77,14 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
         view.wantsLayer = true
         view.layer?.backgroundColor = .clear
 
-        // Action panels (swipe-reveal). Fill the same area
-        // rowView occupies — inset by `halfGap` top/bottom so
-        // they line up with the rounded card (the cell itself
-        // is `bakedVerticalGap`pt taller than the card to
-        // absorb the parent-row spacing).
-        let pad = TaskRowCellItem.halfGap
+        // Editorial: rows are FLUSH, separated by a 1px
+        // hairline rule (drawn at the bottom of `rowView`) —
+        // not by a gap around a rounded card. So `rowView` and
+        // the swipe panels fill the ENTIRE cell (pad = 0); the
+        // hover wash then covers the whole visible row and the
+        // content centers within it. (Was inset by `halfGap`
+        // for the old Liquid-Glass card spacing.)
+        let pad: CGFloat = 0
         for panel in [leftPanel, rightPanel] {
             panel.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(panel)
@@ -150,6 +152,10 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
             guard let self else { return }
             let leftAlpha  = max(0, min(1, dx / 100))
             let rightAlpha = max(0, min(1, -dx / 100))
+            // Drive the status word's grow/slide reveal from the
+            // same 0…1 progress as the panel's fade.
+            self.leftPanel.setProgress(leftAlpha)
+            self.rightPanel.setProgress(rightAlpha)
             if duration > 0 {
                 NSAnimationContext.runAnimationGroup { ctx in
                     ctx.duration = duration
@@ -173,6 +179,13 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
         boundTask          = nil
         leftPanel.alphaValue  = 0
         rightPanel.alphaValue = 0
+        // Snap the content view's wash to the resting paper NOW
+        // (kill any in-flight crossfade) so the recycled item
+        // can't flash a stale band — or a transparent gap — in
+        // the moment before `bind`.
+        rowView.layer?.removeAnimation(forKey: "hoverWash")
+        rowView.layer?.backgroundColor = NSColor(Editorial.paper).cgColor
+        rowView.layer?.shadowOpacity = 0
     }
 
     func bind(task: CUTask,
@@ -323,9 +336,15 @@ final class TaskRowContentView: NSView {
             }
             switch swipeAxisLocked {
             case .horizontal:
+                let wasZero = swipeOffset == 0
                 swipeAccumulated += dx
                 swipeOffset = swipeAccumulated
                 applyTransform(animated: false)
+                // The instant the row starts translating it must
+                // become an OPAQUE paper sheet — otherwise the
+                // transparent row slides and you see straight
+                // through it to the action panel ("sem fundo").
+                if wasZero { applyRowBackground(animated: false) }
                 onSwipeProgress?(swipeOffset, 0)
                 updateSwipeArmFeedback(offset: swipeAccumulated)
             case .vertical:
@@ -437,6 +456,7 @@ final class TaskRowContentView: NSView {
         let originalTask = task
 
         swipeOffset = direction * 600
+        applyRowBackground(animated: false)   // stay an opaque sheet while flying out
         applyTransform(animated: true, duration: 0.18, timingName: .easeIn)
 
         Task { [weak self] in
@@ -446,6 +466,7 @@ final class TaskRowContentView: NSView {
             await MainActor.run {
                 self?.swipeOffset = 0
                 self?.applyTransform(animated: false)
+                self?.applyRowBackground(animated: false)
                 self?.onSwipeProgress?(0, 0)
             }
             await appState.updateTaskStatus(originalTask, to: target)
@@ -469,6 +490,9 @@ final class TaskRowContentView: NSView {
     private func cancelSwipe() {
         guard let layer = self.layer else { return }
         swipeOffset = 0
+        // Row springs home → fade the opaque paper back to the
+        // resting wash (clear, or cream if still hovered).
+        applyRowBackground(animated: true)
         let scale = currentScaleValue
         let target = CATransform3DConcat(
             CATransform3DMakeScale(scale, scale, 1),
@@ -666,11 +690,48 @@ final class TaskRowContentView: NSView {
         NotificationCenter.default.removeObserver(self)
     }
 
+    /// Editorial serif (New York) NSFont — the AppKit twin of
+    /// `Editorial.serif`. macOS exposes New York via the
+    /// `.serif` system-font design.
+    static func editorialSerif(_ size: CGFloat,
+                               _ weight: NSFont.Weight = .regular) -> NSFont {
+        // Same global −15% scale as the SwiftUI `Editorial.*`
+        // type helpers, so AppKit rows shrink in lockstep.
+        let s = size * Editorial.typeScale
+        let base = NSFont.systemFont(ofSize: s, weight: weight)
+        if let d = base.fontDescriptor.withDesign(.serif) {
+            return NSFont(descriptor: d, size: s) ?? base
+        }
+        return base
+    }
+
+    /// Italic New York — the prototype's `Caption` (serif italic
+    /// inkSoft) used for the assignee + any editorial aside.
+    static func editorialSerifItalic(_ size: CGFloat) -> NSFont {
+        let s = size * Editorial.typeScale
+        let base = NSFont.systemFont(ofSize: s, weight: .regular)
+        var d = base.fontDescriptor
+        if let serif = d.withDesign(.serif) { d = serif }
+        d = d.withSymbolicTraits(.italic)
+        return NSFont(descriptor: d, size: s) ?? base
+    }
+
+    /// Editorial: 1px bottom hairline separating paper rows
+    /// (replaces the status-tinted card). Positioned in layout().
+    private let bottomRule: CALayer = {
+        let l = CALayer()
+        l.backgroundColor = NSColor(Editorial.rule).cgColor
+        return l
+    }()
+
     private func commonInit() {
         wantsLayer = true
-        layer?.cornerRadius  = 18
+        // Editorial: near-rectangular, flat — no rounded glass
+        // card, no escaping shadow.
+        layer?.cornerRadius  = 4
         layer?.cornerCurve   = .continuous
         layer?.masksToBounds = false   // shadow needs to escape
+        layer?.addSublayer(bottomRule)
 
         // Force-reset hover state when a scroll starts. Without
         // this, a cell that was hovered just before the user
@@ -754,8 +815,9 @@ final class TaskRowContentView: NSView {
         // ── Assignee first name ───────────────────────────────
         // SwiftUI: .font(.caption2)  -> 11pt
         //          .foregroundStyle(.tertiary)
-        assigneeLabel.font  = NSFont.systemFont(ofSize: 11, weight: .regular)
-        assigneeLabel.textColor = .tertiaryLabelColor
+        // Prototype `Caption`: serif italic 12.5, inkSoft.
+        assigneeLabel.font  = Self.editorialSerifItalic(12.5)
+        assigneeLabel.textColor = NSColor(Editorial.inkSoft)
         assigneeLabel.maximumNumberOfLines = 1
         assigneeLabel.cell?.usesSingleLineMode = true
         assigneeLabel.cell?.lineBreakMode = .byTruncatingTail
@@ -918,11 +980,18 @@ final class TaskRowContentView: NSView {
         // BEFORE the scroll began. Pairs with the
         // `mouseEntered` suppression during scroll so cells
         // never end up with a stuck DONE pill or boosted halo.
-        if isHovered {
-            isHovered = false
-            animateShadowBoost(boosted: false)
-            updateScale()
-        }
+        //
+        // CRITICAL: snap the wash to clear with NO animation,
+        // unconditionally, BEFORE `shouldRasterize`. The old
+        // code started a 0.16s fade here and rasterised one
+        // frame later — freezing the layer mid-crossfade into
+        // a muddy/dark bitmap for the whole scroll. The
+        // unconditional snap also clears a wash left behind by
+        // a dropped `mouseExited` on a fast cursor sweep.
+        let wasHovered = isHovered
+        isHovered = false
+        applyRowBackground(animated: false)
+        if wasHovered { updateScale() }
         if isPressed {
             isPressed = false
             updateScale()
@@ -963,11 +1032,10 @@ final class TaskRowContentView: NSView {
     /// "user is no longer interacting with this row" state
     /// is the same in both cases.
     private func forceExitAllHover() {
-        if isHovered {
-            isHovered = false
-            animateShadowBoost(boosted: false)
-            updateScale()
-        }
+        let wasHovered = isHovered
+        isHovered = false
+        applyRowBackground(animated: false)
+        if wasHovered { updateScale() }
         if isPressed {
             isPressed = false
             updateScale()
@@ -1011,8 +1079,9 @@ final class TaskRowContentView: NSView {
     }
 
     private var currentScaleValue: CGFloat {
-        if isPressed { return 0.97 }
-        if isHovered { return 1.01 }
+        // Editorial: no hover lift (calm). A faint press dip
+        // stays for tactile click feedback.
+        if isPressed { return 0.99 }
         return 1.0
     }
 
@@ -1112,45 +1181,61 @@ final class TaskRowContentView: NSView {
     /// cell — matching the static shadow's "slightly downward"
     /// alignment instead of growing symmetrically (which read
     /// as "shadow recentred upward" on hover).
-    private func animateShadowBoost(boosted: Bool) {
+    /// SINGLE source of truth for the row's fill. Pure function
+    /// of state, priority: swiping → opaque paper (so the row
+    /// reads as a solid sheet sliding over the colour action
+    /// panel) > hovered → cream wash > at rest → clear (the
+    /// canvas shows; rows are separated by the hairline rule).
+    /// `shadowOpacity` is forced 0 — editorial rows never cast a
+    /// shadow. `animated:false` SNAPS (used on scroll start,
+    /// recycle, and live swipe so a frozen mid-fade can never be
+    /// rasterised); `animated:true` is the calm hover crossfade.
+    private func applyRowBackground(animated: Bool) {
         guard let layer = self.layer else { return }
-        // Dark-mode shadow opacities cut 35% per design tweak
-        // (0.36 → 0.234, 0.55 → 0.3575). Light-mode values
-        // unchanged.
-        let baseOp:     Float   = cachedScheme == .dark ? 0.234  : 0.24
-        let boostOp:    Float   = cachedScheme == .dark ? 0.3575 : 0.40
-        let baseRad:    CGFloat = 3
-        let boostRad:   CGFloat = 6
-        let baseOffY:   CGFloat = 2
-        let boostOffY:  CGFloat = 4
-        let targetOp   = boosted ? boostOp   : baseOp
-        let targetRad  = boosted ? boostRad  : baseRad
-        let targetOffY = boosted ? boostOffY : baseOffY
+        layer.shadowOpacity = 0
+        // Always drop any in-flight wash first — without this a
+        // recycled / scrolled cell inherits the previous task's
+        // half-finished crossfade (the "dark band" bug).
+        layer.removeAnimation(forKey: "hoverWash")
 
-        let opAnim = CABasicAnimation(keyPath: "shadowOpacity")
-        opAnim.fromValue = layer.presentation()?.shadowOpacity ?? layer.shadowOpacity
-        opAnim.toValue   = targetOp
-        opAnim.duration  = 0.25
-        opAnim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        layer.add(opAnim, forKey: "shadowOpacity")
-        layer.shadowOpacity = targetOp
+        // ALL three states are OPAQUE. A transparent row looks
+        // fine at rest (it matches the cream canvas) but the
+        // instant the layer is transformed — the swipe spring-
+        // back or a scroll — a see-through row reveals whatever
+        // is behind it ("sem fundo"). Resting fill = the canvas
+        // paper itself, so the row is solid yet visually
+        // seamless (only the hairline rule separates rows).
+        let target: CGColor
+        if swipeOffset != 0 {
+            // Cream paper (NOT white) while sliding — an opaque
+            // canvas-coloured row that reveals the muted action
+            // panel where it moves away. The old `Editorial.page`
+            // flashed a white sheet over the cream canvas.
+            target = NSColor(Editorial.paper).cgColor
+        } else if isHovered {
+            target = NSColor(Editorial.card).cgColor     // warm hover wash
+        } else {
+            target = NSColor(Editorial.paper).cgColor    // = canvas, opaque
+        }
 
-        let radAnim = CABasicAnimation(keyPath: "shadowRadius")
-        radAnim.fromValue = layer.presentation()?.shadowRadius ?? layer.shadowRadius
-        radAnim.toValue   = targetRad
-        radAnim.duration  = 0.25
-        radAnim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        layer.add(radAnim, forKey: "shadowRadius")
-        layer.shadowRadius = targetRad
+        if animated {
+            let anim = CABasicAnimation(keyPath: "backgroundColor")
+            anim.fromValue = layer.presentation()?.backgroundColor
+                ?? layer.backgroundColor
+            anim.toValue   = target
+            anim.duration  = 0.16
+            anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(anim, forKey: "hoverWash")
+        }
+        layer.backgroundColor = target
+    }
 
-        let offAnim = CABasicAnimation(keyPath: "shadowOffset")
-        offAnim.fromValue = NSValue(size:
-            layer.presentation()?.shadowOffset ?? layer.shadowOffset)
-        offAnim.toValue   = NSValue(size: CGSize(width: 0, height: targetOffY))
-        offAnim.duration  = 0.25
-        offAnim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        layer.add(offAnim, forKey: "shadowOffset")
-        layer.shadowOffset = CGSize(width: 0, height: targetOffY)
+    /// Back-compat shim: old call sites said "shadow boost";
+    /// it's now the editorial wash. `boosted` just means
+    /// "(maybe) hovered" — the real decision is in
+    /// `applyRowBackground` which reads live state.
+    private func animateShadowBoost(boosted: Bool) {
+        applyRowBackground(animated: true)
     }
 
     /// Reveal/hide the DONE pill via `DonePillView`'s built-in
@@ -1177,6 +1262,13 @@ final class TaskRowContentView: NSView {
         self.depth        = depth
         self.hasChildren  = hasChildren
         self.isExpanded   = isExpanded
+
+        // No hairline between a mother task and its first
+        // subtask: when this row is an expanded parent, the row
+        // directly below is its first child, so suppress this
+        // row's bottom rule. Re-evaluated every recycle, so a
+        // collapsed/childless row gets its rule back.
+        bottomRule.isHidden = isExpanded && hasChildren
 
         // Watch for any popup opening — when it does, drop
         // every hover-derived visual on this cell so the
@@ -1254,6 +1346,11 @@ final class TaskRowContentView: NSView {
         layer?.removeAnimation(forKey: "shadowOffset")
         layer?.removeAnimation(forKey: "scale")
         layer?.removeAnimation(forKey: "transform")
+        // The wash crossfade MUST be cancelled on recycle too —
+        // otherwise the previous task's half-finished fade keeps
+        // running and stains the freshly-bound cell (the
+        // "random dark rows on fast scroll" bug).
+        layer?.removeAnimation(forKey: "hoverWash")
         layer?.transform = CATransform3DIdentity
         // Reset shadow params to base so a recycled cell starts
         // with the static shadow geometry (not the boosted hover
@@ -1272,6 +1369,11 @@ final class TaskRowContentView: NSView {
         donePill.resetHidden()
         resetContentSlide()
         applyAppearance()
+        // Deterministic resting fill from the just-reset state
+        // (not hovered, not swiping → clear). Single source of
+        // truth — guarantees a recycled cell never shows a
+        // stale wash regardless of what it was doing before.
+        applyRowBackground(animated: false)
         configureDonePill()
         // Compact-mode override — must run AFTER
         // applyAppearance() because that method unhides
@@ -1327,48 +1429,50 @@ final class TaskRowContentView: NSView {
             ? .dark : .light
         cachedScheme = scheme
 
-        // Card background (rowFill) — same cache the SwiftUI row uses.
-        let bgColor = NSColor(Color.rowFill(forBaseHex: cachedStatusHex,
-                                            scheme: scheme))
-        layer?.backgroundColor = bgColor.cgColor
+        // Editorial: the row is a flat OPAQUE paper line (=
+        // canvas colour) — no status-tinted card, no shadow. A
+        // hairline rule separates rows. Opaque so swipe/scroll
+        // transforms never show through. `applyRowBackground`
+        // is the live source of truth (hover/swipe states); this
+        // just sets the resting paper so there's never a frame
+        // of transparency between bind and the first hover.
+        layer?.backgroundColor = NSColor(Editorial.paper).cgColor
+        layer?.shadowOpacity   = 0
 
-        // Drop shadow — same shadowTint cache. Always on now;
-        // the historical "suppressed when expanded" branch
-        // was for a separate halo decoration that's no longer
-        // part of the architecture (subtasks live inside the
-        // pill, so the pill IS the whole shape).
-        let shadowColor = NSColor(Color.shadowTint(forBaseHex: cachedStatusHex,
-                                                   scheme: scheme))
-        layer?.shadowColor   = shadowColor.cgColor
-        layer?.shadowOpacity = scheme == .dark ? 0.234 : 0.24
+        let ink      = NSColor(Editorial.ink)
+        let inkMute  = NSColor(Editorial.inkMute)
+        let inkFaint = NSColor(Editorial.inkFaint)
+        let serif    = Self.editorialSerif(17)
 
         // Checkbox icon
         let checkSymbol = task.isCompleted ? "checkmark.circle.fill" : "circle"
         checkboxIcon.image = NSImage(systemSymbolName: checkSymbol,
                                      accessibilityDescription: nil)
         checkboxIcon.contentTintColor = task.isCompleted
-            ? NSColor(Color(hex: cachedStatusHex))
-            : NSColor.secondaryLabelColor
+            ? NSColor(Editorial.statusColor("complete"))
+            : inkFaint
 
-        // Title — strikethrough + tertiary colour when completed
-        // (SwiftUI applies via the title group's modifier chain).
+        // Title — serif (New York); completed = struck + muted.
         if task.isCompleted {
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 14.95, weight: .semibold),
-                .foregroundColor: NSColor.tertiaryLabelColor,
+                .font: serif,
+                .foregroundColor: inkMute,
                 .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                .strikethroughColor: NSColor.tertiaryLabelColor,
+                .strikethroughColor: inkMute,
             ]
             titleLabel.attributedStringValue = NSAttributedString(
                 string: task.title, attributes: attrs
             )
         } else {
+            titleLabel.font        = serif
             titleLabel.stringValue = task.title
-            titleLabel.textColor   = .labelColor
+            titleLabel.textColor   = ink
         }
 
-        // Status pill
-        statusPill.configure(label: task.status.uppercased(),
+        // Status pill → editorial dot + word (handled inside
+        // StatusPillView.configure, which now renders the
+        // editorial mark instead of a filled capsule).
+        statusPill.configure(label: task.status.capitalized,
                              hex:   cachedStatusHex)
 
         // Assignee — parsed first name (matches SwiftUI's
@@ -1379,17 +1483,22 @@ final class TaskRowContentView: NSView {
         // "N dias atrás", or short formatted date)
         if let due = task.dueDate {
             let overdue = due < Date() && !task.isCompleted
-            let color: NSColor = overdue ? .systemRed : .secondaryLabelColor
+            let color: NSColor = overdue
+                ? NSColor(Editorial.accent) : NSColor(Editorial.inkSoft)
             dateLabel.stringValue       = Self.relativeDateText(for: due)
             dateLabel.textColor         = color
-            dateIcon.contentTintColor   = color
-            dateIcon.isHidden  = false
+            // Editorial drops the calendar glyph — the date text
+            // (cinnabar when overdue) carries the meaning.
+            dateIcon.isHidden  = true
             dateLabel.isHidden = false
         } else {
             dateLabel.stringValue = ""
             dateIcon.isHidden  = true
             dateLabel.isHidden = true
         }
+
+        // Assignee — prototype `Caption` (serif italic inkSoft).
+        assigneeLabel.textColor = NSColor(Editorial.inkSoft)
 
         // Priority flag — only show if priority > 0
         if task.priority > 0 {
@@ -1438,12 +1547,30 @@ final class TaskRowContentView: NSView {
     override func layout() {
         super.layout()
         let w = bounds.width
+
+        // Editorial bottom hairline. No implicit animation —
+        // recycled cells re-layout constantly during scroll and
+        // an animated frame change would smear the rule.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        bottomRule.frame = CGRect(x: 0, y: bounds.height - 1,
+                                  width: w, height: 1)
+        CATransaction.commit()
+
         // Per-row indent for nested subtask rows. depth=0
         // gives the original layout; deeper rows shift right
         // by `depth * subtaskIndent` so the hierarchy is
         // visually obvious.
         let indent = CGFloat(depth) * subtaskIndent
         let compact = depth > 0
+
+        // Editorial: the (title + gap + meta) block is centred
+        // in the cell. Computed up here so the DONE checkbox can
+        // align to the TITLE LINE (not the whole-cell centre) —
+        // the user wants the circle on the same baseline as the
+        // serif title, with the subtask toggle stacked beneath.
+        let blockHeight = titleHeight + titleMetaGap + metaHeight
+        let blockTopY   = max(verticalPad, (bounds.height - blockHeight) / 2)
 
         // Pin the drop-shadow shape to the live bounds.
         // Without an explicit `shadowPath`, CoreAnimation
@@ -1480,7 +1607,10 @@ final class TaskRowContentView: NSView {
         // `parentRowHeight` pt of the cell) — NOT the whole
         // cell — `bounds.height` is now stable per cell type
         // (78pt for parents, 40pt for subtasks).
-        let checkY = (bounds.height - checkSize) / 2
+        // Vertically centre the checkbox on the TITLE line
+        // (compact subtask rows hide it and use a centred dot
+        // instead, so this value is only used by parent rows).
+        let checkY = blockTopY + (titleHeight - checkSize) / 2
         let checkX = leadingPad + indent
         checkboxIcon.frame = NSRect(
             x: checkX,
@@ -1550,21 +1680,15 @@ final class TaskRowContentView: NSView {
             return
         }
 
-        // ── Subtask expand pill (next to status) ─────────────
-        // Static icon-only capsule placed immediately after
-        // the row's status pill on the meta line. Same
-        // vertical centre as the status pill so the two
-        // read as a paired affordance. The transparent
-        // `expandHitZone` matches the pill bounds — taps
-        // anywhere on the capsule toggle expansion.
-        // (Hidden in `bind` when the task has no children.)
+        // ── Subtask toggle — stacked BELOW the checkbox ──────
+        // The editorial chevron lives in the left gutter,
+        // directly under the DONE circle and centred on the
+        // same column, so a parent task reads as
+        // "[done] / [⌄]" vertically. (Hidden in `bind` when
+        // the task has no children.)
         let subPillSize = SubtaskExpandPill.intrinsicSize
-        let subPillGap: CGFloat = 5
-        let subPillX = statusPill.frame.maxX + subPillGap
-        // Centre on the status pill's vertical midpoint so
-        // the two capsules share an optical baseline even
-        // when their heights differ by a pixel or two.
-        let subPillY = statusPill.frame.midY - subPillSize.height / 2
+        let subPillX = checkX + (checkSize - subPillSize.width) / 2
+        let subPillY = checkY + checkSize + 6
         let subPillFrame = NSRect(
             x: subPillX, y: subPillY,
             width:  subPillSize.width,
@@ -1576,21 +1700,21 @@ final class TaskRowContentView: NSView {
         // Both title AND meta row share the same leading edge —
         // mirrors the SwiftUI structure where `.padding(.leading, 10)`
         // is applied to the VStack that wraps both, indenting them
-        // together by `metaNudge` past the checkbox+spacing. Without
-        // this the status pill rendered 10pt to the right of the
-        // title, breaking the visual column alignment.
+        // together by `metaNudge` past the checkbox+spacing.
         let titleX = leadingPad + indent + checkSize + titleGroupSpacing + metaNudge
         let titleAvailable = max(0, w - titleX - leadingPad)
+        // `blockTopY` was computed near the top of layout() so
+        // the checkbox could align to the title line.
         titleLabel.frame = NSRect(
             x: titleX,
-            y: verticalPad,
+            y: blockTopY,
             width:  titleAvailable,
             height: titleHeight
         )
 
         // ── Meta row (below title) ───────────────────────────
         // statusPill (in a 168pt slot) | assignee | …spacer… | date | priority
-        let metaY = verticalPad + titleHeight + titleMetaGap
+        let metaY = blockTopY + titleHeight + titleMetaGap
         // Same X as the title — the SwiftUI VStack's leading
         // padding applies to both rows.
         let metaLeading = titleX
@@ -1662,9 +1786,16 @@ final class TaskRowContentView: NSView {
         if !donePill.isHidden {
             donePill.sizeToFitContent()
             let pillSize = donePill.frame.size
+            // Align the pill to the CHECKBOX it replaces — same
+            // leading x, and vertically centred on the checkbox's
+            // centre (which sits on the title line), NOT on the
+            // full cell. Centring on the cell pushed the pill
+            // down into the meta row, the misalignment the user
+            // flagged.
+            let checkCenterY = checkY + checkSize / 2
             donePill.frame = NSRect(
-                x: leadingPad,
-                y: (bounds.height - pillSize.height) / 2,
+                x: checkX,
+                y: checkCenterY - pillSize.height / 2,
                 width:  pillSize.width,
                 height: pillSize.height
             )
@@ -1704,6 +1835,7 @@ final class StatusPillView: NSView {
 
     private let label = NSTextField(labelWithString: "")
     private let chevronIcon = NSImageView()
+    private let dotView = NSView()
     private var hex: String = "#87909E"
 
     /// Fires on mousedown anywhere on the pill. The cell wires
@@ -1770,12 +1902,16 @@ final class StatusPillView: NSView {
 
     private func setup() {
         wantsLayer = true
-        layer?.cornerRadius = 9
-        layer?.cornerCurve  = .continuous
-        layer?.borderWidth  = 1
+        // Editorial: no capsule chrome — just a dot + word.
+        layer?.cornerRadius = 0
+        layer?.borderWidth  = 0
 
-        // SwiftUI: .font(.system(size: 10, weight: .bold))
-        label.font  = NSFont.systemFont(ofSize: 10, weight: .bold)
+        dotView.wantsLayer = true
+        dotView.layer?.cornerRadius = 3.5
+        addSubview(dotView)
+
+        // Editorial: SF Pro 11.5 medium, ink-soft.
+        label.font  = NSFont.systemFont(ofSize: 11.5, weight: .medium)
         label.maximumNumberOfLines = 1
         label.cell?.usesSingleLineMode = true
         label.cell?.lineBreakMode = .byTruncatingTail
@@ -1785,14 +1921,13 @@ final class StatusPillView: NSView {
         label.isBezeled = false
         addSubview(label)
 
-        // SwiftUI: .font(.system(size: 7, weight: .bold)).opacity(0.7)
         chevronIcon.image = NSImage(systemSymbolName: "chevron.down",
                                     accessibilityDescription: nil)
         chevronIcon.symbolConfiguration = NSImage.SymbolConfiguration(
             pointSize: 7, weight: .bold
         )
         chevronIcon.imageScaling = .scaleProportionallyUpOrDown
-        chevronIcon.alphaValue = 0.7
+        chevronIcon.contentTintColor = NSColor(Editorial.inkFaint)
         addSubview(chevronIcon)
     }
 
@@ -1805,22 +1940,18 @@ final class StatusPillView: NSView {
     /// the pill collapses to a 10×10 colour dot.
     func sizeToFitContent() {
         if dotMode {
-            let d: CGFloat = 10
+            let d: CGFloat = 7
             frame = NSRect(x: frame.origin.x, y: frame.origin.y, width: d, height: d)
-            layer?.cornerRadius = d / 2
             return
         }
         label.sizeToFit()
-        // SwiftUI: .padding(.horizontal, 8) .padding(.vertical, 3)
-        // HStack(spacing: 4) — text + chevron (chevron hidden
-        // in read-only mode).
+        // Editorial mark: dot(7) + gap(7) + label + gap + chevron.
+        let dot: CGFloat = 7
         let chev: CGFloat = 7
-        let chevSlot: CGFloat = isReadOnly ? 0 : (4 + chev)
-        let w = 8 + label.frame.width + chevSlot + 8
-        let h = label.frame.height + 6
+        let chevSlot: CGFloat = isReadOnly ? 0 : (5 + chev)
+        let w = dot + 7 + label.frame.width + chevSlot
+        let h = max(label.frame.height, dot)
         frame = NSRect(x: frame.origin.x, y: frame.origin.y, width: w, height: h)
-        // Match capsule corner to live height
-        layer?.cornerRadius = h / 2
     }
 
     func configure(label text: String, hex: String) {
@@ -1828,41 +1959,44 @@ final class StatusPillView: NSView {
         self.label.stringValue = text
         let color = NSColor(Color(hex: hex))
         // SwiftUI: .foregroundStyle(color)
-        self.label.textColor              = color
-        self.chevronIcon.contentTintColor = color
-        if dotMode {
-            // Dot mode: solid filled circle, no border, no
-            // tinted-translucent fill — just the status
-            // colour as a small indicator.
-            self.layer?.borderWidth     = 0
-            self.layer?.backgroundColor = color.cgColor
-        } else {
-            // SwiftUI: .overlay(Capsule().strokeBorder(color.opacity(0.55), lineWidth: 1))
-            self.layer?.borderWidth     = 1
-            self.layer?.borderColor     = color.withAlphaComponent(0.55).cgColor
-            // SwiftUI: .background(color.opacity(0.10), in: Capsule())
-            self.layer?.backgroundColor = color.withAlphaComponent(0.10).cgColor
-        }
+        // Editorial: the DOT carries the status colour; the
+        // word stays ink-soft; the chevron is faint. No fill,
+        // no border on the pill itself.
+        self.dotView.layer?.backgroundColor = color.cgColor
+        self.dotView.isHidden = false
+        self.label.textColor              = NSColor(Editorial.inkSoft)
+        self.chevronIcon.contentTintColor = NSColor(Editorial.inkFaint)
+        self.layer?.borderWidth     = 0
+        self.layer?.backgroundColor = NSColor.clear.cgColor
         label.sizeToFit()
-        layer?.cornerRadius = (label.frame.height + 6) / 2
         needsLayout = true
     }
 
     override func layout() {
         super.layout()
         let h = bounds.height
+        let dot: CGFloat = 7
+
+        if dotMode {
+            dotView.frame = NSRect(x: 0, y: (h - dot) / 2,
+                                   width: dot, height: dot)
+            return
+        }
+
+        dotView.frame = NSRect(x: 0, y: (h - dot) / 2,
+                               width: dot, height: dot)
+
         label.sizeToFit()
         let labelSize = label.frame.size
-        // SwiftUI: HStack(spacing: 4) — text 8H pad on left, then label, +4 spacing, then chevron, then 8H pad
         label.frame = NSRect(
-            x: 8,
+            x: dot + 7,
             y: (h - labelSize.height) / 2,
             width:  labelSize.width,
             height: labelSize.height
         )
         let chev: CGFloat = 7
         chevronIcon.frame = NSRect(
-            x: label.frame.maxX + 4,
+            x: label.frame.maxX + 5,
             y: (h - chev) / 2,
             width:  chev,
             height: chev
@@ -1919,15 +2053,12 @@ final class DonePillView: NSView {
         // `.scale(scale: 0.85, anchor: .leading)`).
         layer?.anchorPoint = CGPoint(x: 0, y: 0.5)
 
-        // Drop shadow — black 12% / radius 4 / y 2.
-        layer?.shadowColor   = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.12
-        layer?.shadowRadius  = 4
-        layer?.shadowOffset  = CGSize(width: 0, height: 2)
+        // Editorial: flat paper chip — no shadow, hairline rule.
+        layer?.shadowOpacity = 0
         layer?.masksToBounds = false
-        layer?.borderWidth   = 1.2
+        layer?.borderWidth   = 1
 
-        label.font            = NSFont.systemFont(ofSize: 10, weight: .heavy)
+        label.font            = NSFont.systemFont(ofSize: 10, weight: .semibold)
         label.maximumNumberOfLines = 1
         label.cell?.usesSingleLineMode = true
         label.cell?.lineBreakMode = .byTruncatingTail
@@ -1944,14 +2075,13 @@ final class DonePillView: NSView {
 
     func configure(label text: String, hex: String) {
         self.label.stringValue = text
-        let color = NSColor(Color(hex: hex))
-        self.label.textColor = color
-        // Translucent fill matches the "ultraThinMaterial" feel
-        // without the NSVisualEffectView complexity. A bit of
-        // the status hue mixed in keeps the pill on-brand.
-        layer?.backgroundColor = NSColor.windowBackgroundColor
-            .withAlphaComponent(0.92).cgColor
-        layer?.borderColor = color.cgColor
+        // Editorial: paper chip, hairline rule. The label takes
+        // the colour of the STATUS it represents (the done
+        // target) — e.g. cinnabar for "Cancelado", gold for
+        // "Liberado" — not a fixed accent.
+        self.label.textColor   = NSColor(Color(hex: hex))
+        layer?.backgroundColor = NSColor(Editorial.page).cgColor
+        layer?.borderColor     = NSColor(Editorial.rule).cgColor
         label.sizeToFit()
         needsLayout = true
     }
@@ -1978,15 +2108,9 @@ final class DonePillView: NSView {
             height: labelSize.height
         )
         // Capsule corner radius matches half the height.
-        layer?.cornerRadius = h / 2
+        // Editorial: near-rectangular chip, no shadow path.
+        layer?.cornerRadius = 4
         layer?.cornerCurve  = .continuous
-        // Pin the shadow path to the capsule so it doesn't
-        // diffuse from the bounding rectangle.
-        layer?.shadowPath = CGPath(
-            roundedRect: bounds,
-            cornerWidth: h / 2, cornerHeight: h / 2,
-            transform: nil
-        )
     }
 
     // MARK: Hover tracking
@@ -2206,11 +2330,14 @@ final class ChevronHitView: NSView {
 // assigneeLabel, expandPill) translate to the right when
 // the user hovers the checkbox to reveal the DONE pill —
 // see `animateContentSlide` in `TaskRowContentView`.
+/// Editorial subtasks toggle: a bare downward chevron (no
+/// capsule, no fill, no status tint) that flips to point up
+/// when the subtask group is expanded — matching the
+/// Editorial Calm language. Sits in the left gutter directly
+/// below the DONE checkbox.
 final class SubtaskExpandPill: NSView {
 
-    private let iconView   = NSImageView()
-    private let bgLayer    = CALayer()
-    private let borderLayer = CALayer()
+    private let iconView = NSImageView()
 
     var isExpanded: Bool = false {
         didSet {
@@ -2218,23 +2345,13 @@ final class SubtaskExpandPill: NSView {
         }
     }
 
-    /// Status-coloured accent for the pill — set in `bind`
-    /// from the task's `statusDisplayHex` so the pill
-    /// inherits the row's existing colour language (orange
-    /// for DOING, purple for REVIEW, etc.). Both collapsed
-    /// and expanded states tint from this base; only the
-    /// alpha intensity changes between the two.
-    var tint: NSColor = .controlAccentColor {
-        didSet {
-            if oldValue != tint { updateAppearance() }
-        }
-    }
+    /// Kept for API compatibility with `bind` (it still sets a
+    /// status colour). Editorial ignores it — the chevron is
+    /// always ink-soft so it reads as quiet structural chrome.
+    var tint: NSColor = .controlAccentColor
 
-    /// Intrinsic capsule dimensions — laid out by
-    /// `TaskRowContentView.layout()` at this fixed size.
-    /// Matches the height of the status pill (~18pt) so
-    /// the two sit on the same optical baseline.
-    static let intrinsicSize = NSSize(width: 22, height: 18)
+    /// A compact square that aligns under the 16.1pt checkbox.
+    static let intrinsicSize = NSSize(width: 16, height: 16)
 
     override var isFlipped: Bool { true }
 
@@ -2243,25 +2360,8 @@ final class SubtaskExpandPill: NSView {
         wantsLayer = true
         layer?.masksToBounds = false
 
-        bgLayer.cornerRadius = Self.intrinsicSize.height / 2
-        bgLayer.cornerCurve  = .continuous
-        bgLayer.masksToBounds = true
-        layer?.addSublayer(bgLayer)
-
-        borderLayer.cornerRadius = Self.intrinsicSize.height / 2
-        borderLayer.cornerCurve  = .continuous
-        borderLayer.borderWidth  = 0.5
-        layer?.addSublayer(borderLayer)
-
-        iconView.image = NSImage(
-            systemSymbolName: "list.bullet.indent",
-            accessibilityDescription: nil
-        )
-        iconView.symbolConfiguration = NSImage.SymbolConfiguration(
-            pointSize: 9, weight: .semibold
-        )
         iconView.imageScaling = .scaleProportionallyUpOrDown
-        iconView.contentTintColor = .secondaryLabelColor
+        iconView.contentTintColor = NSColor(Editorial.inkSoft)
         addSubview(iconView)
 
         updateAppearance()
@@ -2273,14 +2373,6 @@ final class SubtaskExpandPill: NSView {
 
     override func layout() {
         super.layout()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        bgLayer.frame    = bounds
-        borderLayer.frame = bounds
-        bgLayer.cornerRadius     = bounds.height / 2
-        borderLayer.cornerRadius = bounds.height / 2
-        CATransaction.commit()
-
         let iconSize: CGFloat = 11
         iconView.frame = NSRect(
             x: (bounds.width  - iconSize) / 2,
@@ -2291,28 +2383,17 @@ final class SubtaskExpandPill: NSView {
     }
 
     private func updateAppearance() {
-        let appearance: NSAppearance = effectiveAppearance
-            .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSAppearance(named: .darkAqua)!
-            : NSAppearance(named: .aqua)!
-        appearance.performAsCurrentDrawingAppearance {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            let (fill, border, fg): (NSColor, NSColor, NSColor)
-            if isExpanded {
-                fill   = tint.withAlphaComponent(0.22)
-                border = tint.withAlphaComponent(0.55)
-                fg     = tint
-            } else {
-                fill   = tint.withAlphaComponent(0.10)
-                border = tint.withAlphaComponent(0.28)
-                fg     = tint.withAlphaComponent(0.85)
-            }
-            bgLayer.backgroundColor    = fill.cgColor
-            borderLayer.borderColor    = border.cgColor
-            iconView.contentTintColor  = fg
-            CATransaction.commit()
-        }
+        // Down when collapsed, up when expanded — the editorial
+        // "seta apontada para baixo".
+        iconView.image = NSImage(
+            systemSymbolName: isExpanded ? "chevron.up" : "chevron.down",
+            accessibilityDescription: isExpanded ? "Recolher subtarefas"
+                                                 : "Expandir subtarefas"
+        )
+        iconView.symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: 10, weight: .semibold
+        )
+        iconView.contentTintColor = NSColor(Editorial.inkSoft)
     }
 }
 
@@ -2331,38 +2412,38 @@ final class SwipeActionPanelView: NSView {
     private let label = NSTextField(labelWithString: "")
     private let side: Side
 
+    /// Editorial label point size — the status word behind a
+    /// swiping row is set in the design-system serif italic,
+    /// much larger than the old 11.5pt sans.
+    private let labelPointSize: CGFloat = 26
+
     init(side: Side) {
         self.side = side
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 18
+        layer?.cornerRadius = 4
         layer?.cornerCurve  = .continuous
-        // `masksToBounds = false` so the colored drop shadow
-        // can extend BEYOND the panel bounds (matches the
-        // cell's own halo). Content (icon, label) stays well
-        // inside the rounded corners by virtue of layout
-        // padding, so allowing the layer to render past bounds
-        // doesn't cause visual overflow on the icon/label.
-        layer?.masksToBounds = false
-        layer?.shadowOffset  = CGSize(width: 0, height: 2)
-        layer?.shadowRadius  = 6
-        layer?.shadowOpacity = 0   // configured per task
+        // Editorial: flat near-rectangular chip, no escaping
+        // glow — clip to bounds, no shadow.
+        layer?.masksToBounds = true
+        layer?.shadowOpacity = 0
 
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.symbolConfiguration = NSImage.SymbolConfiguration(
-            pointSize: 16, weight: .semibold
+            pointSize: 18, weight: .regular
         )
-        icon.contentTintColor = .white
         addSubview(icon)
 
-        label.font            = NSFont.systemFont(ofSize: 12, weight: .heavy)
-        label.textColor       = .white
+        // Official design-system face: New York (serif) italic,
+        // large. Scales/slides with the swipe via `setProgress`.
+        label.font            = TaskRowContentView.editorialSerifItalic(labelPointSize)
         label.maximumNumberOfLines = 1
         label.cell?.usesSingleLineMode = true
         label.lineBreakMode   = .byTruncatingTail
         label.drawsBackground = false
         label.isBordered      = false
         label.isBezeled       = false
+        label.wantsLayer      = true
         addSubview(label)
 
         alphaValue = 0   // hidden at rest
@@ -2370,61 +2451,106 @@ final class SwipeActionPanelView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Drops emoji / pictographs (and their modifiers, ZWJ,
+    /// variation selectors) so a status like `TO DO 👀` shows as
+    /// just `TO DO`. ASCII and punctuation are kept — only true
+    /// emoji scalars are removed, then whitespace is collapsed.
+    private static func stripEmoji(_ s: String) -> String {
+        var out = String.UnicodeScalarView()
+        for scalar in s.unicodeScalars {
+            let p = scalar.properties
+            let isEmojiish =
+                (p.isEmojiPresentation)
+                || (p.isEmoji && scalar.value > 0x2100)
+                || p.isEmojiModifier
+                || p.isEmojiModifierBase
+                || scalar.value == 0x200D            // ZWJ
+                || (0xFE00...0xFE0F).contains(scalar.value)  // variation selectors
+            if !isEmojiish { out.append(scalar) }
+        }
+        let collapsed = String(out)
+            .components(separatedBy: .whitespaces)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return collapsed
+    }
+
     func configure(iconName: String, text: String, hex: String) {
         icon.image = NSImage(systemSymbolName: iconName,
                              accessibilityDescription: nil)
-        label.stringValue = text
+        label.stringValue = Self.stripEmoji(text)
+        // Editorial: the status colour is an ACCENT, not a fill.
+        // A faint wash of it (matching the `accentSoft` 0.10
+        // token) reads as the action behind the sliding row,
+        // while the icon + word carry the colour at full
+        // strength — same "status as coloured mark" language
+        // used by StatusMark / the done pill.
         let color = NSColor(Color(hex: hex))
-        layer?.backgroundColor = color.withAlphaComponent(0.92).cgColor
-
-        // Colored drop shadow — same accent treatment as the
-        // task row cards. Uses `Color.shadowTint` for the
-        // brightness/saturation adjustment per scheme.
-        let scheme: ColorScheme =
-            (effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
-            ? .dark : .light
-        let tint = NSColor(Color.shadowTint(forBaseHex: hex, scheme: scheme))
-        layer?.shadowColor   = tint.cgColor
-        layer?.shadowOpacity = scheme == .dark ? 0.3575 : 0.40
+        layer?.backgroundColor = color.withAlphaComponent(0.10).cgColor
+        icon.contentTintColor  = color
+        label.textColor        = color
+        currentProgress        = 0
+        applyProgressFont()
         needsLayout = true
+    }
+
+    // MARK: - Swipe-driven animation
+
+    /// 0 → 1 reveal amount, fed live from the row's swipe
+    /// distance. The status word grows (serif italic point size
+    /// interpolates up) and slides toward its resting position
+    /// as the row is pulled — so it animates *with* the finger.
+    private var currentProgress: CGFloat = 0
+
+    func setProgress(_ p: CGFloat) {
+        let clamped = max(0, min(1, p))
+        guard abs(clamped - currentProgress) > 0.001 else { return }
+        currentProgress = clamped
+        applyProgressFont()
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
+    /// Point size eases from ~62% → 100% of the editorial size
+    /// across the swipe, so the word visibly enlarges as it's
+    /// revealed.
+    private func applyProgressFont() {
+        let size = labelPointSize * (0.62 + 0.38 * currentProgress)
+        label.font = TaskRowContentView.editorialSerifItalic(size)
     }
 
     override func layout() {
         super.layout()
-        // Update shadow path to match the rounded shape so
-        // shadow shape stays clean and CoreAnimation skips the
-        // alpha-derived shape computation per frame.
-        layer?.shadowPath = CGPath(
-            roundedRect: bounds,
-            cornerWidth: 18, cornerHeight: 18,
-            transform: nil
-        )
         layoutContents()
     }
 
     private func layoutContents() {
         let h = bounds.height
-        let iconSize: CGFloat = 16
+        let iconSize: CGFloat = 20
         label.sizeToFit()
         let labelSize = label.frame.size
-        let gap: CGFloat = 8
+        let gap: CGFloat = 10
         let groupWidth = iconSize + gap + labelSize.width
         let pad: CGFloat = 24
+        // Horizontal slide-in: the group starts ~18pt off its
+        // resting spot and settles as the swipe deepens.
+        let slide: CGFloat = (1 - currentProgress) * 18
 
         switch side {
         case .leading:
+            let originX = pad + slide
             icon.frame = NSRect(
-                x: pad,
+                x: originX,
                 y: (h - iconSize) / 2,
                 width: iconSize, height: iconSize
             )
             label.frame = NSRect(
-                x: pad + iconSize + gap,
+                x: originX + iconSize + gap,
                 y: (h - labelSize.height) / 2,
                 width: labelSize.width, height: labelSize.height
             )
         case .trailing:
-            let trailingX = bounds.width - pad - groupWidth
+            let trailingX = bounds.width - pad - groupWidth - slide
             icon.frame = NSRect(
                 x: trailingX,
                 y: (h - iconSize) / 2,

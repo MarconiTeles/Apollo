@@ -58,13 +58,20 @@ struct CreateEventSheet: View {
     @State private var showStartPicker = false
     @State private var showEndPicker   = false
     @FocusState private var titleFocused:       Bool
-    @FocusState private var descriptionFocused: Bool
+    // RichTextEditor drives this via the responder chain.
+    @State private var descriptionFocused = false
     @FocusState private var guestsFocused:      Bool
 
     /// Live results from `ContactsService` for the email fragment the
     /// user is currently typing (the substring after the last comma).
     @State private var guestSuggestions: [GuestSuggestion] = []
     @State private var showGuestSuggestions = false
+
+    /// Google Workspace meeting-room autocomplete for the LOCAL
+    /// field — mirrors Google Calendar's own room picker.
+    @FocusState private var locationFocused: Bool
+    @State private var roomSuggestions: [AppState.CalendarRoom] = []
+    @State private var showRoomSuggestions = false
 
     private let alarmOptions: [(Int, String)] = [
         (-1, "Sem notificação"),
@@ -90,7 +97,9 @@ struct CreateEventSheet: View {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
+        // Editorial popup: near-square corners — same radius as the
+        // sibling detail/create popups (prototype `PPopup`).
+        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
     }
 
     var body: some View {
@@ -98,26 +107,18 @@ struct CreateEventSheet: View {
             GlassFormHeader(title: isEditing ? "Editar Evento" : "Novo Evento",
                             onClose: onClose)
 
-            // Body + footer on a single solid surface — header
-            // alone gets the popup-level material translucency.
+            // Body + footer flow on the shared paper surface — the
+            // header's hairline is the only divider (prototype
+            // `PNewEvent`).
             VStack(spacing: 0) {
                 ScrollablePopupContent(maxHeight: scrollMaxHeight) {
                     VStack(alignment: .leading, spacing: 12) {
                         titleHero
                         descriptionField
 
-                        // Subtle separator before the metadata grid — same
-                        // visual rhythm used in the inline EventDetailView
-                        // and the redesigned Nova Tarefa popup.
-                        Rectangle()
-                            .fill(.separator.opacity(0.4))
-                            .frame(height: 0.5)
-                            .padding(.horizontal, -12)
-                            .padding(.top, 2)
-
-                        // Detail rows mirroring the task / event detail
-                        // patterns: [icon] [110pt label] [content].
-                        VStack(alignment: .leading, spacing: 10) {
+                        // Marginalia rows — each carries its own
+                        // `ruleSoft` underline (prototype `PMarg`).
+                        VStack(alignment: .leading, spacing: 0) {
                             datesDetailRow
                             guestsDetailRow
                             // Inline suggestion list — placed in the same
@@ -134,15 +135,24 @@ struct CreateEventSheet: View {
                             }
                             conferenceDetailRow
                             locationDetailRow
+                            if showRoomSuggestions {
+                                roomSuggestionsList
+                                    .transition(.asymmetric(
+                                        insertion: .opacity.combined(with: .offset(y: -6)),
+                                        removal:   .opacity.combined(with: .offset(y: -6))
+                                    ))
+                            }
                             calendarDetailRow
                             colorDetailRow
                             reminderDetailRow
                             availabilityDetailRow
                         }
+                        .padding(.top, 6)
                         .animation(.easeInOut(duration: 0.18), value: showGuestSuggestions)
+                        .animation(.easeInOut(duration: 0.18), value: showRoomSuggestions)
 
                         if let error {
-                            GlassWarningRow(error, tint: .red)
+                            GlassWarningRow(error, tint: Editorial.accent)
                         }
                         // Connection gate: Google is the only
                         // calendar backend now (EventKit removed).
@@ -150,8 +160,8 @@ struct CreateEventSheet: View {
                             GlassWarningRow("Conecte sua conta Google em Configurações pra criar eventos.")
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 24)
                 }
 
                 GlassFormFooter(
@@ -167,11 +177,20 @@ struct CreateEventSheet: View {
                         || !appState.googleAuth.isConnected
                 )
             }
-            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(width: 460)
+        .frame(width: 540)
         .fixedSize(horizontal: false, vertical: true)
-        .popupGlass(shape)
+        // Editorial page chrome — near-neutral popup surface,
+        // hairline border, one soft ambient shadow (matches
+        // `TaskDetailSheet`).
+        .background(Editorial.popup, in: shape)
+        .clipShape(shape)
+        .overlay {
+            shape.strokeBorder(Editorial.rule, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
+        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
         .onAppear {
             // EDIT mode: pre-populate every field from the
             // event being edited. Skipped when `editing` is
@@ -243,20 +262,25 @@ struct CreateEventSheet: View {
 
     // MARK: - Detail-row helper (matches TaskDetailView / CreateTaskSheet)
 
+    /// Prototype `PMarg`: a `100px 1fr` row — uppercase sans
+    /// micro-caps label, ink value, hairline (`ruleSoft`) underline.
     private func detailRow<Content: View>(
-        icon: String, label: String, @ViewBuilder content: () -> Content
+        icon _: String, label: String, @ViewBuilder content: () -> Content
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Label {
-                Text(label).font(.caption).foregroundStyle(.secondary)
-            } icon: {
-                Image(systemName: icon).font(.caption2).foregroundStyle(.tertiary).frame(width: 14)
-            }
-            .labelStyle(.titleAndIcon)
-            .frame(width: 110, alignment: .leading)
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label.uppercased())
+                .font(Editorial.sans(10.5, .semibold))
+                .tracking(1.1)
+                .foregroundStyle(Editorial.inkMute)
+                .frame(width: 100, alignment: .leading)
+                .padding(.top, 2)
 
             content()
             Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
         }
     }
 
@@ -266,15 +290,15 @@ struct CreateEventSheet: View {
         detailRow(icon: "clock", label: "Datas") {
             HStack(spacing: 6) {
                 dateButton(label: startDate.formatted(.dateTime.day().month(.abbreviated).hour().minute()),
-                           color: .primary,
+                           color: Editorial.ink,
                            show:  $showStartPicker) {
                     EventDatePickerPopover(startDate: $startDate, endDate: $endDate, initialMode: .start)
                 }
                 Image(systemName: "arrow.right")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Editorial.inkMute)
                 dateButton(label: endDate.formatted(.dateTime.day().month(.abbreviated).hour().minute()),
-                           color: .primary,
+                           color: Editorial.ink,
                            show:  $showEndPicker) {
                     EventDatePickerPopover(startDate: $startDate, endDate: $endDate, initialMode: .end)
                 }
@@ -291,12 +315,18 @@ struct CreateEventSheet: View {
     ) -> some View {
         Button { show.wrappedValue.toggle() } label: {
             Text(label)
-                .font(.caption.weight(.medium))
+                .font(Editorial.sans(12, .medium))
                 .foregroundStyle(color)
                 .lineLimit(1)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(.secondary.opacity(0.20), lineWidth: 0.5))
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Editorial.card)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(Editorial.rule, lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -307,8 +337,8 @@ struct CreateEventSheet: View {
         detailRow(icon: "person.2.fill", label: "Convidados") {
             TextField("email1@…, email2@…", text: $guests)
                 .textFieldStyle(.plain)
-                .font(.caption)
-                .foregroundStyle(.primary)
+                .font(Editorial.sans(12.5))
+                .foregroundStyle(Editorial.ink)
                 .focused($guestsFocused)
                 .focusEffectDisabled()
                 .onChange(of: guests) { _, new in
@@ -353,6 +383,20 @@ struct CreateEventSheet: View {
         }
     }
 
+    /// Two-letter initials for the avatar disc — name when we have
+    /// one, otherwise the email's local part.
+    private func guestInitials(_ s: GuestSuggestion) -> String {
+        let source = s.name ?? s.email
+        let parts = source
+            .split(whereSeparator: { $0 == " " || $0 == "." || $0 == "@" })
+            .prefix(2)
+        let letters = parts.compactMap { $0.first }.map(String.init)
+        return letters.joined().uppercased()
+    }
+
+    // Canonical editorial picker (matches the comment @-mention
+    // picker): page surface, hairline border, `editorialMuted`
+    // avatar discs, ink names, `ruleSoft` separators — no shadow.
     private var guestSuggestionsList: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(guestSuggestions) { s in
@@ -360,19 +404,23 @@ struct CreateEventSheet: View {
                     pick(suggestion: s)
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "person.crop.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.tertiary)
+                        ZStack {
+                            Circle().fill(Editorial.inkSoft.editorialMuted)
+                            Text(guestInitials(s))
+                                .font(Editorial.sans(8, .bold))
+                                .foregroundStyle(Editorial.page)
+                        }
+                        .frame(width: 18, height: 18)
                         VStack(alignment: .leading, spacing: 1) {
                             if let name = s.name {
                                 Text(name)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.primary)
+                                    .font(Editorial.sans(12, .medium))
+                                    .foregroundStyle(Editorial.ink)
                                     .lineLimit(1)
                             }
                             Text(s.email)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .font(Editorial.sans(11))
+                                .foregroundStyle(Editorial.inkSoft)
                                 .lineLimit(1)
                         }
                         Spacer(minLength: 0)
@@ -385,25 +433,24 @@ struct CreateEventSheet: View {
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
                 if s.id != guestSuggestions.last?.id {
-                    Rectangle().fill(.separator.opacity(0.3)).frame(height: 0.5)
+                    Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
                 }
             }
         }
         // Indented to align with the content column of `detailRow`
-        // (icon ~14pt + spacing 10 + label 110 = ~134pt). The
-        // suggestion box itself is a small floating card.
-        .padding(.leading, 124)
+        // (label 100 + spacing 12 = 112pt).
+        .padding(.leading, 112)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.regularMaterial)
-                .padding(.leading, 124),
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Editorial.page)
+                .padding(.leading, 112),
             alignment: .leading
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
-                .padding(.leading, 124),
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
+                .padding(.leading, 112),
             alignment: .leading
         )
     }
@@ -438,11 +485,11 @@ struct CreateEventSheet: View {
                 } label: {
                     HStack(spacing: 4) {
                         Text("Adicionar")
-                            .font(.caption.weight(.medium))
+                            .font(Editorial.sans(12, .medium))
                         Image(systemName: "chevron.down")
                             .font(.system(size: 8, weight: .bold))
                     }
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Editorial.accent)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -452,14 +499,14 @@ struct CreateEventSheet: View {
                 HStack(spacing: 6) {
                     TextField("Link da videoconferência", text: $meetURL)
                         .textFieldStyle(.plain)
-                        .font(.caption)
-                        .foregroundStyle(meetURL.contains("://") ? Color.blue : .primary)
+                        .font(Editorial.sans(12.5))
+                        .foregroundStyle(meetURL.contains("://") ? Editorial.accent : Editorial.ink)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Button { meetURL = "" } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Editorial.inkMute)
                     }
                     .buttonStyle(.plain).focusEffectDisabled()
                     .help("Remover link")
@@ -472,9 +519,129 @@ struct CreateEventSheet: View {
         detailRow(icon: "mappin.circle.fill", label: "Local") {
             TextField("Sala, endereço…", text: $location)
                 .textFieldStyle(.plain)
-                .font(.caption)
-                .foregroundStyle(.primary)
+                .font(Editorial.sans(12.5))
+                .foregroundStyle(Editorial.ink)
+                .focused($locationFocused)
+                .focusEffectDisabled()
+                .onChange(of: location) { _, new in
+                    refreshRoomSuggestions(for: new)
+                }
+                .onChange(of: locationFocused) { _, focused in
+                    if focused {
+                        refreshRoomSuggestions(for: location)
+                    } else {
+                        showRoomSuggestions = false
+                    }
+                }
         }
+    }
+
+    /// Filters the harvested Google Workspace rooms by the typed
+    /// fragment (or shows them all on focus when empty), the same
+    /// way Google Calendar surfaces bookable rooms.
+    private func refreshRoomSuggestions(for text: String) {
+        let rooms = appState.calendarRooms
+        guard !rooms.isEmpty else {
+            roomSuggestions = []
+            showRoomSuggestions = false
+            return
+        }
+        let q = text.trimmingCharacters(in: .whitespaces).lowercased()
+        let filtered: [AppState.CalendarRoom]
+        if q.isEmpty {
+            filtered = Array(rooms.prefix(8))
+        } else {
+            filtered = rooms.filter {
+                $0.name.lowercased().contains(q)
+                    || $0.email.lowercased().contains(q)
+            }
+        }
+        roomSuggestions = filtered
+        // Don't keep suggesting once the field already equals a
+        // known room name (the user has chosen one).
+        let exact = rooms.contains {
+            $0.name.lowercased() == q
+        }
+        showRoomSuggestions =
+            !filtered.isEmpty && locationFocused && !exact
+    }
+
+    private var roomSuggestionsList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(roomSuggestions) { room in
+                Button {
+                    pick(room: room)
+                } label: {
+                    HStack(spacing: 8) {
+                        ZStack {
+                            Circle().fill(Editorial.inkSoft.editorialMuted)
+                            Image(systemName: "building.2.fill")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(Editorial.page)
+                        }
+                        .frame(width: 18, height: 18)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(room.name)
+                                .font(Editorial.sans(12, .medium))
+                                .foregroundStyle(Editorial.ink)
+                                .lineLimit(1)
+                            Text("Sala · Google Workspace")
+                                .font(Editorial.sans(11))
+                                .foregroundStyle(Editorial.inkSoft)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                if room.id != roomSuggestions.last?.id {
+                    Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+                }
+            }
+        }
+        .padding(.leading, 112)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Editorial.page)
+                .padding(.leading, 112),
+            alignment: .leading
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 1)
+                .padding(.leading, 112),
+            alignment: .leading
+        )
+    }
+
+    /// Picking a room sets the human-readable `location` AND
+    /// adds the room's `@resource.calendar.google.com` address
+    /// to the guest list — that attendee is what makes Google
+    /// actually book the room (same mechanism Google Calendar
+    /// uses), so the integration is seamless.
+    private func pick(room: AppState.CalendarRoom) {
+        location = room.name
+        let already = guests
+            .split(whereSeparator: { ",;\n ".contains($0) })
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+        if !already.contains(room.email.lowercased()) {
+            let trimmed = guests.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                guests = room.email + ", "
+            } else if trimmed.hasSuffix(",") {
+                guests = trimmed + " " + room.email + ", "
+            } else {
+                guests = trimmed + ", " + room.email + ", "
+            }
+        }
+        showRoomSuggestions = false
+        locationFocused = false
     }
 
     private var calendarDetailRow: some View {
@@ -491,21 +658,21 @@ struct CreateEventSheet: View {
                     }
                 }
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 7) {
                     if let c = selectedCalendar {
-                        Circle().fill(Color(hex: c.colorHex)).frame(width: 8, height: 8)
+                        Circle().fill(Color(hex: c.colorHex).editorialMuted).frame(width: 7, height: 7)
                         Text(c.name)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.primary)
+                            .font(Editorial.serif(14))
+                            .foregroundStyle(Editorial.ink)
                             .lineLimit(1)
                     } else {
                         Text("Selecionar")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
+                            .font(Editorial.serif(14))
+                            .foregroundStyle(Editorial.inkMute)
                     }
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Editorial.inkMute)
                 }
             }
             .menuStyle(.borderlessButton)
@@ -546,21 +713,20 @@ struct CreateEventSheet: View {
                     if let id = colorId,
                        let entry = Self.googleEventColors.first(where: { $0.id == id }) {
                         Circle()
-                            .fill(Color(hex: entry.hex))
-                            .frame(width: 10, height: 10)
-                            .overlay(Circle().strokeBorder(.white.opacity(0.3), lineWidth: 0.5))
+                            .fill(Color(hex: entry.hex).editorialMuted)
+                            .frame(width: 7, height: 7)
                         Text(entry.name)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.primary)
+                            .font(Editorial.serif(14))
+                            .foregroundStyle(Editorial.ink)
                             .lineLimit(1)
                     } else {
                         Text("Padrão")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
+                            .font(Editorial.serif(14))
+                            .foregroundStyle(Editorial.inkMute)
                     }
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Editorial.inkMute)
                 }
             }
             .buttonStyle(.plain)
@@ -578,10 +744,10 @@ struct CreateEventSheet: View {
     private var colorPickerPopover: some View {
         let cols = Array(repeating: GridItem(.fixed(28), spacing: 10), count: 6)
         return VStack(alignment: .leading, spacing: 12) {
-            Text("Cor do evento")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
+            Text("Cor do evento".uppercased())
+                .font(Editorial.sans(10.5, .semibold))
+                .tracking(1.1)
+                .foregroundStyle(Editorial.inkMute)
 
             LazyVGrid(columns: cols, spacing: 10) {
                 ForEach(Self.googleEventColors, id: \.id) { entry in
@@ -589,7 +755,7 @@ struct CreateEventSheet: View {
                 }
             }
 
-            Divider().opacity(0.5)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
 
             Button {
                 colorId = nil
@@ -598,11 +764,11 @@ struct CreateEventSheet: View {
                 HStack(spacing: 6) {
                     Image(systemName: colorId == nil ? "checkmark.circle.fill" : "circle")
                         .foregroundStyle(colorId == nil
-                                         ? AnyShapeStyle(Color.accentColor)
-                                         : AnyShapeStyle(.tertiary))
+                                         ? AnyShapeStyle(Editorial.accent)
+                                         : AnyShapeStyle(Editorial.inkMute))
                     Text("Padrão (cor do calendário)")
-                        .font(.caption)
-                        .foregroundStyle(.primary)
+                        .font(Editorial.sans(12))
+                        .foregroundStyle(Editorial.ink)
                     Spacer()
                 }
             }
@@ -611,6 +777,7 @@ struct CreateEventSheet: View {
         }
         .padding(14)
         .frame(width: 260)
+        .background(Editorial.popup)
     }
 
     private func swatchButton(
@@ -634,7 +801,7 @@ struct CreateEventSheet: View {
             }
             .overlay(
                 Circle()
-                    .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
+                    .strokeBorder(Editorial.rule, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -655,16 +822,16 @@ struct CreateEventSheet: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Image(systemName: alarmMinutes < 0 ? "bell.slash" : "bell.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 9))
+                        .foregroundStyle(Editorial.inkMute)
                     Text(currentAlarmLabel)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(Editorial.serif(14))
+                        .foregroundStyle(Editorial.ink)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Editorial.inkMute)
                 }
             }
             .menuStyle(.borderlessButton)
@@ -684,13 +851,13 @@ struct CreateEventSheet: View {
                     Label("Livre", systemImage: !availabilityBusy ? "checkmark" : "")
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Text(availabilityBusy ? "Ocupado" : "Livre")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(Editorial.serif(14))
+                        .foregroundStyle(Editorial.ink)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Editorial.inkMute)
                 }
             }
             .menuStyle(.borderlessButton)
@@ -751,21 +918,23 @@ struct CreateEventSheet: View {
     // MARK: - Title hero
 
     private var titleHero: some View {
+        // Prototype `PNewEvent`: borderless serif-24 input with a
+        // single bottom hairline (cinnabar when focused).
         TextField("", text: $title, prompt: Text("Título do evento")
-            .font(.title3.weight(.regular))
-            .foregroundColor(.secondary))
+            .font(Editorial.serif(24))
+            .foregroundColor(Editorial.inkMute))
             .textFieldStyle(.plain)
-            .font(.title3.weight(.semibold))
+            .font(Editorial.serif(24))
+            .foregroundStyle(Editorial.ink)
+            .tracking(-0.4)
             .focused($titleFocused)
             .focusEffectDisabled()
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(titleFocused ? Color.accentColor.opacity(0.45) : .white.opacity(0.15),
-                                  lineWidth: titleFocused ? 1.0 : 0.5)
-            )
+            .padding(.vertical, 8)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(titleFocused ? Editorial.accent : Editorial.rule)
+                    .frame(height: 1)
+            }
             .animation(.easeInOut(duration: 0.15), value: titleFocused)
     }
 
@@ -778,31 +947,44 @@ struct CreateEventSheet: View {
         let minH: CGFloat = (notes.isEmpty && !descriptionFocused) ? 36 : 60
         let maxH: CGFloat = descriptionFocused ? 140 : 90
 
-        return ZStack(alignment: .topLeading) {
-            if notes.isEmpty && !descriptionFocused {
-                Text("Descrição (opcional)")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .allowsHitTesting(false)
-            }
-            TextEditor(text: $notes)
-                .focused($descriptionFocused)
-                .focusEffectDisabled()
-                .scrollContentBackground(.hidden)
-                .background(TextEditorEnhancements())
-                .font(.subheadline)
+        return VStack(alignment: .leading, spacing: 6) {
+            ZStack(alignment: .topLeading) {
+                if notes.isEmpty && !descriptionFocused {
+                    Text("Descrição (opcional)")
+                        .font(Editorial.sans(13))
+                        .foregroundStyle(Editorial.inkMute)
+                        .padding(.leading, 12)
+                        .padding(.top, 11)
+                        .allowsHitTesting(false)
+                }
+                // RichTextEditor auto-linkifies URLs — covers
+                // "colocar links na descrição".
+                RichTextEditor(
+                    text:              $notes,
+                    minHeight:         minH,
+                    maxHeight:         maxH,
+                    scrollsInternally: true,
+                    fontSize:          13,
+                    isFocused:         $descriptionFocused
+                )
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
                 .frame(minHeight: minH, maxHeight: maxH)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Editorial.card)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(descriptionFocused ? Editorial.accent : Editorial.rule,
+                                  lineWidth: 1)
+            )
+
+            Text("Links viram clicáveis")
+                .font(Editorial.sans(10.5))
+                .foregroundStyle(Editorial.inkMute)
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(descriptionFocused ? Color.accentColor.opacity(0.45) : .white.opacity(0.15),
-                              lineWidth: descriptionFocused ? 1.0 : 0.5)
-        )
         .animation(.easeInOut(duration: 0.18), value: descriptionFocused)
         .animation(.easeInOut(duration: 0.18), value: notes.isEmpty)
     }

@@ -1,5 +1,12 @@
 import SwiftUI
 
+// Editorial event-detail popup — SwiftUI port of the prototype
+// `PEventDetail`: paper card, Folio kicker, serif-26 title +
+// italic date Caption, a full-width ink "Entrar com o Google
+// Meet" button, and `PMarg`-style marginalia rows. All real
+// behaviour (RSVP round-trip, edit sheet, delete, copy link,
+// links) is preserved verbatim.
+
 struct EventDetailView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.windowSize) private var windowSize
@@ -7,96 +14,152 @@ struct EventDetailView: View {
     var onClose: () -> Void = {}
 
     @State private var showDeleteConfirm = false
+    /// Confirm before turning the event into a ClickUp task
+    /// (the event is removed → attendees are notified).
+    @State private var showConvertConfirm = false
     /// Drives the in-app edit sheet (re-using `CreateEventSheet`
-    /// in editing mode). Replaces the previous "open in
-    /// Calendar.app" behaviour — Apollo now manages event
-    /// edits end-to-end through Google's REST API.
+    /// in editing mode).
     @State private var showEditSheet     = false
 
-    /// Frozen scroll-body height — captured the first time
-    /// this view appears for a given event. Once locked, the
-    /// popup's interior never reflows in response to host
-    /// window resizes. Reset when the event identity changes.
+    /// Frozen scroll-body height — captured the first time this
+    /// view appears for a given event so host-window resizes
+    /// don't reflow the interior.
     @State private var lockedScrollMaxH: CGFloat? = nil
+
+    /// Drives the in-content settle: header + body sections rise
+    /// and fade into place on appear (the overlay owns the
+    /// scale-in; this is the second, calmer beat layered on top).
+    @State private var entered = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// One spring, tuned to the rest of the redesign.
+    private var settle: Animation {
+        reduceMotion ? .easeOut(duration: 0.18)
+                     : .spring(response: 0.40, dampingFraction: 0.86)
+    }
+
+    /// Staggered rise for a body block at `slot` (0,1,2…).
+    private func reveal<V: View>(_ slot: Int, _ v: V) -> some View {
+        v
+            .opacity(entered ? 1 : 0)
+            .offset(y: (entered || reduceMotion) ? 0 : 10)
+            .animation(reduceMotion ? .easeOut(duration: 0.16)
+                                    : .spring(response: 0.42,
+                                              dampingFraction: 0.88)
+                                        .delay(Double(slot) * 0.045),
+                       value: entered)
+    }
 
     private var color: Color { Color(googleSnapHex: event.colorHex) }
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
+        // Same near-square radius as the sibling popups.
+        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
     }
 
-    /// Compute scroll-body height from the host window. Was
-    /// 70% of the window; bumped to ~94.5% (+35%) per design
-    /// tweak. Still clamped so the popup never overlaps the
-    /// macOS toolbar.
     private func computeScrollMaxH(for window: CGSize) -> CGFloat {
         let h = window.height
-        guard h > 0 else { return 540 }   // was 400; +35%
+        guard h > 0 else { return 540 }
         let chrome: CGFloat = 110
         let preferred = max(300, h * 0.945 - chrome)
         let safeMax   = max(0,   h - 128 - chrome)
         return min(preferred, safeMax)
     }
 
-    /// Frozen value used by the layout. Falls back to a live
-    /// computation only on the very first render before
-    /// `onAppear` has had a chance to lock it in.
     private var scrollMaxHeight: CGFloat {
         lockedScrollMaxH ?? computeScrollMaxH(for: windowSize)
     }
 
+    // MARK: - Body
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header — no own background; popup-level material
-            // (applied by `popupGlass`) shows through here as
-            // the translucent title bar. Matches the design
-            // language used by `TaskDetailSheet` and the other
-            // popups.
             header
+                .opacity(entered ? 1 : 0)
+                .offset(y: (entered || reduceMotion) ? 0 : 6)
+                .animation(settle, value: entered)
+            Rectangle().fill(Editorial.rule).frame(height: 1)
 
-            // Body on a solid surface that hides the popup-level
-            // material in this region. Header alone reads as glass.
             ScrollablePopupContent(maxHeight: scrollMaxHeight) {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let url = event.meetingURL { meetingRow(url: url) }
-                    if let loc = event.location, !loc.isEmpty { locationRow(loc) }
-                    // Attendees row: only when there's at
-                    // least one OTHER guest beyond the user.
-                    if !guestAttendees.isEmpty { attendeesSection }
-                    if let alarm = event.alarmOffsets.first { alarmRow(alarm) }
-                    if let calName = event.calendarName { calendarRow(calName) }
+                VStack(alignment: .leading, spacing: 0) {
+                    if let url = event.meetingURL {
+                        reveal(0,
+                               meetingButton(url: url)
+                                .padding(.bottom, 4))
+                    }
+
+                    reveal(1, VStack(alignment: .leading, spacing: 0) {
+                        if let loc = event.location, !loc.isEmpty {
+                            eventMarg("Local") {
+                                Text(loc)
+                                    .font(Editorial.serif(14))
+                                    .foregroundStyle(Editorial.ink)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        if !guestAttendees.isEmpty { attendeesRow }
+                        if let alarm = event.alarmOffsets.first {
+                            eventMarg("Lembrete") {
+                                Text(alarmText(alarm))
+                                    .font(Editorial.serif(14))
+                                    .foregroundStyle(Editorial.ink)
+                            }
+                        }
+                        if let calName = event.calendarName {
+                            eventMarg("Calendário") {
+                                HStack(spacing: 7) {
+                                    Circle().fill(color.editorialMuted)
+                                        .frame(width: 7, height: 7)
+                                    Text(calName)
+                                        .font(Editorial.serif(14))
+                                        .foregroundStyle(Editorial.ink)
+                                }
+                            }
+                        }
+                        if event.attendees.contains(where: { $0.isCurrentUser }) {
+                            rsvpRow
+                        }
+                    }
+                    .padding(.top, 18))
+
                     if let notes = event.notes.flatMap(stripGoogleMeetBlock(_:)),
-                       !notes.isEmpty { notesSection(notes) }
-                    // RSVP only when the user has their own
-                    // attendee row (i.e. they're a guest, not
-                    // the standalone organizer).
-                    if event.attendees.contains(where: { $0.isCurrentUser }) {
-                        rsvpSection
+                       !notes.isEmpty {
+                        reveal(2,
+                               notesSection(notes)
+                                .padding(.top, 20))
                     }
                 }
-                .padding(.horizontal, 18)
-                // 20pt top gap between the material title bar
-                // and the first body row, per design tweak.
+                .padding(.horizontal, 28)
                 .padding(.top, 20)
-                .padding(.bottom, 14)
+                .padding(.bottom, 28)
             }
-            .background(Color(nsColor: .windowBackgroundColor))
         }
-        // Width bumped 360 → 486 (+35%) per design tweak.
-        .frame(width: 486)
+        .frame(width: 540)
         .fixedSize(horizontal: false, vertical: true)
-        .popupGlass(shape)
-        // Lock the scroll height the first time we render so
-        // resizing the host window AFTER opening doesn't reflow
-        // the popup's interior (notes block, RSVP, etc. would
-        // otherwise visibly shift while the user drags the
-        // window edge).
+        // Editorial card chrome — near-neutral popup surface,
+        // hairline border, one soft ambient shadow.
+        .background(Editorial.popup, in: shape)
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
+        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
+        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
         .onAppear {
             if lockedScrollMaxH == nil {
                 lockedScrollMaxH = computeScrollMaxH(for: windowSize)
             }
+            // Second beat: let the overlay's scale-in seat, then
+            // settle the content.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+                entered = true
+            }
         }
         .onChange(of: event.id) { _, _ in
             lockedScrollMaxH = computeScrollMaxH(for: windowSize)
+            // Re-play the settle when navigating to another event.
+            entered = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+                entered = true
+            }
         }
         .confirmationDialog(
             "Excluir evento?",
@@ -110,6 +173,22 @@ struct EventDetailView: View {
         } message: {
             Text("Esta ação não pode ser desfeita.")
         }
+        .confirmationDialog(
+            "Transformar em tarefa?",
+            isPresented: $showConvertConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Transformar", role: .destructive) {
+                Task {
+                    if await appState.convertEventToTask(event) != nil {
+                        onClose()
+                    }
+                }
+            }
+            Button("Cancelar", role: .cancel) { }
+        } message: {
+            Text("Uma tarefa será criada no ClickUp e o evento será removido do calendário (participantes serão notificados).")
+        }
         .sheet(isPresented: $showEditSheet) {
             CreateEventSheet(
                 onClose: { showEditSheet = false },
@@ -119,201 +198,112 @@ struct EventDetailView: View {
         }
     }
 
-    // MARK: - Header
+    // MARK: - Header (prototype: Folio · serif title · Caption)
 
     private var header: some View {
-        // Single row: title block on the leading edge, action
-        // icons on the trailing edge, both vertically centred
-        // against each other inside the material title bar.
-        // Previously the action icons sat above the title in a
-        // VStack, which made the title block bottom-anchored
-        // against the body — visually the labels read as
-        // floating below the material instead of centred in it.
-        HStack(alignment: .center, spacing: 12) {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(color)
-                .frame(width: 14, height: 14)
-                .frame(width: 22, alignment: .leading)
-
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 7) {
+                    Circle().fill(color.editorialMuted)
+                        .frame(width: 6, height: 6)
+                    Folio("Evento · \(statusKicker)")
+                }
                 Text(event.title)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .font(Editorial.serif(26))
+                    .foregroundStyle(Editorial.ink)
+                    .tracking(-0.5)
                     .fixedSize(horizontal: false, vertical: true)
-
-                Text(formattedDateTime)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                Caption(formattedDateTime, size: 13)
             }
 
             Spacer(minLength: 12)
 
-            HStack(spacing: 6) {
-                actionIcon("pencil",   help: "Editar evento") { showEditSheet = true }
-                actionIcon("trash",    help: "Excluir evento") { showDeleteConfirm = true }
-                actionIcon("ellipsis", help: "Mais opções")    { /* future overflow */ }
-                actionIcon("xmark",    help: "Fechar")          { onClose() }
+            HStack(spacing: 4) {
+                actionIcon("pencil",          size: 14, help: "Editar evento") { showEditSheet = true }
+                actionIcon("arrow.2.squarepath", size: 13, help: "Transformar em tarefa") { showConvertConfirm = true }
+                actionIcon("trash",           size: 14, help: "Excluir evento") { showDeleteConfirm = true }
+                actionIcon("xmark",           size: 15, help: "Fechar")          { onClose() }
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 28)
+        .padding(.top, 20)
+        .padding(.bottom, 16)
     }
 
-    private func actionIcon(_ symbol: String, help: String,
+    /// Real status kicker — the user's own RSVP when they're a
+    /// guest, "confirmado" when they own/attend it.
+    private var statusKicker: String {
+        if let me = event.attendees.first(where: { $0.isCurrentUser }) {
+            switch me.status {
+            case .accepted:  return "confirmado"
+            case .declined:  return "recusado"
+            case .tentative: return "talvez"
+            default:         return "pendente"
+            }
+        }
+        return "confirmado"
+    }
+
+    private func actionIcon(_ symbol: String, size: CGFloat, help: String,
                             action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 26, height: 26)
-                .background(.regularMaterial, in: Circle())
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .help(help)
+        EventActionIcon(symbol: symbol, size: size,
+                        accent: symbol == "trash",
+                        action: action)
+            .help(help)
     }
 
-    // MARK: - RSVP
+    // MARK: - Marginalia row (prototype `PMarg`)
 
-    /// "Você vai?" buttons — RSVPs round-trip through the
-    /// Google Calendar REST API now (EventKit was removed).
-    /// Initial state is read straight from the synced event,
-    /// so a pre-existing "Sim/Não/Talvez" answer comes through
-    /// as the filled pill on first render.
-    @ViewBuilder
-    private var rsvpSection: some View {
-        // Identify "me" via Google's `self: true` flag (parsed
-        // into `isCurrentUser`). The previous lookup used
-        // `!isOrganizer` and picked the first non-organizer —
-        // wrong when the user IS the organizer of an event
-        // they created from Apollo, because it then surfaced
-        // Jonathan's status as if it were the user's.
-        if let myAttendee = event.attendees.first(where: { $0.isCurrentUser }) {
-            let myStatus   = myAttendee.status
-            let hasAnswer  = myStatus == .accepted || myStatus == .declined || myStatus == .tentative
+    private func eventMarg<Content: View>(
+        _ label: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label.uppercased())
+                .font(Editorial.sans(10.5, .semibold))
+                .tracking(1.1)
+                .foregroundStyle(Editorial.inkMute)
+                .frame(width: 100, alignment: .leading)
+                .padding(.top, 2)
+            content()
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+        }
+    }
 
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "questionmark.circle.fill")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22, alignment: .leading)
-                    .padding(.top, 4)
+    // MARK: - Meeting button (prototype: full-width ink CTA)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Você vai?")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.primary)
-                    HStack(spacing: 6) {
-                        rsvpButton("Sim",    status: .accepted,
-                                   isCurrent: hasAnswer && myStatus == .accepted,
-                                   email:     myAttendee.email)
-                        rsvpButton("Não",    status: .declined,
-                                   isCurrent: hasAnswer && myStatus == .declined,
-                                   email:     myAttendee.email)
-                        rsvpButton("Talvez", status: .tentative,
-                                   isCurrent: hasAnswer && myStatus == .tentative,
-                                   email:     myAttendee.email)
-                    }
-                }
-                Spacer()
+    private func meetingButton(url: URL) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            MeetingCTA(label: meetingProvider(url),
+                       reduceMotion: reduceMotion) {
+                NSWorkspace.shared.open(url)
             }
-        }
-        // When the user is ONLY the organizer (Google omits
-        // them from the attendees array in this case), no
-        // RSVP is needed — they're not a guest, they own the
-        // event. The section just stays hidden.
-    }
 
-    /// Default look = no fill, neutral grey outline. Selected look = solid
-    /// macOS accent fill, white text, no outline.
-    private func rsvpButton(_ label: String,
-                            status: CalendarEvent.Attendee.Status,
-                            isCurrent: Bool, email: String?) -> some View {
-        Button {
-            // No click haptic — the trackpad's own click pulse
-            // is the natural feedback for the RSVP tap.
-            appState.updateRSVP(for: event, attendeeEmail: email, to: status)
-        } label: {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(isCurrent ? Color.white : .primary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 5)
-                .background(
-                    isCurrent ? AnyShapeStyle(Color.accentColor)
-                              : AnyShapeStyle(Color.clear),
-                    in: Capsule()
-                )
-                .overlay(
-                    Capsule().strokeBorder(
-                        isCurrent ? Color.clear
-                                  : Color.secondary.opacity(0.40),
-                        lineWidth: 1
-                    )
-                )
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-    }
-
-    private var formattedDateTime: String {
-        let cal = Calendar.current
-        if event.isAllDay {
-            return event.startDate.formatted(.dateTime.weekday(.wide).day().month(.wide))
-        }
-        let day = event.startDate.formatted(.dateTime.weekday(.wide).day().month(.wide))
-        let s   = event.startDate.formatted(date: .omitted, time: .shortened)
-        let e   = event.endDate.formatted(date: .omitted, time: .shortened)
-        if cal.isDate(event.startDate, inSameDayAs: event.endDate) {
-            return "\(day) · \(s) – \(e)"
-        }
-        return "\(day) \(s) → \(event.endDate.formatted(.dateTime.day().month(.wide)) ) \(e)"
-    }
-
-    // MARK: - Rows
-
-    private func meetingRow(url: URL) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "video.fill")
-                .foregroundStyle(.secondary)
-                .frame(width: 22, alignment: .leading)
-                .padding(.top, 6)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Link(destination: url) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "video.fill")
-                            .font(.caption)
-                        Text(meetingProvider(url))
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(Color.blue, in: Capsule())
-                    .liquidGlassEdge(Capsule())
-                }
-                .buttonStyle(.plain)
-                .focusEffectDisabled()
-
+            HStack(spacing: 8) {
                 Text(url.host ?? url.absoluteString)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(Editorial.sans(11))
+                    .foregroundStyle(Editorial.inkMute)
                     .lineLimit(1)
+                Spacer(minLength: 0)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 10))
+                        Text("Copiar link")
+                            .font(Editorial.sans(11, .medium))
+                    }
+                    .foregroundStyle(Editorial.accent)
+                }
+                .buttonStyle(.plain).focusEffectDisabled()
+                .help("Copiar link")
             }
-
-            Spacer()
-
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(url.absoluteString, forType: .string)
-            } label: {
-                Image(systemName: "doc.on.doc")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain).focusEffectDisabled()
-            .help("Copiar link")
-            .padding(.top, 9)
         }
     }
 
@@ -326,82 +316,59 @@ struct EventDetailView: View {
         return "Entrar na chamada"
     }
 
-    private func locationRow(_ location: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "mappin.circle.fill")
-                .foregroundStyle(.secondary)
-                .frame(width: 22, alignment: .leading)
-            Text(location)
-                .font(.callout)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer()
-        }
-    }
+    // MARK: - Attendees
 
-    /// Other attendees, excluding the user themselves. Apollo
-    /// surfaces "you" in the dedicated RSVP section above, so
-    /// listing them again as a guest below would be redundant
-    /// (and was misleading: when only Jonathan was invited,
-    /// the previous code rendered him as "the user" via the
-    /// `!isOrganizer` lookup — see `rsvpSection`).
+    /// Other attendees, excluding the user themselves (the user's
+    /// own row lives in the RSVP block).
     private var guestAttendees: [CalendarEvent.Attendee] {
         event.attendees.filter { !$0.isCurrentUser }
     }
 
-    private var attendeesSection: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "person.2.fill")
-                .foregroundStyle(.secondary)
-                .frame(width: 22, alignment: .leading)
-            VStack(alignment: .leading, spacing: 6) {
+    private var attendeesRow: some View {
+        eventMarg("Convidados") {
+            VStack(alignment: .leading, spacing: 8) {
                 let count = guestAttendees.count
+                Text("\(count) pessoa\(count == 1 ? "" : "s")")
+                    .font(Editorial.serif(14))
+                    .foregroundStyle(Editorial.ink)
                 let counts = attendeeCounts
-                Text("\(count) convidado\(count == 1 ? "" : "s")")
-                    .font(.callout.weight(.medium))
                 if !counts.isEmpty {
-                    Text(counts)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Caption(counts, size: 12)
                 }
                 ForEach(guestAttendees, id: \.email) { a in
                     attendeeRow(a)
                 }
             }
-            Spacer()
         }
     }
 
     private var attendeeCounts: String {
         let g = Dictionary(grouping: guestAttendees, by: \.status)
         var parts: [String] = []
-        if let n = g[.accepted]?.count, n > 0 { parts.append("\(n): sim") }
-        if let n = g[.declined]?.count, n > 0 { parts.append("\(n): não") }
-        if let n = g[.tentative]?.count, n > 0 { parts.append("\(n): talvez") }
-        if let n = g[.pending]?.count, n > 0 { parts.append("\(n): pendente") }
+        if let n = g[.accepted]?.count,  n > 0 { parts.append("\(n) sim") }
+        if let n = g[.declined]?.count,  n > 0 { parts.append("\(n) não") }
+        if let n = g[.tentative]?.count, n > 0 { parts.append("\(n) talvez") }
+        if let n = g[.pending]?.count,   n > 0 { parts.append("\(n) pendente") }
         return parts.joined(separator: " · ")
     }
 
     private func attendeeRow(_ a: CalendarEvent.Attendee) -> some View {
         HStack(spacing: 8) {
             Text(initials(for: a.name))
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.white)
+                .font(Editorial.sans(8, .bold))
+                .foregroundStyle(Editorial.page)
                 .frame(width: 22, height: 22)
-                .background(Circle().fill(avatarColor(for: a.name)))
-                .overlay(
-                    statusBadge(a.status)
-                        .offset(x: 8, y: 7)
-                )
+                .background(Circle().fill(avatarColor(for: a.name).editorialMuted))
+                .overlay(statusBadge(a.status).offset(x: 8, y: 7))
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(a.name)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.primary)
+                    .font(Editorial.sans(12, .medium))
+                    .foregroundStyle(Editorial.ink)
                 if a.isOrganizer {
                     Text("Organizador")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(Editorial.sans(10.5))
+                        .foregroundStyle(Editorial.inkMute)
                 }
             }
             Spacer()
@@ -410,24 +377,23 @@ struct EventDetailView: View {
 
     @ViewBuilder
     private func statusBadge(_ status: CalendarEvent.Attendee.Status) -> some View {
-        switch status {
-        case .accepted:
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 9))
-                .foregroundStyle(.green)
-                .background(Circle().fill(.background).frame(width: 9, height: 9))
-        case .declined:
-            Image(systemName: "xmark.circle.fill")
-                .font(.system(size: 9))
-                .foregroundStyle(.red)
-                .background(Circle().fill(.background).frame(width: 9, height: 9))
-        case .tentative:
-            Image(systemName: "questionmark.circle.fill")
-                .font(.system(size: 9))
-                .foregroundStyle(.orange)
-                .background(Circle().fill(.background).frame(width: 9, height: 9))
-        default:
-            EmptyView()
+        // Crisp ring: a popup-coloured disc punches a clean hole
+        // out of the avatar, the tone glyph sits centred on top.
+        let spec: (String, Color)? = {
+            switch status {
+            case .accepted:  return ("checkmark.circle.fill", Color(hex: "#3F6B4A"))
+            case .declined:  return ("xmark.circle.fill",      Editorial.accent)
+            case .tentative: return ("questionmark.circle.fill", Color(hex: "#9A7B1F"))
+            default:         return nil
+            }
+        }()
+        if let (glyph, tone) = spec {
+            ZStack {
+                Circle().fill(Editorial.popup).frame(width: 12, height: 12)
+                Image(systemName: glyph)
+                    .font(.system(size: 10))
+                    .foregroundStyle(tone)
+            }
         }
     }
 
@@ -444,16 +410,85 @@ struct EventDetailView: View {
         return palette[index]
     }
 
-    private func alarmRow(_ offset: TimeInterval) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "bell.fill")
-                .foregroundStyle(.secondary)
-                .frame(width: 22, alignment: .leading)
-            Text(alarmText(offset))
-                .font(.callout)
-                .foregroundStyle(.primary)
-            Spacer()
+    // MARK: - RSVP
+
+    @ViewBuilder
+    private var rsvpRow: some View {
+        if let myAttendee = event.attendees.first(where: { $0.isCurrentUser }) {
+            let myStatus  = myAttendee.status
+            let hasAnswer = myStatus == .accepted || myStatus == .declined || myStatus == .tentative
+            eventMarg("Você vai?") {
+                HStack(spacing: 6) {
+                    rsvpButton("Sim",    status: .accepted,
+                               isCurrent: hasAnswer && myStatus == .accepted,
+                               email:     myAttendee.email)
+                    rsvpButton("Não",    status: .declined,
+                               isCurrent: hasAnswer && myStatus == .declined,
+                               email:     myAttendee.email)
+                    rsvpButton("Talvez", status: .tentative,
+                               isCurrent: hasAnswer && myStatus == .tentative,
+                               email:     myAttendee.email)
+                }
+            }
         }
+    }
+
+    private func rsvpButton(_ label: String,
+                            status: CalendarEvent.Attendee.Status,
+                            isCurrent: Bool, email: String?) -> some View {
+        Button {
+            appState.updateRSVP(for: event, attendeeEmail: email, to: status)
+        } label: {
+            Text(label)
+                .font(Editorial.sans(12, .medium))
+                .foregroundStyle(isCurrent ? Editorial.page : Editorial.ink)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 5)
+                .background(
+                    isCurrent ? AnyShapeStyle(Editorial.ink)
+                              : AnyShapeStyle(Editorial.page),
+                    in: Capsule()
+                )
+                .overlay(
+                    Capsule().strokeBorder(
+                        isCurrent ? Color.clear : Editorial.rule,
+                        lineWidth: 1
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .animation(settle, value: isCurrent)
+    }
+
+    // MARK: - Notes
+
+    private func notesSection(_ notes: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Folio("Anotações")
+            Text(notes.linkified)
+                .font(Editorial.serif(13.5))
+                .foregroundStyle(Editorial.ink)
+                .tint(Editorial.accent)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Formatting
+
+    private var formattedDateTime: String {
+        let cal = Calendar.current
+        if event.isAllDay {
+            return event.startDate.formatted(.dateTime.weekday(.wide).day().month(.wide))
+        }
+        let day = event.startDate.formatted(.dateTime.weekday(.wide).day().month(.wide))
+        let s   = event.startDate.formatted(date: .omitted, time: .shortened)
+        let e   = event.endDate.formatted(date: .omitted, time: .shortened)
+        if cal.isDate(event.startDate, inSameDayAs: event.endDate) {
+            return "\(day) · \(s) – \(e)"
+        }
+        return "\(day) \(s) → \(event.endDate.formatted(.dateTime.day().month(.wide))) \(e)"
     }
 
     private func alarmText(_ offset: TimeInterval) -> String {
@@ -466,21 +501,10 @@ struct EventDetailView: View {
         return "\(days) dia\(days == 1 ? "" : "s") antes"
     }
 
-    private func calendarRow(_ name: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "calendar")
-                .foregroundStyle(.secondary)
-                .frame(width: 22, alignment: .leading)
-            Text(name)
-                .font(.callout)
-                .foregroundStyle(.primary)
-            Spacer()
-        }
-    }
-
-    /// Removes the auto-generated Google-Meet block that Calendar appends
-    /// to notes — it sits between two `-:::~:::-`-style separator lines and
-    /// duplicates the meeting link/phone we already render at the top.
+    /// Removes the auto-generated Google-Meet block that Calendar
+    /// appends to notes — it sits between two `-:::~:::-`-style
+    /// separator lines and duplicates the meeting link we already
+    /// render at the top.
     private func stripGoogleMeetBlock(_ notes: String) -> String {
         let lines        = notes.components(separatedBy: "\n")
         let boundary     = try? NSRegularExpression(pattern: #"^\s*-[:~\-]{2,}-\s*$"#)
@@ -488,7 +512,7 @@ struct EventDetailView: View {
         var insideBlock  = false
 
         for line in lines {
-            let range     = NSRange(line.startIndex..., in: line)
+            let range      = NSRange(line.startIndex..., in: line)
             let isBoundary = boundary?.firstMatch(in: line, options: [], range: range) != nil
             if isBoundary {
                 insideBlock.toggle()
@@ -500,23 +524,94 @@ struct EventDetailView: View {
         return result.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+}
 
-    private func notesSection(_ notes: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Divider().opacity(0.5)
-            // `linkified` converts raw URLs in the notes into real
-            // `link` attributes on an AttributedString. SwiftUI's
-            // `Text` renders those clickable, opening them in the
-            // user's default browser. Markdown-formatted links
-            // ([label](url)) are still parsed too — the data
-            // detector matches both shapes.
-            Text(notes.linkified)
-                .font(.caption)
-                .foregroundStyle(.primary)
-                .tint(.blue)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+// MARK: - Header action icon (hover wash)
+
+/// Bare editorial glyph button that grows a soft rounded wash on
+/// hover and darkens its ink — `trash` reads cinnabar on hover so
+/// the destructive action telegraphs itself.
+private struct EventActionIcon: View {
+    let symbol: String
+    let size: CGFloat
+    var accent: Bool = false
+    let action: () -> Void
+
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .regular))
+                .foregroundStyle(
+                    hover ? (accent ? Editorial.accent : Editorial.ink)
+                          : Editorial.inkSoft
+                )
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(hover
+                              ? (accent ? Editorial.accent.opacity(0.10)
+                                        : Editorial.ink.opacity(0.06))
+                              : Color.clear)
+                )
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.13), value: hover)
     }
 }
 
+// MARK: - Meeting CTA (ink button, hover lift + press)
+
+/// Full-width ink call-to-action. Lifts subtly on hover (a
+/// faint shadow + 1pt rise) and presses in on tap. Reduce Motion
+/// keeps it perfectly still — only the colour cue remains.
+private struct MeetingCTA: View {
+    let label: String
+    let reduceMotion: Bool
+    let action: () -> Void
+
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "video.fill")
+                    .font(.system(size: 13))
+                Text(label)
+                    .font(Editorial.sans(13, .semibold))
+            }
+            .foregroundStyle(Editorial.page)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Editorial.ink.opacity(hover ? 0.92 : 1))
+            )
+        }
+        .buttonStyle(MeetingCTAStyle(reduceMotion: reduceMotion))
+        .focusEffectDisabled()
+        .offset(y: (hover && !reduceMotion) ? -1 : 0)
+        .shadow(color: .black.opacity(hover && !reduceMotion ? 0.18 : 0),
+                radius: 10, x: 0, y: 4)
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.16), value: hover)
+    }
+
+    private struct MeetingCTAStyle: ButtonStyle {
+        let reduceMotion: Bool
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .scaleEffect(
+                    (configuration.isPressed && !reduceMotion) ? 0.98 : 1,
+                    anchor: .center
+                )
+                .opacity(configuration.isPressed ? 0.92 : 1)
+                .animation(.easeOut(duration: 0.12),
+                           value: configuration.isPressed)
+        }
+    }
+}

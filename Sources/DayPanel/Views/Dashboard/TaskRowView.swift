@@ -52,14 +52,10 @@ struct TaskRowView: View, Equatable {
     @State private var showStatusMenu    = false
     @State private var dragOffset:    CGFloat = 0
     @State private var hoveringCheckbox  = false
-    /// Read once — `@Environment(\.colorScheme)` is much lighter
-    /// than `@EnvironmentObject` (only fires on actual scheme
-    /// change, which is rare), so keeping this here doesn't
-    /// reintroduce the subscription cost we removed earlier.
-    /// Used by the row's background fill tint, which needs to
-    /// adapt: dark mode wants a lighter, less-saturated wash so
-    /// the status hue doesn't read as a murky dark tint.
-    @Environment(\.colorScheme) private var colorScheme
+    /// Row-level hover — drives the editorial background wash
+    /// (transparent at rest → `Editorial.card` on hover). Replaced
+    /// the old status-tinted glass card + glow feedback.
+    @State private var rowHover          = false
     /// Cached `task.statusDisplayHex` value. The computed
     /// property allocates a fresh `CUStatus` each call, and the
     /// row reads it 3× per render (drop shadow + status pill
@@ -278,11 +274,16 @@ struct TaskRowView: View, Equatable {
             // (windowBg + 4% white) and the light card carries
             // the same status wash (controlBg + 13% saturation-
             // bumped fillTint).
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.rowFill(forBaseHex: cachedStatusHex,
-                                        scheme: colorScheme))
-            )
+            // Editorial: no status-tinted glass card. The row is
+            // a paper line — transparent at rest, a soft cream
+            // wash on hover, separated by a hairline rule. Status
+            // identity moves to the dot+word StatusMark below,
+            // not a filled card.
+            .background(rowHover ? Editorial.card : Color.clear)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Editorial.rule).frame(height: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
             // PERF: outer `.clipShape(RoundedRectangle)` removed.
             // It forced an offscreen mask pass per cell (one of
             // CoreAnimation's more expensive ops) — and was
@@ -377,15 +378,18 @@ struct TaskRowView: View, Equatable {
             //    just the slot reveal + label slide as the
             //    visible feedback. The pill click pulse
             //    (`pulseFromClick: true`) is unconditional.
-            .interactivePillFeedback(
-                accent: Color(hex: cachedStatusHex),
-                cornerRadius: 18,
-                glow: !hoveringCheckbox,
-                hoverScale: hoveringCheckbox ? 1.0 : 1.012,
-                pressScales: false,
-                pulseFromClick: true
-            )
             .offset(x: dragOffset)
+            // Editorial replaces the status-glow/scale feedback
+            // with a calm cream hover wash. Scroll-aware like the
+            // checkbox handler so a cursor sweeping rows during a
+            // scroll doesn't thrash the state.
+            .onHover { hovering in
+                if ScrollStateObserver.shared.isScrolling {
+                    if rowHover { rowHover = false }
+                    return
+                }
+                rowHover = hovering
+            }
         }
         // Mail-style two-finger trackpad swipe wraps the entire
         // ZStack so scroll wheel events are reliably delivered to
@@ -516,7 +520,7 @@ struct TaskRowView: View, Equatable {
                 .opacity(leftProgress)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
     }
 
     private func actionLabel(icon: String, text: String, color: Color) -> some View {
@@ -663,8 +667,8 @@ struct TaskRowView: View, Equatable {
                             // hover so the pair stays visually
                             // grouped.
                             Text(assigneeFirstName ?? "")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .font(Editorial.serif(12.5).italic())
+                                .foregroundStyle(Editorial.inkSoft)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                                 .fixedSize(horizontal: true, vertical: false)
@@ -814,7 +818,8 @@ struct TaskRowView: View, Equatable {
                 .textFieldStyle(.plain)
                 .focused($titleFocused)
                 .focusEffectDisabled()
-                .font(.system(size: 14.95, weight: .semibold))
+                .font(Editorial.serif(17))
+                .foregroundStyle(Editorial.ink)
                 .lineLimit(1)
                 .onAppear {
                     titleDraft   = task.title
@@ -826,10 +831,9 @@ struct TaskRowView: View, Equatable {
                 }
         } else {
             Text(task.title)
-                .font(.system(size: 14.95, weight: .semibold))
-                .strikethrough(task.isCompleted,
-                               color: Color(NSColor.tertiaryLabelColor))
-                .foregroundStyle(task.isCompleted ? .tertiary : .primary)
+                .font(Editorial.serif(17))
+                .strikethrough(task.isCompleted, color: Editorial.inkMute)
+                .foregroundStyle(task.isCompleted ? Editorial.inkMute : Editorial.ink)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -880,7 +884,9 @@ struct TaskRowView: View, Equatable {
         } label: {
             Image(systemName: checkIcon)
                 .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(task.isCompleted ? doneColor : Color.secondary)
+                .foregroundStyle(task.isCompleted
+                                 ? Editorial.statusColor("complete")
+                                 : Editorial.inkFaint)
                 .symbolEffect(.bounce, value: task.isCompleted)
                 .frame(width: 14, height: 14)
                 .opacity(hoveringCheckbox && !task.isCompleted && !completing ? 0 : 1)
@@ -960,30 +966,24 @@ struct TaskRowView: View, Equatable {
         } label: {
             ZStack {
                 if isHover {
-                    Text(pillLabel)
-                        .font(.system(size: 10, weight: .heavy))
-                        .foregroundStyle(pillColor)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(.ultraThinMaterial))
-                        .overlay(Capsule().strokeBorder(pillColor, lineWidth: 1.5))
-                        .overlay(
-                            Capsule().strokeBorder(
-                                LinearGradient(
-                                    colors: [
-                                        .white.opacity(0.55),
-                                        .white.opacity(0.18),
-                                        .white.opacity(0.05),
-                                    ],
-                                    startPoint: .top,
-                                    endPoint:   .bottom
-                                ),
-                                lineWidth: 0.6
-                            )
-                            .allowsHitTesting(false)
-                        )
-                        .shadow(color: .black.opacity(0.12), radius: 4, x: 0, y: 2)
-                        .fixedSize()
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(pillColor)
+                            .frame(width: 6, height: 6)
+                        Text(pillLabel)
+                            .font(Editorial.sans(10, .semibold))
+                            .foregroundStyle(Editorial.ink)
+                            .tracking(0.4)
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Editorial.page))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(Editorial.rule, lineWidth: 1))
+                    .fixedSize()
                         // Match the prior visual: scale up from 0.85
                         // anchored to the leading edge, fade in.
                         .transition(
@@ -1026,32 +1026,26 @@ struct TaskRowView: View, Equatable {
 
     @ViewBuilder
     private var statusBadge: some View {
+        // Editorial status: a dot in the status's real ClickUp
+        // colour + the word, never a filled pill. Keeps Apollo's
+        // per-status palette (not the prototype's 8 mock families)
+        // but adopts the editorial *form*. A faint chevron hints
+        // it's still a dropdown.
         let color = Color(hex: cachedStatusHex)
-
-        // Solid faint colour tint instead of ultraThinMaterial — drops
-        // the per-row backdrop-blur pass (×N rows) without changing the
-        // visual identity of the pill.
-        let pill = HStack(spacing: 4) {
-            // Force single-line + tail truncation so a status that
-            // exceeds the slot's width clips with "…" instead of
-            // wrapping the chevron onto a second line. The
-            // surrounding `.frame(width:)` slot is now wide enough
-            // for the common ClickUp status vocabulary, but this is
-            // a belt-and-suspenders guard for outliers (long names
-            // with trailing emojis, etc.).
-            Text(task.status.uppercased())
-                .font(.system(size: 10, weight: .bold))
+        let pill = HStack(spacing: 7) {
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+            Text(task.status.capitalized)
+                .font(Editorial.sans(11.5, .medium))
+                .foregroundStyle(Editorial.inkSoft)
+                .tracking(0.2)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Image(systemName: "chevron.down")
                 .font(.system(size: 7, weight: .bold))
-                .opacity(0.7)
+                .foregroundStyle(Editorial.inkFaint)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .foregroundStyle(color)
-        .background(color.opacity(0.10), in: Capsule())
-        .overlay(Capsule().strokeBorder(color.opacity(0.55), lineWidth: 1))
 
         if appState.availableStatuses.isEmpty {
             pill
@@ -1075,14 +1069,17 @@ struct TaskRowView: View, Equatable {
 
     private func metaDateBadge(due: Date) -> some View {
         let overdue = due < Date() && !task.isCompleted
-        let color: Color = overdue ? .red : .secondary
-        return HStack(spacing: 3) {
-            Image(systemName: "calendar")
-                .font(.system(size: 9, weight: .semibold))
+        return VStack(alignment: .leading, spacing: 1) {
             Text(relativeDateText(for: due))
-                .font(.caption2.weight(.medium))
+                .font(Editorial.sans(12, .medium))
+                .foregroundStyle(overdue ? Editorial.accent : Editorial.inkSoft)
+                .monospacedDigit()
+            if overdue {
+                Text("atrasada")
+                    .font(Editorial.serif(10.5).italic())
+                    .foregroundStyle(Editorial.accent)
+            }
         }
-        .foregroundStyle(color)
     }
 
     private func relativeDateText(for date: Date) -> String {

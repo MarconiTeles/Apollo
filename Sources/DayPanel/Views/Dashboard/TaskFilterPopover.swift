@@ -41,10 +41,8 @@ struct TaskFilterPopover: View {
         return min(preferred, safeMax)
     }
 
-    private static let popoverWidth: CGFloat = 320
-    private static let cornerRadius: CGFloat = 18
-    private static let notchWidth:   CGFloat = 18
-    private static let notchHeight:  CGFloat = 8
+    private static let popoverWidth: CGFloat = 340
+    private static let cornerRadius: CGFloat = 6
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
@@ -91,12 +89,10 @@ struct TaskFilterPopover: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            Rectangle().fill(Editorial.rule).frame(height: 1)
 
-            // Body wrapped in a solid surface that hides the
-            // popup-level material — header alone reads as
-            // translucent glass.
             ScrollablePopupContent(maxHeight: scrollMaxHeight) {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 18) {
                     dueSection
                     if !availablePriorities.isEmpty {
                         prioritySection
@@ -115,87 +111,87 @@ struct TaskFilterPopover: View {
                         closedSection
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 14)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+            footer
         }
         .frame(width: Self.popoverWidth)
         .fixedSize(horizontal: false, vertical: true)
-        .popupGlass(shape)
-        .overlay(alignment: .topLeading) { notchView }
+        // Editorial card (prototype `PFilters` / `PPopup`):
+        // near-neutral popup surface, hairline border, soft
+        // ambient shadow — no glass, no notch.
+        .background(Editorial.popup, in: shape)
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
+        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
+        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
     }
 
-    /// Small upward triangle floating above the popover, drop-shadow
-    /// matched to the popover's so the seam reads as one unit.
-    private var notchView: some View {
-        Triangle()
-            .fill(.ultraThinMaterial)
-            .overlay(
-                Triangle().stroke(
-                    LinearGradient(
-                        colors: [.white.opacity(0.55), .white.opacity(0.10)],
-                        startPoint: .top, endPoint: .bottom
-                    ),
-                    lineWidth: 0.6
-                )
-            )
-            .frame(width: Self.notchWidth, height: Self.notchHeight)
-            // -y so the triangle pokes above the popover's top edge by
-            // its full height; +1 of overlap so the seam between the
-            // triangle's base and the popover's rounded top is hidden.
-            .offset(x: notchX - Self.notchWidth / 2, y: -Self.notchHeight + 1)
-            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: -1)
-            .allowsHitTesting(false)
+    // MARK: - Footer (prototype: Limpar · Aplicar)
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Button {
+                withAnimation(.spring(duration: 0.2)) {
+                    appState.taskFilters = TaskFilters()
+                }
+            } label: {
+                Text("Limpar")
+                    .font(Editorial.sans(12, .medium))
+                    .foregroundStyle(appState.taskFilters.isEmpty
+                                     ? Editorial.inkMute : Editorial.accent)
+            }
+            .buttonStyle(.plain).focusEffectDisabled()
+            .disabled(appState.taskFilters.isEmpty)
+
+            Spacer(minLength: 0)
+
+            Button(action: onClose) {
+                Text("Aplicar")
+                    .font(Editorial.sans(12.5, .medium))
+                    .foregroundStyle(Editorial.page)
+                    .padding(.horizontal, 14).padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Editorial.ink))
+            }
+            .buttonStyle(.plain).focusEffectDisabled()
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 10) {
-            ZStack {
-                Circle().fill(Color.accentColor.opacity(0.15))
-                Image(systemName: "line.3.horizontal.decrease")
-                    .foregroundStyle(Color.accentColor)
-                    .font(.callout.weight(.semibold))
-            }
-            .frame(width: 30, height: 30)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Filtros")
-                    .font(.headline.weight(.semibold))
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Folio("Filtros")
                 let n = appState.taskFilters.activeDimensionCount
-                Text(n == 0 ? "Refine a lista de tarefas" : "\(n) dimensão" + (n == 1 ? "" : "s") + " ativa" + (n == 1 ? "" : "s"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Caption(n == 0
+                        ? "refine a lista de tarefas"
+                        : "\(n) dimensão" + (n == 1 ? "" : "s") + " ativa" + (n == 1 ? "" : "s"),
+                        size: 12.5)
             }
 
-            Spacer()
-
-            if !appState.taskFilters.isEmpty {
-                Button {
-                    withAnimation(.spring(duration: 0.2)) {
-                        appState.taskFilters = TaskFilters()
-                    }
-                } label: {
-                    Text("Limpar")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color.accentColor)
-                }
-                .buttonStyle(.plain).focusEffectDisabled()
-            }
+            Spacer(minLength: 0)
 
             Button { onClose() } label: {
                 Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(Editorial.inkSoft)
                     .frame(width: 22, height: 22)
-                    .background(.regularMaterial, in: Circle())
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain).focusEffectDisabled()
+            .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
     }
 
     // MARK: - Section: Vencimento
@@ -206,7 +202,6 @@ struct TaskFilterPopover: View {
                 ForEach(DueWindow.allCases) { w in
                     chipToggle(
                         label:    w.label,
-                        icon:     w.systemImage,
                         isActive: appState.taskFilters.dueWindow == w
                     ) {
                         appState.taskFilters.dueWindow =
@@ -224,9 +219,10 @@ struct TaskFilterPopover: View {
             FlowLayout(spacing: 6, lineSpacing: 6) {
                 ForEach(availablePriorities, id: \.self) { p in
                     chipToggle(
-                        label:    label(forPriority: p),
-                        tint:     priorityColor(p),
-                        isActive: appState.taskFilters.priorities.contains(p)
+                        label:     label(forPriority: p),
+                        tint:      priorityColor(p),
+                        showCheck: true,
+                        isActive:  appState.taskFilters.priorities.contains(p)
                     ) {
                         toggle(&appState.taskFilters.priorities, p)
                     }
@@ -265,13 +261,13 @@ struct TaskFilterPopover: View {
                     }
                 } else if !q.isEmpty {
                     Text("Nenhum responsável corresponde.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(Editorial.serif(11.5).italic())
+                        .foregroundStyle(Editorial.inkSoft)
                         .padding(.vertical, 2)
                 } else {
                     Text("Digite para buscar entre \(appState.availableMembers.count) pessoas.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(Editorial.serif(11.5).italic())
+                        .foregroundStyle(Editorial.inkSoft)
                         .padding(.vertical, 2)
                 }
             }
@@ -301,9 +297,10 @@ struct TaskFilterPopover: View {
                     FlowLayout(spacing: 6, lineSpacing: 6) {
                         ForEach(pool, id: \.self) { name in
                             chipToggle(
-                                label:    name,
-                                tint:     tagTint(name),
-                                isActive: appState.taskFilters.tagNames.contains(name)
+                                label:     name,
+                                tint:      tagTint(name),
+                                showCheck: true,
+                                isActive:  appState.taskFilters.tagNames.contains(name)
                             ) {
                                 toggle(&appState.taskFilters.tagNames, name)
                             }
@@ -311,13 +308,13 @@ struct TaskFilterPopover: View {
                     }
                 } else if !q.isEmpty {
                     Text("Nenhuma etiqueta corresponde.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(Editorial.serif(11.5).italic())
+                        .foregroundStyle(Editorial.inkSoft)
                         .padding(.vertical, 2)
                 } else {
                     Text("Digite ou abra a lista pra escolher entre \(availableTagNames.count) etiquetas.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(Editorial.serif(11.5).italic())
+                        .foregroundStyle(Editorial.inkSoft)
                         .padding(.vertical, 2)
                 }
             }
@@ -348,14 +345,14 @@ struct TaskFilterPopover: View {
             }
         } label: {
             Image(systemName: "list.bullet")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Editorial.inkSoft)
                 .frame(width: 26, height: 26)
-                .background(Color.gray.opacity(0.10),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(Editorial.card,
+                            in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.gray.opacity(0.18), lineWidth: 0.6)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(Editorial.rule, lineWidth: 1)
                 )
         }
         .menuStyle(.borderlessButton)
@@ -402,13 +399,13 @@ struct TaskFilterPopover: View {
                     }
                 } else if !q.isEmpty {
                     Text("Nenhum criador corresponde.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(Editorial.serif(11.5).italic())
+                        .foregroundStyle(Editorial.inkSoft)
                         .padding(.vertical, 2)
                 } else {
                     Text("Digite para buscar entre \(availableCreators.count) pessoas.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(Editorial.serif(11.5).italic())
+                        .foregroundStyle(Editorial.inkSoft)
                         .padding(.vertical, 2)
                 }
             }
@@ -423,38 +420,33 @@ struct TaskFilterPopover: View {
                                    query: Binding<String>) -> some View {
         let hasQuery = !query.wrappedValue
             .trimmingCharacters(in: .whitespaces).isEmpty
-        HStack(spacing: 6) {
+        // Prototype `inputBare`: borderless serif field on a single
+        // bottom hairline (cinnabar while it has a query).
+        HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(hasQuery ? Color.accentColor : .secondary)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(hasQuery ? Editorial.accent : Editorial.inkMute)
             TextField(placeholder, text: query)
                 .textFieldStyle(.plain)
-                .font(.caption)
-                .foregroundStyle(.primary)
+                .font(Editorial.serif(14))
+                .foregroundStyle(Editorial.ink)
                 .focusEffectDisabled()
             if hasQuery {
                 Button { query.wrappedValue = "" } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Editorial.inkMute)
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
             }
         }
-        .padding(.leading, 8)
-        .padding(.trailing, hasQuery ? 4 : 8)
-        .frame(height: 26)
-        .background(Color.gray.opacity(0.10),
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(
-                    hasQuery ? Color.accentColor.opacity(0.30)
-                             : Color.gray.opacity(0.18),
-                    lineWidth: 0.6
-                )
-        )
+        .padding(.vertical, 7)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(hasQuery ? Editorial.accent : Editorial.rule)
+                .frame(height: 1)
+        }
     }
 
     // MARK: - Section: Data criada
@@ -497,14 +489,11 @@ struct TaskFilterPopover: View {
 
     private func sectionContainer<Content: View>(
         title: String,
-        systemImage: String,
+        systemImage _: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
+        VStack(alignment: .leading, spacing: 10) {
+            Folio(title)
             content()
         }
     }
@@ -516,29 +505,39 @@ struct TaskFilterPopover: View {
                             icon: String? = nil,
                             tint: Color = .accentColor,
                             avatar: CUMember? = nil,
+                            showCheck: Bool = false,
                             isActive: Bool,
                             action: @escaping () -> Void) -> some View {
+        // Prototype `pillBtn`: rounded capsule, paper at rest,
+        // muted-tint wash + tint border + tint label when active.
+        // Single-select date pills are label-only (no icon, no
+        // check) — the colour wash alone signals state. Multi-select
+        // chips (`showCheck`) get a leading ✓ when active.
+        let c = tint.editorialMuted
         Button(action: { withAnimation(.spring(duration: 0.18)) { action() } }) {
             HStack(spacing: 5) {
                 if let avatar {
                     chipAvatar(avatar)
+                } else if showCheck && isActive {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 9, weight: .bold))
                 } else if let icon {
-                    Image(systemName: icon).font(.caption2)
+                    Image(systemName: icon).font(.system(size: 10))
                 }
                 Text(label)
-                    .font(.caption.weight(.medium))
+                    .font(Editorial.sans(12, .medium))
                     .lineLimit(1)
             }
-            .foregroundStyle(isActive ? tint : Color.primary.opacity(0.8))
-            .padding(.horizontal, 9)
+            .foregroundStyle(isActive ? c : Editorial.ink)
+            .padding(.horizontal, 11)
             .padding(.vertical, 5)
             .background(
-                isActive ? AnyShapeStyle(tint.opacity(0.14)) : AnyShapeStyle(Color.gray.opacity(0.08)),
+                isActive ? AnyShapeStyle(c.opacity(0.10)) : AnyShapeStyle(Editorial.page),
                 in: Capsule()
             )
             .overlay(
                 Capsule().strokeBorder(
-                    isActive ? tint.opacity(0.55) : Color.gray.opacity(0.18),
+                    isActive ? c : Editorial.rule,
                     lineWidth: 1
                 )
             )
@@ -548,7 +547,7 @@ struct TaskFilterPopover: View {
     }
 
     private func chipAvatar(_ m: CUMember) -> some View {
-        let bg = m.color.flatMap { Color(hex: $0) } ?? .blue
+        let bg = (m.color.flatMap { Color(hex: $0) } ?? Editorial.inkSoft).editorialMuted
         return ZStack {
             Circle().fill(bg)
             if let pic = m.profilePicture, let url = URL(string: pic) {
@@ -556,7 +555,7 @@ struct TaskFilterPopover: View {
             } else {
                 Text(m.initials ?? String(m.username.prefix(2)).uppercased())
                     .font(.system(size: 7, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Editorial.page)
             }
         }
         .frame(width: 16, height: 16)
@@ -585,12 +584,14 @@ struct TaskFilterPopover: View {
     }
 
     private func priorityColor(_ p: Int) -> Color {
+        // Editorial-muted priority palette — same densified hexes
+        // used by the task list / create form.
         switch p {
-        case 1: return Color(hex: "#F50000")
-        case 2: return Color(hex: "#FFCC00")
-        case 3: return Color(hex: "#6FDDFF")
-        case 4: return Color(hex: "#87909E")
-        default: return .gray
+        case 1: return Color(hex: "#A8392A")
+        case 2: return Color(hex: "#9A7B1F")
+        case 3: return Color(hex: "#56708A")
+        case 4: return Color(hex: "#A8A39A")
+        default: return Editorial.inkMute
         }
     }
 

@@ -94,6 +94,17 @@ struct TaskDetailSheet: View, Equatable {
     /// dimensions appropriate to the (possibly new) window.
     @State private var lockedSize: CGSize? = nil
 
+    /// Confirm before turning the task into a calendar event
+    /// (the ClickUp task is removed afterwards).
+    @State private var showConvertConfirm = false
+
+    /// Editorial layout: a single-column popup with the activity
+    /// timeline and attachments behind tabs (matching the
+    /// prototype's `DetailEditorial`) instead of a permanent
+    /// right-hand comments rail.
+    enum DetailTab: Hashable { case overview, subtasks, attachments, activity }
+    @State private var detailTab: DetailTab = .overview
+
     /// Pull the live snapshot from AppState every render so edits to
     /// status / dates / priority repaint the header without dismissing.
     ///
@@ -107,7 +118,8 @@ struct TaskDetailSheet: View, Equatable {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 24, style: .continuous)
+        // Popup corner radius bumped +50% (3 → 4.5).
+        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
     }
 
     /// Compute a popup size from the host window. Used once on
@@ -153,67 +165,33 @@ struct TaskDetailSheet: View, Equatable {
     private var leftColumnRatio: CGFloat { 0.62 }
 
     var body: some View {
+        // EditorialDetailV2 — "task as a magazine spread":
+        // masthead, then a 7fr/3fr grid (main column · marginalia).
         VStack(spacing: 0) {
-            // Header has NO own background — the popup-level
-            // material below shows through as the translucent
-            // title bar.
-            header
+            masthead
+            Rectangle().fill(Editorial.rule).frame(height: 1)
 
-            // Body + footer share a single solid surface that
-            // hides the popup-level material in their region.
-            // Header is the only area that lets the material
-            // through, so the title bar reads as glass while
-            // the rest of the popup is opaque.
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    metadataColumn
-                    Divider().opacity(0.4)
-                    commentsColumn
+            Group {
+                switch detailTab {
+                case .overview:    overviewSpread
+                case .subtasks:    subtasksTab
+                case .attachments: attachmentsTab
+                case .activity:    activityTab
                 }
-                // 20pt inset between the top of the body and
-                // its first row. The earlier 10pt boundary
-                // padding (between the title bar and the
-                // body) was removed per design — body now
-                // sits flush with the title bar — but the
-                // inside breathing room before the first row
-                // grew 15 → 20pt.
-                .padding(.top, 20)
-
-                Divider().opacity(0.5)
-                footer
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(width: popoverSize.width, height: popoverSize.height)
-        // Material painted IN the popup shape — fills the
-        // rounded corners cleanly without the 1-pixel gap that
-        // appeared when the material was rectangular and got
-        // clipped against the rounded outer shape (visible as
-        // the unfilled-pixel line at the top-right corner).
-        .background(.ultraThinMaterial, in: shape)
+        // Editorial page: near-neutral popup surface, near-square
+        // corners, one soft ambient shadow (prototype `EditorialDetailV2`).
+        .background(Editorial.popup, in: shape)
         .clipShape(shape)
-        // Specular top-bevel + ambient shadow stack — same chrome
-        // `popupGlass` had, minus the body-wide material.
         .overlay {
-            shape.strokeBorder(
-                LinearGradient(
-                    stops: [
-                        .init(color: .white.opacity(0.90), location: 0.00),
-                        .init(color: .white.opacity(0.45), location: 0.10),
-                        .init(color: .white.opacity(0.18), location: 0.35),
-                        .init(color: .white.opacity(0.08), location: 0.65),
-                        .init(color: .white.opacity(0.18), location: 1.00),
-                    ],
-                    startPoint: .top,
-                    endPoint:   .bottom
-                ),
-                lineWidth: 1.0
-            )
-            .allowsHitTesting(false)
+            shape.strokeBorder(Editorial.rule, lineWidth: 1)
+                .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(0.30), radius: 32, x: 0, y: 18)
-        .shadow(color: .black.opacity(0.14), radius: 8,  x: 0, y: 4)
-        .shadow(color: .black.opacity(0.08), radius: 1,  x: 0, y: 1)
+        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
+        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
         // Lock the size on first appear so subsequent host-
         // window resizes don't reflow the popup.
         //
@@ -257,37 +235,43 @@ struct TaskDetailSheet: View, Equatable {
                 lockedSize = computeSize(for: new)
             }
         }
+        .confirmationDialog(
+            "Transformar em evento?",
+            isPresented: $showConvertConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Transformar", role: .destructive) {
+                let t = liveTask
+                Task {
+                    if await appState.convertTaskToEvent(t) != nil {
+                        onClose()
+                    }
+                }
+            }
+            Button("Cancelar", role: .cancel) { }
+        } message: {
+            Text("Um evento será criado no calendário e a tarefa será excluída do ClickUp.")
+        }
     }
 
-    // MARK: - Header
+    // MARK: - EditorialDetailV2 — masthead
 
-    private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
-            // Back button — present whenever there's a
-            // place to go back to. Three routes:
-            //
-            //  • Stacked overlay (sub-subtask, depth >= 2):
-            //    pop the top of `detailSubtaskStack` so the
-            //    user retraces their path one level at a
-            //    time. The parent subtask underneath is
-            //    already rendered + keyed by `.id`, so it
-            //    snaps back instantly.
-            //
-            //  • Top of overlay stack (depth 1, this is the
-            //    only subtask in the stack): pop empties the
-            //    stack and dismisses the overlay, revealing
-            //    the root `detailTask` underneath.
-            //
-            //  • Standalone subtask (no overlay involved,
-            //    user opened the subtask directly from the
-            //    main list): navigate `detailTask` to the
-            //    parent task so the popup re-zooms into the
-            //    parent via the `.id(t.id)`-keyed swap.
+    private func dayMonth(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "pt_BR")
+        f.dateFormat = "d MMM"
+        return f.string(from: d)
+    }
+
+    private var statusLabel: String { liveTask.status.capitalized }
+
+    private var masthead: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            // Back (subtask navigation) — kept from the old header.
             if liveTask.isSubtask {
                 let isOverlay = (appState.detailSubtaskOverlay?.id == liveTask.id)
                 let parent: CUTask? = liveTask.parentId
                     .flatMap { appState.tasksById[$0] }
-
                 if isOverlay || parent != nil {
                     Button {
                         if isOverlay {
@@ -302,11 +286,8 @@ struct TaskDetailSheet: View, Equatable {
                         }
                     } label: {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 26, height: 26)
-                            .background(.regularMaterial, in: Circle())
-                            .liquidGlassEdge(Circle())
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Editorial.inkSoft)
                     }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
@@ -314,179 +295,216 @@ struct TaskDetailSheet: View, Equatable {
                 }
             }
 
-            // Status stripe — thin vertical capsule painted in
-            // the task's status colour, anchored at the leading
-            // edge of the title block as a small accent.
-            Capsule()
-                .fill(Color(hex: liveTask.statusDisplayHex))
-                .frame(width: 3, height: 32)
+            Folio(liveTask.listName.isEmpty ? "Tarefa" : liveTask.listName)
+            Text("Tarefa")
+                .font(Editorial.serif(11).italic())
+                .foregroundStyle(Editorial.inkMute)
+            Circle().fill(Editorial.inkFaint).frame(width: 3, height: 3)
+            Folio(statusLabel, accent: true)
 
-            VStack(alignment: .leading, spacing: 3) {
-                // Title — capped at 2 lines with tail truncation.
-                // Letting the title wrap freely (`.fixedSize`)
-                // was occasionally inflating the header so much
-                // on long titles that the body section's safe
-                // height ran out, and SwiftUI compressed the
-                // header back — clipping the title against the
-                // popup's top edge instead of letting the
-                // overflow truncate visually. A 2-line cap +
-                // `.help()` tooltip preserves the full text on
-                // hover without ever blowing up the layout.
-                Text(liveTask.title)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .multilineTextAlignment(.leading)
-                    .help(liveTask.title)
-                if !liveTask.listName.isEmpty {
-                    HStack(spacing: 5) {
-                        Image(systemName: "list.bullet.rectangle")
-                            .font(.caption2)
-                        Text(liveTask.listName)
-                            .font(.caption.weight(.medium))
-                    }
-                    .foregroundStyle(.secondary)
-                }
+            Spacer(minLength: 12)
+
+            mastheadTab(.overview,    "Visão geral", nil)
+            mastheadTab(.subtasks,    "Subtarefas",
+                        visibleSubtasks.isEmpty ? nil : visibleSubtasks.count)
+            mastheadTab(.attachments, "Anexos",
+                        liveTask.attachments.isEmpty ? nil : liveTask.attachments.count)
+            mastheadTab(.activity,    "Atividade", nil)
+
+            Rectangle().fill(Editorial.rule)
+                .frame(width: 1, height: 14)
+                .padding(.horizontal, 4)
+
+            Button { showConvertConfirm = true } label: {
+                Image(systemName: "arrow.2.squarepath")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(Editorial.inkSoft)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .help("Transformar em evento")
 
             Button { onClose() } label: {
                 Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 26, height: 26)
-                    .background(.regularMaterial, in: Circle())
-                    .liquidGlassEdge(Circle())
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(Editorial.inkSoft)
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
             .keyboardShortcut(.cancelAction)
             .help("Fechar (Esc)")
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 40)
         .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Force a sensible MIN height on the header so the title
-        // text never gets crushed when the popup ends up shorter
-        // than its content's natural height (e.g. a freshly-
-        // animated popup whose lockedSize was captured before
-        // the windowSize env propagated). Without this floor a
-        // 2-line title can be compressed to 0pt and disappear
-        // visually behind the popup's rounded clipShape.
-        .frame(minHeight: 64)
-        .fixedSize(horizontal: false, vertical: true)
     }
 
-    // MARK: - Left column (metadata + description)
+    private func mastheadTab(_ t: DetailTab,
+                             _ label: String,
+                             _ count: Int?) -> some View {
+        let active = detailTab == t
+        return Button {
+            withAnimation(.easeInOut(duration: 0.15)) { detailTab = t }
+        } label: {
+            HStack(spacing: 5) {
+                Text(label)
+                    .font(Editorial.sans(12.5, active ? .semibold : .regular))
+                    .foregroundStyle(active ? Editorial.ink : Editorial.inkSoft)
+                if let count {
+                    Text("\(count)")
+                        .font(Editorial.sans(11))
+                        .foregroundStyle(Editorial.inkMute)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.vertical, 14)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(active ? Editorial.ink : Color.clear)
+                    .frame(height: 2)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+    }
 
-    private var metadataColumn: some View {
-        // Description floor capped at 320pt. The previous formula
-        // `max(280, bodyHeight - 240)` blew up to 500-600pt on tall
-        // popups, forcing the description to occupy the full column
-        // by itself and pushing the rest of the content (including
-        // any subtasks section, links, and the editor's wrapped
-        // continuation) off the visible scroll area while the
-        // outer ScrollView's hit-test region was still anchored to
-        // the top — visually clipping text that *was* present but
-        // out of reach. A modest 320pt floor lets the editor breathe
-        // without devouring the column.
-        let descriptionFloor: CGFloat = 320
+    // MARK: - Overview — single column with an integrated
+    // horizontal properties bar (no side marginalia). Mirrors
+    // the prototype `detail.jsx` DetailEditorial.
 
-        // Scroll indicators are now visible (was `false`) — on
-        // tasks with long description + 14 anexos + 8 subtarefas
-        // the column overflows, but with the indicator hidden
-        // users had no visual cue they could scroll. The result
-        // looked like "anexos/subtarefas estão cortados" when
-        // they were actually just below the fold.
-        // `.vertical` axis + `scrollBounceBehavior(.basedOnSize,
-        // axes: .horizontal)` together: the axis spec restricts
-        // the scroll axis SwiftUI exposes to the user, and the
-        // bounce-behavior fully disables the horizontal axis on
-        // the underlying NSScrollView when the content fits the
-        // viewport (which it always does — content is laid out
-        // to the column's fixed width). This prevents the
-        // residual side-pan feel from a diagonal trackpad
-        // gesture without needing a custom NSScrollView wrapper.
-        // ScrollViewReader so the subtask composer can ask
-        // the parent ScrollView to scroll its inline form
-        // into view when the user taps "Adicionar". Without
-        // this the composer lands at the bottom of the
-        // section, often outside the viewport on tasks with
-        // many subtasks.
-        return ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: true) {
+    private var overviewSpread: some View {
+        overviewMain
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Folio + serif headline + byline — shared by the
+    /// overview and the Subtarefas tab.
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Folio("↳ \(liveTask.listName.isEmpty ? "Tarefa" : liveTask.listName)")
+                .padding(.bottom, 8)
+
+            Text(liveTask.title)
+                .font(Editorial.serif(38))
+                .foregroundStyle(Editorial.ink)
+                .tracking(-1.2)
+                .lineSpacing(0)
+                .fixedSize(horizontal: false, vertical: true)
+                .help(liveTask.title)
+
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                if let who = liveTask.creator?.username
+                    ?? liveTask.assignees.first?.username {
+                    Caption("por \(who.split(separator: "@").first.map(String.init) ?? who)"
+                            + (liveTask.dateCreated.map { " · \(dayMonth($0))" } ?? ""))
+                }
+                if !liveTask.listName.isEmpty {
+                    Circle().fill(Editorial.inkFaint).frame(width: 3, height: 3)
+                    Caption(liveTask.listName)
+                }
+            }
+            .padding(.top, 12)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var overviewMain: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 0) {
+                titleBlock
+
+                Spacer().frame(height: 24)
+                Rectangle().fill(Editorial.rule).frame(height: 1)
+                    .padding(.horizontal, -56)
+                Spacer().frame(height: 22)
+
+                // Body: the integrated (and fully interactive)
+                // properties grid + description + checklists/
+                // custom fields/dependencies/reminders/subtasks.
+                // `propertiesAsGrid` renders the grid with its
+                // real status/priority/date/tag/assignee editors
+                // restored. Attachments + activity have own tabs.
                 TaskDetailView(
                     task: liveTask,
                     appState: appState,
                     includesComments:    false,
+                    showsAttachments:    false,
+                    showsProperties:     true,
+                    propertiesAsGrid:    true,
                     descriptionMaxHeight: .greatestFiniteMagnitude,
-                    descriptionMinHeight: descriptionFloor,
+                    descriptionMinHeight: 120,
                     descriptionScrolls:   false,
-                    scrollProxy:         proxy,
                     visibleSubtasks:     visibleSubtasks
                 )
                 .equatable()
+                .padding(.horizontal, -12)  // cancel TaskDetailView's own inset
             }
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            .defaultScrollAnchor(.top)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 56)
+            .padding(.top, 44)
+            .padding(.bottom, 32)
         }
-        .frame(width: popoverSize.width * leftColumnRatio)
-        // Fill the full body height so the ScrollView's
-        // viewport bounds match the popup's body section.
-        // Without this the column sized to its content, and
-        // any overflow rendered below the popup edge instead
-        // of becoming scrollable.
-        .frame(maxHeight: .infinity, alignment: .top)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
     }
 
-    // MARK: - Right column (activity timeline — chat layout)
+    // MARK: - Other tabs
 
-    private var commentsColumn: some View {
-        // TaskCommentsSection ships its own "Atividade" header,
-        // unified comment+activity list, empty-state and composer.
-        // `composerAtBottom: true` makes the composer hug the
-        // bottom of the column (chat-style) instead of floating
-        // directly under whatever last entry happens to render.
-        TaskCommentsSection(task: liveTask, appState: appState, composerAtBottom: true)
+    /// Subtarefas tab — ONLY the title block + the subtask
+    /// list/composer. No properties bar, description, checklists,
+    /// custom fields or reminders.
+    private var subtasksTab: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 0) {
+                titleBlock
+
+                Spacer().frame(height: 24)
+                Rectangle().fill(Editorial.rule).frame(height: 1)
+                    .padding(.horizontal, -56)
+                Spacer().frame(height: 24)
+
+                TaskDetailView(
+                    task: liveTask,
+                    appState: appState,
+                    includesComments: false,
+                    showsAttachments: false,
+                    subtasksOnly:     true,
+                    showsProperties:  false,
+                    visibleSubtasks:  visibleSubtasks
+                )
+                .equatable()
+                .padding(.horizontal, -12)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 56)
+            .padding(.top, 44)
+            .padding(.bottom, 32)
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+    }
+
+    private var attachmentsTab: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            TaskDetailView(
+                task: liveTask,
+                appState: appState,
+                includesComments: false,
+                attachmentsOnly:  true,
+                visibleSubtasks:  visibleSubtasks
+            )
             .equatable()
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.horizontal, 56)
+        .padding(.vertical, 32)
+    }
+
+    private var activityTab: some View {
+        TaskCommentsSection(task: liveTask, appState: appState,
+                            composerAtBottom: true)
+            .equatable()
+            .padding(.horizontal, 56)
+            .padding(.vertical, 28)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    // MARK: - Footer
-
-    private var footer: some View {
-        HStack(spacing: 12) {
-            Spacer()
-
-            // Subtle keyboard hint — discoverability without a tooltip.
-            HStack(spacing: 4) {
-                Text("Esc")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .strokeBorder(.secondary.opacity(0.20), lineWidth: 0.5)
-                    )
-                Text("para fechar")
-                    .font(.caption2)
-            }
-            .foregroundStyle(.tertiary)
-        }
-        // Padding pushes the footer content INSIDE the popup's
-        // 24pt rounded-corner curve. Earlier values (h:20, v:10)
-        // left the "Abrir no ClickUp" link at x≈20, y≈popup-15
-        // — squarely inside the bottom-left corner's clip zone,
-        // so the icon visually intersected the curve and looked
-        // cut. Bumping to h:28, v:16 keeps every element fully
-        // clear of both bottom corners (24pt radius + 4pt safety).
-        .padding(.horizontal, 28)
-        .padding(.vertical, 16)
-    }
 }

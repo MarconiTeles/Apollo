@@ -21,14 +21,13 @@ import Foundation
 /// access.
 enum SharedDateFormatters {
 
-    /// "29 de abr.", "1 de mai." — short day + abbreviated month.
-    /// Locale `pt_BR` because that's our only target locale; if
-    /// the app ever ships in additional locales each can have its
-    /// own bucket.
+    /// "29 abr.", "1 mai." — short day + abbreviated month, no
+    /// "de" preposition. Explicit `d MMM` format (not the
+    /// localized template, which injects "de" in pt_BR).
     static let shortDayMonthPTBR: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "pt_BR")
-        f.setLocalizedDateFormatFromTemplate("dMMM")
+        f.dateFormat = "d MMM"
         return f
     }()
 

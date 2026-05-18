@@ -206,18 +206,36 @@ struct TaskListView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.container, edges: .top)
+                // Hard-terminate the list at the category bar's
+                // footer rule: mask out the toolbar + filter-bar
+                // band so scrolled rows vanish exactly at that
+                // line instead of bleeding up behind the bar.
+                .mask(alignment: .top) {
+                    VStack(spacing: 0) {
+                        Color.clear.frame(height: 52 + filterBarHeight)
+                        Rectangle()
+                    }
+                }
             } else {
                 NSCollectionListView(
                     items: items,
                     topContentInset: 52 + filterBarHeight
                 ) { task in
+                    // Editorial: no status-tinted drop shadow —
+                    // the row is a flat paper line with a hairline
+                    // rule (handled inside TaskRowView).
                     TaskRowView(task: task, appState: appState)
                         .equatable()
-                        .padding(.horizontal, 12)
-                        .modifier(StatusTintedShadow(baseHex: task.statusDisplayHex))
+                        .padding(.horizontal, 24)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.container, edges: .top)
+                .mask(alignment: .top) {
+                    VStack(spacing: 0) {
+                        Color.clear.frame(height: 52 + filterBarHeight)
+                        Rectangle()
+                    }
+                }
             }
         } else {
             legacyScrollBody
@@ -225,12 +243,13 @@ struct TaskListView: View {
     }
 
     /// UserDefaults-backed flag to switch between the AppKit
-    /// `TaskCollectionView` (Phase 1+) and the legacy SwiftUI
-    /// `TaskRowView`. Set to `false` (default true) via:
+    /// `TaskCollectionView` (perf-optimized cell recycling) and
+    /// the SwiftUI `TaskRowView`.
+    ///
+    /// Both cells are now ported to the editorial language, so
+    /// the AppKit path (cell recycling — smooth scroll on big
+    /// lists) is the default again. Flip to the SwiftUI row via:
     ///     defaults write com.painellunar.app dp_useAppKitTaskCells -bool false
-    /// then relaunch. Read once per body re-eval; SwiftUI doesn't
-    /// observe UserDefaults so app restart is needed to pick up
-    /// changes, which matches the manual compare workflow.
     private var useAppKitTaskCells: Bool {
         UserDefaults.standard.object(forKey: "dp_useAppKitTaskCells") as? Bool ?? true
     }
@@ -446,7 +465,7 @@ struct TaskListView: View {
                     .foregroundStyle(.tertiary)
                 Spacer()
             }
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(Editorial.accent)
             .padding(.horizontal, 4)
             .padding(.top, 6)
         }
@@ -510,14 +529,26 @@ struct TaskFilterBar: View {
     var body: some View {
         if hasFilters {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 5) {
-                    dimensionMenu
+                // Prototype filter row: a baseline-aligned flex with
+                // `gap: 24` between tabs. Status-only — the
+                // dimension switcher was removed (this bar shows
+                // categories/statuses exclusively).
+                HStack(alignment: .firstTextBaseline, spacing: 24) {
                     pills
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 12)
             }
             .frame(height: 52)
+            // Closing 1px rule, inset 12pt each side so it lines
+            // up with the inter-task separators (the task rowView
+            // is pinned 12pt in from the cell edges).
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Editorial.rule)
+                    .frame(height: 1)
+                    .padding(.horizontal, 12)
+            }
             // Explicit clip — `.clipped()` forces the rendered
             // content to stay inside the bar's frame even if
             // the ScrollView's own clip is bypassed by some
@@ -544,23 +575,17 @@ struct TaskFilterBar: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 Image(systemName: appState.taskPillDimension.systemImage)
-                    .font(.system(size: 9, weight: .bold))
-                Text(appState.taskPillDimension.label.uppercased())
-                    .font(.system(size: 10, weight: .heavy))
+                    .font(.system(size: 9, weight: .semibold))
+                Text(appState.taskPillDimension.label.capitalized)
+                    .font(Editorial.sans(12, .medium))
                 Image(systemName: "chevron.down")
                     .font(.system(size: 7, weight: .bold))
-                    .opacity(0.6)
+                    .foregroundStyle(Editorial.inkFaint)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .foregroundStyle(.primary)
-            // No solid fill — the dropdown sits over the
-            // toolbar's frosted strip, which already provides
-            // contrast. A solid white capsule clashed with the
-            // surrounding tinted filter pills.
-            .overlay(Capsule().strokeBorder(.secondary.opacity(0.5), lineWidth: 1))
+            .foregroundStyle(Editorial.inkSoft)
+            .padding(.trailing, 10)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -587,16 +612,13 @@ struct TaskFilterBar: View {
             // from the per-dimension pill counts and from
             // the actual rows on screen.
             count:    appState.pendingTasks.count,
-            color:    Color.accentColor,
+            color:    Editorial.accent,
             isActive: !hasActiveSelection
         ) { clearSelection() }
 
-        switch appState.taskPillDimension {
-        case .status:   statusPills
-        case .priority: priorityPills
-        case .tag:      tagPills
-        case .assignee: assigneePills
-        }
+        // Status-only bar — always render the status categories
+        // (the dimension switcher was removed).
+        statusPills
     }
 
     // — Status —
@@ -785,62 +807,35 @@ struct TaskFilterBar: View {
     // MARK: - Pill view
 
     private func filterPill(label: String, count: Int, color: Color, isActive: Bool, action: @escaping () -> Void) -> some View {
+        // Prototype `PFilter`: a type-only underline tab — NO
+        // colour dot. Label is SF Pro 13 (w600 ink when active,
+        // else w400 inkSoft); the count rides 5pt after it in
+        // SF Pro 11 inkMute; active gets a 2pt ink underline.
+        // `padding(.bottom, 4)` mirrors the prototype's
+        // `padding: '0 0 4px'`.
         Button(action: action) {
-            HStack(spacing: 4) {
-                Text(label)
-                    .font(.system(size: 10, weight: isActive ? .heavy : .bold))
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(label.capitalized)
+                    .font(Editorial.sans(13, isActive ? .semibold : .regular))
+                    .foregroundStyle(isActive ? Editorial.ink : Editorial.inkSoft)
                 if count > 0 {
                     Text("\(count)")
-                        .font(.system(size: 10, weight: .semibold))
-                        .opacity(isActive ? 0.85 : 0.7)
+                        .font(Editorial.sans(11))
+                        .foregroundStyle(Editorial.inkMute)
+                        .monospacedDigit()
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            // Active state: text becomes white (so it's legible on the
-            // filled colour background). Inactive keeps the previous
-            // tinted-text look — but on a flat tinted background
-            // (was `.ultraThinMaterial`, replaced for perf: each
-            // filter pill was a separate backdrop blur in a
-            // horizontally-scrolling row, multiplying the GPU
-            // cost during scroll/hover).
-            .foregroundStyle(isActive ? AnyShapeStyle(.white)
-                                      : AnyShapeStyle(color.opacity(0.75)))
-            .background(
-                isActive
-                    ? AnyShapeStyle(color)
-                    : AnyShapeStyle(color.opacity(0.10)),
-                in: Capsule()
-            )
-            .overlay(
-                Capsule().strokeBorder(color.opacity(isActive ? 1.0 : 0.45),
-                                       lineWidth: isActive ? 1.5 : 1)
-            )
-            .liquidGlassEdge(Capsule())
-            // Coloured drop shadow when selected — same colour as the
-            // pill's fill, ambient halo for depth + emphasis. Inactive
-            // pills get no extra shadow (the toolbar's frosted strip
-            // already provides separation).
-            .shadow(color: isActive ? color.opacity(0.45) : .clear,
-                    radius: 8, x: 0, y: 3)
-            .animation(.spring(duration: 0.28, bounce: 0.18), value: isActive)
+            .padding(.bottom, 4)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(isActive ? Editorial.ink : Color.clear)
+                    .frame(height: 2)
+            }
+            .contentShape(Rectangle())
+            .animation(.easeInOut(duration: 0.15), value: isActive)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        // Hover/click feedback — same family used by task and
-        // event pills. `glow: true` boosts the coloured halo
-        // when the cursor enters; `pulseFromClick: true`
-        // sends a soft ripple from the click point on tap.
-        // `hoverScale: 1.04` gives the small pills a punchier
-        // lift than the dashboard rows since they're tiny
-        // targets and benefit from a clearer hover signal.
-        .interactivePillFeedback(
-            accent: color,
-            cornerRadius: 999,        // Capsule — any large radius works
-            glow: true,
-            hoverScale: 1.04,
-            pulseFromClick: true
-        )
     }
 }
 
