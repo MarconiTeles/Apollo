@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.5.9</title>
-      <pubDate>Wed, 13 May 2026 14:44:49 +0000</pubDate>
-      <sparkle:version>34</sparkle:version>
-      <sparkle:shortVersionString>1.5.9</sparkle:shortVersionString>
+      <title>Apollo 1.6.12</title>
+      <pubDate>Mon, 18 May 2026 04:13:00 +0000</pubDate>
+      <sparkle:version>54</sparkle:version>
+      <sparkle:shortVersionString>1.6.12</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Infraestrutura de canal 'silent' do Sparkle: releases podem agora ser publicadas no feed sem disparar banner agendado — só aparecem quando o usuário clica 'Verificar Atualizações…'. Útil pra disponibilizar versões em teste pra quem quiser sem spam pros demais. Também inclui o fix da toolbar arrastável em toda extensão.]]></description>
+      <description><![CDATA[Redesign editorial completo do Apollo. Apollo IA repaginado, com tela inicial "diário do dia" (resumo do dia, agenda, tempo e desempenho), criação de tarefas/eventos com responsáveis, links e anexos (arrastar e soltar), e conversão de eventos↔tarefas. O campo de Local agora pesquisa salas de reunião do Google Workspace. Correções: persistência do local em eventos, subtarefas no chat e diversos refinamentos visuais.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.5.9/Apollo-1.5.9.zip"
-        sparkle:edSignature="yPn9TUrytx6ex3xoj5KKE0qH/2qdzW9uaS4ScWRZ75YiWs781hazq+34CEFZt1qYM8ARxxSp1l+NER5pZfIHBA=="
-        length="37685360"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.6.12/Apollo-1.6.12.zip"
+        sparkle:edSignature="IcDweABkFUZjB4V4nMF2brcnRAhH1PuScJOhh4/Q7FL22waE7dmLA8nhF3PACgJKt9zp6GVJMiBqay+fbL6FAg=="
+        length="38470505"
         type="application/octet-stream" />
     </item>
   </channel>
