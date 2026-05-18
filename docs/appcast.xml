@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.6.12</title>
-      <pubDate>Mon, 18 May 2026 04:13:00 +0000</pubDate>
-      <sparkle:version>54</sparkle:version>
-      <sparkle:shortVersionString>1.6.12</sparkle:shortVersionString>
+      <title>Apollo 1.6.13</title>
+      <pubDate>Mon, 18 May 2026 17:55:32 +0000</pubDate>
+      <sparkle:version>55</sparkle:version>
+      <sparkle:shortVersionString>1.6.13</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Redesign editorial completo do Apollo. Apollo IA repaginado, com tela inicial "diário do dia" (resumo do dia, agenda, tempo e desempenho), criação de tarefas/eventos com responsáveis, links e anexos (arrastar e soltar), e conversão de eventos↔tarefas. O campo de Local agora pesquisa salas de reunião do Google Workspace. Correções: persistência do local em eventos, subtarefas no chat e diversos refinamentos visuais.]]></description>
+      <description><![CDATA[Apollo agora fica sempre no tema claro "Editorial Calm" — o modo escuro do macOS não altera mais nada na interface. Correção: a faixa inferior da lista de eventos não escurece mais (resíduo preto) quando o sistema está em modo escuro.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.6.12/Apollo-1.6.12.zip"
-        sparkle:edSignature="IcDweABkFUZjB4V4nMF2brcnRAhH1PuScJOhh4/Q7FL22waE7dmLA8nhF3PACgJKt9zp6GVJMiBqay+fbL6FAg=="
-        length="38470505"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.6.13/Apollo-1.6.13.zip"
+        sparkle:edSignature="rWWb0/rZWzddyWq/v0qAm5bf0zNgqHyrKXOJt2CLrBq+0jOeFZR1/q+3pgSO0Bq8K8jmF3K5aXaaxGScOYgaAA=="
+        length="38471828"
         type="application/octet-stream" />
     </item>
   </channel>
