@@ -556,7 +556,14 @@ struct ContentView: View {
         // helps the design — without paying the system-wide tax
         // of a window-wide blur.
         .background(
-            Color(nsColor: .windowBackgroundColor)
+            // Pinned to the Editorial cream canvas. Previously
+            // `Color(nsColor: .windowBackgroundColor)`, which
+            // resolves against the SYSTEM appearance and turned
+            // the root backdrop BLACK under macOS Dark Mode
+            // (visible through the timeline's bottom fade). The
+            // app is hard-locked to the light Editorial theme,
+            // so the backdrop is now an explicit constant.
+            Editorial.paper
                 .ignoresSafeArea()
         )
         // Push the toolbar up into the macOS title bar (alongside traffic lights)

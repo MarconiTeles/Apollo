@@ -150,11 +150,14 @@ struct TimelineView: View {
             )
             // Bottom-edge fade — blurs the events that scroll
             // beneath the floating search bar so the chips +
-            // input read cleanly. Uses
-            // `Color(NSColor.windowBackgroundColor)` so the
-            // fade adapts to dark/light themes automatically:
-            // dark windows fade to dark, light windows fade
-            // to light. Multi-stop curve creates a smooth
+            // input read cleanly. Pinned to `Editorial.paper`
+            // (NOT `windowBackgroundColor`): the app is hard-
+            // locked to the light Editorial appearance, so the
+            // fade must always dissolve into the cream canvas.
+            // Using the dynamic system color made the fade go
+            // BLACK under macOS Dark Mode (it resolves against
+            // the system appearance, bypassing the SwiftUI
+            // colorScheme lock). Multi-stop curve creates a smooth
             // exponential ramp instead of a hard band, so
             // the fade reads as "content gracefully
             // dissolving into the background" rather than a
@@ -171,7 +174,7 @@ struct TimelineView: View {
                 // 2-stop and the previous multi-stop curve
                 // is imperceptible at this size against the
                 // window background.
-                let bg = Color(NSColor.windowBackgroundColor)
+                let bg = Editorial.paper
                 LinearGradient(
                     colors: [bg.opacity(0.00), bg.opacity(0.92)],
                     startPoint: .top,
