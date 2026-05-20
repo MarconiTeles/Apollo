@@ -559,9 +559,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func makeMainWindow() {
+        // Standard titled NSWindow — corner rounding follows the
+        // macOS default (matches the Claude.app window). Earlier
+        // attempts to shrink the radius via CALayer masks were
+        // ineffective on macOS 26 (the WindowServer paints the
+        // outer silhouette outside the AppKit layer hierarchy)
+        // and broke the system-supplied traffic lights when we
+        // dropped `.titled` — so we accept the system radius.
         let w = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1060, height: 720),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable,
+                        .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -584,31 +592,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the title bar — without this the title-bar area still
         // reads as a distinct band even with isOpaque=false.
         w.titlebarSeparatorStyle       = .none
-        // PERF: window is now OPAQUE with a flat background.
-        // The previous `.clear + isOpaque=false` configuration
-        // forced WindowServer to composite Apollo over the
-        // desktop content of every Space the window appeared
-        // on — combined with the `.behindWindow` material that
-        // covered the window, this turned every layer dirty
-        // (hover, scroll, sync flash, …) into a desktop-wide
-        // recomposite that dragged other apps' FPS down. The
-        // visual cost is a flat, opaque background instead of
-        // a frosted-glass pane that revealed the desktop —
-        // the popups still keep their local vibrancy where it
-        // matters for the design.
-        // Window OPAQUE again. The earlier non-opaque attempt
-        // was meant to remove a "white bar" at the top, but
-        // the actual bar was the `safeAreaInset` reserving
-        // 52pt of empty space inside the content view — that
-        // inset has since been removed and `mainContent`
-        // extends to y=0, covering the whole window with
-        // dashboard content. With opaque window + content
-        // reaching y=0, the `NSVisualEffectView` strip on
-        // top now has actual rendered pixels (mainContent's
-        // events / tasks) to sample for its `.withinWindow`
-        // backdrop blur — the previous gray-opaque appearance
-        // happened because `.withinWindow` had no window-bg
-        // image to read against the clear window.
+        // Opaque flat background — matches the cream paper
+        // canvas, no `.behindWindow` material, no transparency.
         w.backgroundColor              = .windowBackgroundColor
         w.isOpaque                     = true
 
@@ -620,14 +605,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         w.displaysWhenScreenProfileChanges = true
 
         // Empty NSToolbar bumps the title-bar height to the
-        // native Apple-app size (~52pt) and lets macOS
-        // resize + vertically centre the traffic-light
-        // buttons against that taller bar — which lines them
-        // up automatically with the SwiftUI toolbar pills
-        // (also 52pt with center alignment). The window is
-        // opaque again, so this toolbar's `.unified` style
-        // no longer paints the white bar problem we had
-        // earlier with non-opaque windows.
+        // native ~52pt and lets macOS vertically centre the
+        // traffic-light buttons inside it — lining them up with
+        // the SwiftUI toolbar pills which also sit at 52pt.
         let toolbar = NSToolbar()
         toolbar.showsBaselineSeparator = false
         w.toolbar      = toolbar
@@ -680,13 +660,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             cv.wantsLayer = true
             cv.layerContentsRedrawPolicy = .onSetNeedsDisplay
             cv.layer?.drawsAsynchronously = true
-            // Clear backing layer + non-opaque host view so the
-            // toolbar area at top is genuinely transparent. Without
-            // these the NSHostingView paints its layer with the
-            // window's default `windowBackgroundColor` even after
-            // setting `w.backgroundColor = .clear` — that's the
-            // "white bar" the user kept seeing despite every
-            // SwiftUI-level fix.
+            // Clear, non-opaque host layer — the window itself
+            // is opaque with `windowBackgroundColor`, so anywhere
+            // the SwiftUI content doesn't paint reveals the OS
+            // window background (which matches the paper canvas).
             cv.layer?.backgroundColor = NSColor.clear.cgColor
             cv.layer?.isOpaque        = false
         }
@@ -763,13 +740,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.promotionDisplayLink = displayLink
         }
 
-        // Override the green (zoom) traffic-light button so a click
-        // performs "Preencher" (Fill) — resize the window to the
-        // screen's visibleFrame — instead of entering full-screen mode.
-        // We also strip `.fullScreenPrimary` from the window's
-        // collection behavior so macOS doesn't bring up the
-        // full-screen-tile dropdown when the user hovers the green
-        // button. Clicking again toggles back to the previous frame.
+        // Override the green (zoom) traffic-light so a click
+        // performs "Preencher" (Fill) — resize to the screen's
+        // visibleFrame — instead of entering full-screen mode.
+        // Strip `.fullScreenPrimary` so macOS doesn't bring up
+        // the full-screen-tile dropdown on hover. Clicking
+        // again toggles back to the previous frame.
         w.collectionBehavior.remove(.fullScreenPrimary)
         w.collectionBehavior.insert(.fullScreenAuxiliary)
         if let zoomButton = w.standardWindowButton(.zoomButton) {
@@ -777,18 +753,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             zoomButton.action = #selector(toggleFillScreen(_:))
         }
 
-        // macOS 26 defaults to a much larger window-corner
-        // radius than earlier versions. Match that look by
-        // bumping the content-view layer's cornerRadius and
-        // masking it. The window's frame edges still belong
-        // to AppKit (rounded by the system), but the SwiftUI
-        // content gets clipped to the same rounded rectangle.
-        if let cv = w.contentView {
-            cv.wantsLayer = true
-            cv.layer?.cornerRadius  = 2
-            cv.layer?.cornerCurve   = .continuous
-            cv.layer?.masksToBounds = true
-        }
 
         // Traffic-light buttons stay at macOS's natural
         // position. The earlier reposition attempt put

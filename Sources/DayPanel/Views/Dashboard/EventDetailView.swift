@@ -14,9 +14,6 @@ struct EventDetailView: View {
     var onClose: () -> Void = {}
 
     @State private var showDeleteConfirm = false
-    /// Confirm before turning the event into a ClickUp task
-    /// (the event is removed → attendees are notified).
-    @State private var showConvertConfirm = false
     /// Drives the in-app edit sheet (re-using `CreateEventSheet`
     /// in editing mode).
     @State private var showEditSheet     = false
@@ -173,22 +170,6 @@ struct EventDetailView: View {
         } message: {
             Text("Esta ação não pode ser desfeita.")
         }
-        .confirmationDialog(
-            "Transformar em tarefa?",
-            isPresented: $showConvertConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Transformar", role: .destructive) {
-                Task {
-                    if await appState.convertEventToTask(event) != nil {
-                        onClose()
-                    }
-                }
-            }
-            Button("Cancelar", role: .cancel) { }
-        } message: {
-            Text("Uma tarefa será criada no ClickUp e o evento será removido do calendário (participantes serão notificados).")
-        }
         .sheet(isPresented: $showEditSheet) {
             CreateEventSheet(
                 onClose: { showEditSheet = false },
@@ -220,7 +201,13 @@ struct EventDetailView: View {
 
             HStack(spacing: 4) {
                 actionIcon("pencil",          size: 14, help: "Editar evento") { showEditSheet = true }
-                actionIcon("arrow.2.squarepath", size: 13, help: "Transformar em tarefa") { showConvertConfirm = true }
+                actionIcon("arrow.2.squarepath", size: 13, help: "Transformar em tarefa") {
+                    // Hand off cleanly: stash the target event,
+                    // dismiss the detail overlay so the convert
+                    // sheet rises on its own.
+                    appState.pendingConversion = event
+                    appState.detailEvent       = nil
+                }
                 actionIcon("trash",           size: 14, help: "Excluir evento") { showDeleteConfirm = true }
                 actionIcon("xmark",           size: 15, help: "Fechar")          { onClose() }
             }
@@ -615,3 +602,398 @@ private struct MeetingCTA: View {
         }
     }
 }
+
+// MARK: - Convert event → task sheet
+
+/// Small editorial sheet shown when the user clicks
+/// "Transformar em tarefa" on an event. Collects the three
+/// decisions that matter for the new ClickUp task —
+/// **status**, **responsável** and whether to **keep the
+/// original event** — then dispatches to
+/// `AppState.convertEventToTask`. Default keeps the event
+/// (the user opts in to deletion via the toggle).
+struct ConvertEventToTaskSheet: View {
+    let event: CalendarEvent
+    @EnvironmentObject var appState: AppState
+    let onClose: () -> Void
+    /// Called only when the conversion succeeded — the caller
+    /// closes the EventDetail overlay after the task lands.
+    let onDone:  () -> Void
+
+    /// Default: keep the event (ON). The user explicitly opts
+    /// OUT (toggle OFF) if they want the event removed from the
+    /// calendar. Phrased positively so the active state and the
+    /// label ("Manter evento") agree at a glance.
+    @State private var keepOriginal: Bool = true
+    @State private var selectedStatus: String? = nil
+    @State private var assigneeQuery:  String = ""
+    /// Multi-select — any number of ClickUp members can be
+    /// assigned to the new task at once.
+    @State private var selectedAssignees: [CUMember] = []
+    @FocusState private var assigneeFocused: Bool
+    @State private var isCreating: Bool = false
+
+    private var shape: RoundedRectangle {
+        // Matches the sibling editorial popups — close to square,
+        // not a chunky system sheet.
+        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            GlassFormHeader(title: "Transformar em tarefa",
+                            onClose: onClose)
+
+            VStack(alignment: .leading, spacing: 0) {
+                statusDetailRow
+                assigneeDetailRow
+                if showAssigneeSuggestions {
+                    assigneeSuggestionsList
+                        .transition(.asymmetric(
+                            insertion: .opacity
+                                .combined(with: .scale(scale: 0.96,
+                                                       anchor: .top))
+                                .combined(with: .offset(y: -6)),
+                            removal:   .opacity
+                                .combined(with: .scale(scale: 0.96,
+                                                       anchor: .top))
+                                .combined(with: .offset(y: -6))
+                        ))
+                }
+                deleteDetailRow
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
+            .animation(.spring(response: 0.32, dampingFraction: 0.82),
+                       value: showAssigneeSuggestions)
+            .animation(.spring(response: 0.32, dampingFraction: 0.82),
+                       value: filteredMembers.map(\.id))
+
+            GlassFormFooter(
+                onCancel:       onClose,
+                onCreate:       submit,
+                createLabel:    isCreating ? "Criando…" : "Criar tarefa",
+                createDisabled: isCreating
+            )
+            .padding(.horizontal, 28)
+            .padding(.top, 8)
+            .padding(.bottom, 20)
+        }
+        .frame(width: 480)
+        .fixedSize(horizontal: false, vertical: true)
+        // Single backing view: paper fill + a tap recognizer.
+        // Taps that hit a control (button / text field) are
+        // consumed by that control first; taps on empty body
+        // areas fall through to this background and drop
+        // assignee focus, which animates the suggestions out.
+        .background {
+            shape
+                .fill(Editorial.paper)
+                .contentShape(shape)
+                .onTapGesture { assigneeFocused = false }
+        }
+        .clipShape(shape)
+        .overlay {
+            shape.strokeBorder(Editorial.rule, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
+        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+    }
+
+    // MARK: - Submit
+
+    private func submit() {
+        isCreating = true
+        Task {
+            let task = await appState.convertEventToTask(
+                event,
+                deleteOriginal: !keepOriginal,
+                status:         selectedStatus,
+                assigneeIds:    selectedAssignees.map(\.id)
+            )
+            isCreating = false
+            if task != nil { onDone() } else { onClose() }
+        }
+    }
+
+    // MARK: - Detail rows (canonical editorial `PMarg` pattern)
+
+    @ViewBuilder
+    private func detailRow<Content: View>(
+        label: String, @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label.uppercased())
+                .font(Editorial.sans(10.5, .semibold))
+                .tracking(1.1)
+                .foregroundStyle(Editorial.inkMute)
+                .frame(width: 100, alignment: .leading)
+                .padding(.top, 2)
+            content()
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+        }
+    }
+
+    // MARK: - Status
+
+    private var statusDetailRow: some View {
+        detailRow(label: "Status") { statusMenu }
+    }
+
+    private var statusMenu: some View {
+        Menu {
+            Button("Padrão da lista") { selectedStatus = nil }
+            ForEach(appState.availableStatuses, id: \.id) { s in
+                Button(s.status.capitalized) { selectedStatus = s.status }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if let hex = currentStatusHex {
+                    Circle().fill(Color(hex: hex))
+                        .frame(width: 8, height: 8)
+                }
+                Text(selectedStatus?.capitalized ?? "Padrão da lista")
+                    .font(Editorial.sans(13, .medium))
+                    .foregroundStyle(Editorial.ink)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Editorial.inkFaint)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+
+    private var currentStatusHex: String? {
+        guard let s = selectedStatus else { return nil }
+        return appState.availableStatuses
+            .first { $0.status.lowercased() == s.lowercased() }?
+            .displayHex
+    }
+
+    // MARK: - Assignee (interactive search)
+
+    private var assigneeDetailRow: some View {
+        detailRow(label: "Responsável") {
+            HStack(spacing: 6) {
+                ForEach(selectedAssignees) { m in
+                    assigneeChip(m)
+                }
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(Editorial.inkFaint)
+                    TextField(selectedAssignees.isEmpty
+                              ? "Buscar pessoa…"
+                              : "Adicionar outro…",
+                              text: $assigneeQuery)
+                        .textFieldStyle(.plain)
+                        .font(Editorial.sans(13))
+                        .foregroundStyle(Editorial.ink)
+                        .focused($assigneeFocused)
+                        .frame(minWidth: 100)
+                }
+            }
+            .animation(.spring(response: 0.30, dampingFraction: 0.82),
+                       value: selectedAssignees.map(\.id))
+        }
+    }
+
+    @ViewBuilder
+    private func assigneeChip(_ m: CUMember) -> some View {
+        HStack(spacing: 6) {
+            memberAvatar(m).frame(width: 16, height: 16)
+            Text(m.username)
+                .font(Editorial.sans(12, .medium))
+                .foregroundStyle(Editorial.ink)
+                .lineLimit(1)
+            Button {
+                selectedAssignees.removeAll { $0.id == m.id }
+                assigneeFocused = true
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Editorial.inkFaint)
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(Editorial.card)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 0.5)
+        )
+    }
+
+    private var showAssigneeSuggestions: Bool {
+        let q = assigneeQuery.trimmingCharacters(in: .whitespaces)
+        return assigneeFocused
+            && !q.isEmpty
+            && !filteredMembers.isEmpty
+    }
+
+    /// Capped at 3 results so the dropdown never overwhelms the
+    /// dialog. Members already picked are filtered out so the
+    /// list always offers something new.
+    private var filteredMembers: [CUMember] {
+        let q = assigneeQuery
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
+        let picked = Set(selectedAssignees.map(\.id))
+        let pool   = appState.availableMembers.filter { !picked.contains($0.id) }
+        let matched: [CUMember]
+        if q.isEmpty {
+            matched = pool
+        } else {
+            matched = pool.filter {
+                $0.username.lowercased().contains(q)
+                    || ($0.email ?? "").lowercased().contains(q)
+            }
+        }
+        return Array(matched.prefix(3))
+    }
+
+    // Mirrors the editorial guest-picker list in CreateEventSheet:
+    // page surface, hairline border, muted avatar disc, ink names,
+    // ruleSoft separators — no shadow.
+    private var assigneeSuggestionsList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(filteredMembers) { m in
+                Button {
+                    selectedAssignees.append(m)
+                    assigneeQuery   = ""
+                    // Keep focus so the user can chain another pick.
+                    assigneeFocused = true
+                } label: {
+                    HStack(spacing: 8) {
+                        memberAvatar(m).frame(width: 18, height: 18)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(m.username)
+                                .font(Editorial.sans(12, .medium))
+                                .foregroundStyle(Editorial.ink)
+                                .lineLimit(1)
+                            if let mail = m.email, !mail.isEmpty {
+                                Text(mail)
+                                    .font(Editorial.sans(11))
+                                    .foregroundStyle(Editorial.inkSoft)
+                                    .lineLimit(1)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                if m.id != filteredMembers.last?.id {
+                    Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+                }
+            }
+        }
+        // Indent aligns with the content column of `detailRow`
+        // (label 100 + spacing 12 = 112pt).
+        .padding(.leading, 112)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Editorial.page)
+                .padding(.leading, 112),
+            alignment: .leading
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 0.5)
+                .padding(.leading, 112),
+            alignment: .leading
+        )
+        .padding(.top, 4)
+    }
+
+    @ViewBuilder
+    private func memberAvatar(_ m: CUMember) -> some View {
+        ZStack {
+            Circle().fill(memberColor(m))
+            Text(memberInitials(m))
+                .font(Editorial.sans(8, .bold))
+                .foregroundStyle(Editorial.page)
+        }
+    }
+
+    private func memberColor(_ m: CUMember) -> Color {
+        if let hex = m.color, !hex.isEmpty {
+            return Color(hex: hex).editorialMuted
+        }
+        return Editorial.inkSoft.editorialMuted
+    }
+
+    private func memberInitials(_ m: CUMember) -> String {
+        if let initials = m.initials,
+           !initials.isEmpty { return initials.uppercased() }
+        let source = m.username.isEmpty ? (m.email ?? "?") : m.username
+        let parts = source
+            .split(whereSeparator: { $0 == " " || $0 == "." || $0 == "@" })
+            .prefix(2)
+        return parts.compactMap { $0.first }
+            .map(String.init)
+            .joined()
+            .uppercased()
+    }
+
+    // MARK: - Keep-event toggle (editorial switch)
+
+    private var deleteDetailRow: some View {
+        detailRow(label: "Manter evento") {
+            Button { keepOriginal.toggle() } label: {
+                HStack(spacing: 10) {
+                    editorialSwitch
+                    Text(keepOriginal ? "Sim, manter no calendário"
+                                      : "Remover do calendário")
+                        .font(Editorial.sans(12.5, .medium))
+                        .foregroundStyle(Editorial.ink)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+        }
+    }
+
+    /// Small editorial switch — capsule track + circular knob,
+    /// ink-on / paper-off, springs cleanly between states.
+    private var editorialSwitch: some View {
+        let trackW: CGFloat = 32
+        let trackH: CGFloat = 18
+        let knob:   CGFloat = 14
+        return ZStack(alignment: keepOriginal ? .trailing : .leading) {
+            Capsule()
+                .fill(keepOriginal ? Editorial.ink : Editorial.page)
+            Capsule()
+                .strokeBorder(keepOriginal ? Editorial.ink
+                                           : Editorial.rule,
+                              lineWidth: 1)
+            Circle()
+                .fill(keepOriginal ? Editorial.page : Editorial.ink)
+                .frame(width: knob, height: knob)
+                .padding(2)
+        }
+        .frame(width: trackW, height: trackH)
+        .animation(.spring(response: 0.26, dampingFraction: 0.78),
+                   value: keepOriginal)
+    }
+}
+

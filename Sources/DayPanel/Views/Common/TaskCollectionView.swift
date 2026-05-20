@@ -18,13 +18,14 @@ struct TaskCollectionView: NSViewRepresentable {
     /// Parent-task cell height. History:
     ///   • 80pt — original pre-tighten value
     ///   • 68pt — 80 × 0.85, set when the user wanted 15% shorter
-    ///   • 78pt — 68 × 1.15, restored 15% taller (current).
-    /// Internal `TaskRowContentView` constants (`verticalPad`,
-    /// `titleMetaGap`) were restored alongside this bump so the
-    /// math `14 + 20 + 8 + 22 + 14 = 78` fits exactly. Subtask
-    /// rows (depth > 0) stay at 40pt via the per-row override
-    /// in `sizeForItemAt` below — only the parent rows grow.
-    var rowHeight: CGFloat = 78
+    ///   • 78pt — 68 × 1.15, restored 15% taller
+    ///   • 70pt — 78 × 0.9, current (10% shorter).
+    /// Internal `TaskRowContentView` constants were adjusted
+    /// alongside this trim so the math
+    /// `10 + 20 + 8 + 22 + 10 = 70` fits exactly (verticalPad
+    /// 14 → 10). Subtask rows (depth > 0) stay at 40pt via the
+    /// per-row override in `sizeForItemAt` below.
+    var rowHeight: CGFloat = 70
     var topContentInset: CGFloat = 0
     /// Fires when the user clicks the row's content area
     /// (anywhere except the status pill). The closure receives
@@ -66,7 +67,13 @@ struct TaskCollectionView: NSViewRepresentable {
         layout.itemSize                = NSSize(
             width: 320,
             height: rowHeight + TaskRowCellItem.bakedVerticalGap)
-        layout.sectionInset            = .init(top: 4, left: 0, bottom: 12, right: 0)
+        // Zero explicit top inset — the cell's baked `halfGap`
+        // already provides ~8.9pt of breathing room between the
+        // filter-bar divider above and the first row's content.
+        // (Previously +4pt — too airy; -halfGap was tried but
+        // collapsed the buffer to nothing and the first row read
+        // as overlapping the bar.)
+        layout.sectionInset            = .init(top: 0, left: 0, bottom: 12, right: 0)
 
         let collection = WidthTrackingCollectionView(frame: .zero)
         collection.collectionViewLayout = layout
@@ -500,10 +507,17 @@ struct TaskCollectionView: NSViewRepresentable {
                 if let parentCell = cv.item(at: indexPath) as? TaskRowCellItem {
                     configure(cell: parentCell, with: row)
                 } else if let subtaskCell = cv.item(at: indexPath) as? SubtaskCellItem {
+                    // First subtask = row above is a top-level
+                    // (depth 0). The cell absorbs the parent's
+                    // halfGap on its top constraint so there's
+                    // no gap between parent and first child.
+                    let prevIdx = indexPath.item - 1
+                    let isFirst = prevIdx >= 0 && items[prevIdx].depth == 0
                     subtaskCell.bind(task: row.task,
                                      appState: appState,
                                      depth: row.depth,
-                                     isLast: row.isLastInSubtree)
+                                     isLast: row.isLastInSubtree,
+                                     isFirst: isFirst)
                 }
             }
         }
@@ -636,10 +650,16 @@ struct TaskCollectionView: NSViewRepresentable {
                     withIdentifier: SubtaskCellItem.identifier,
                     for: indexPath
                 ) as! SubtaskCellItem
+                // First subtask in a group = preceded by a depth-0
+                // row. Marks the cell so it absorbs the parent's
+                // bottom halfGap (gap-less transition).
+                let prevIdx = indexPath.item - 1
+                let isFirst = prevIdx >= 0 && items[prevIdx].depth == 0
                 item.bind(task: row.task,
                           appState: appState,
                           depth: row.depth,
-                          isLast: row.isLastInSubtree)
+                          isLast: row.isLastInSubtree,
+                          isFirst: isFirst)
                 return item
             } else {
                 let item = collectionView.makeItem(
@@ -669,13 +689,26 @@ struct TaskCollectionView: NSViewRepresentable {
             let row = items[indexPath.item]
             // Each cell type carries its own pre-baked
             // vertical gap (FlowLayout `minimumLineSpacing`
-            // is 0 — see `makeNSView`). Parent: 78pt card +
-            // 14.8pt baked gap. Subtask: 42pt SubtaskRow +
-            // 2.96pt baked gap (20% of parent gap → 80%
-            // tighter row-to-row spacing).
+            // is 0 — see `makeNSView`). Parent: 70pt card +
+            // baked gap. Subtask: 42pt SubtaskRow + 0 baked gap.
+            //
+            // When a parent row is IMMEDIATELY followed by a
+            // subtask (= the subtree is expanded), we shrink its
+            // cell height by the bottom `halfGap` so the parent
+            // and its first subtask sit flush — no empty strip
+            // between them. The top `halfGap` is kept so the
+            // parent still breathes above (against the previous
+            // top-level row or the filter bar).
+            let nextIdx = indexPath.item + 1
+            let parentFollowedByChild =
+                row.depth == 0
+                && nextIdx < items.count
+                && items[nextIdx].depth > 0
             let h: CGFloat = row.depth > 0
                 ? 42 + SubtaskCellItem.bakedVerticalGap
-                : rowHeight + TaskRowCellItem.bakedVerticalGap
+                : parentFollowedByChild
+                    ? rowHeight + TaskRowCellItem.halfGap  // top half only
+                    : rowHeight + TaskRowCellItem.bakedVerticalGap  // full
             let w = collectionView.bounds.width
             return NSSize(width: w, height: h)
         }
@@ -709,14 +742,13 @@ struct TaskCollectionView: NSViewRepresentable {
 final class SubtaskCellItem: NSCollectionViewItem {
     static let identifier = NSUserInterfaceItemIdentifier("SubtaskCell")
 
-    /// Visual gap baked into the subtask cell's height so
-    /// consecutive subtask rows sit close together
-    /// (~2.96pt apart) — 20% of the parent line spacing
-    /// (14.79768470pt). FlowLayout's `minimumLineSpacing`
-    /// is set to 0 so cells contribute their own gap.
-    /// Splitting it half on top + half on bottom keeps the
-    /// SubtaskRow centered inside the cell.
-    static let bakedVerticalGap: CGFloat = 14.79768470 * 0.20  // 2.95953694
+    /// Subtask cells now sit flush against each other (no
+    /// inter-row gap) so the category-colour wash reads as a
+    /// continuous block per subtree. The first subtask
+    /// additionally absorbs the parent's bottom `halfGap` (see
+    /// `bind(... isFirst:)`) so the entire group is gap-less
+    /// from the parent down to the last child.
+    static let bakedVerticalGap: CGFloat = 0
     static var halfGap: CGFloat { bakedVerticalGap * 0.5 }
 
     private var hosting: NSHostingView<SubtaskRow>?
@@ -770,32 +802,37 @@ final class SubtaskCellItem: NSCollectionViewItem {
     }
 
     func bind(task: CUTask, appState: AppState, depth: Int,
-              isLast: Bool = false) {
+              isLast: Bool = false, isFirst: Bool = false) {
         bottomRule.isHidden = !isLast
         hosting?.removeFromSuperview()
+        // The depth-aware indent is injected INSIDE SubtaskRow now
+        // (via its `leadingIndent` param) so the host can extend
+        // edge-to-edge and the category-colour wash spans the
+        // full row width — matching parent task rows.
+        let indent: CGFloat = 40 + CGFloat(max(0, depth - 1)) * 16
         let host = NSHostingView(rootView: SubtaskRow(task: task,
-                                                      appState: appState))
+                                                      appState: appState,
+                                                      leadingIndent: indent))
         host.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(host)
-        // Parent task content is inset 26 (card leading 12 +
-        // `leadingPad` 14). The subtask DONE button sits at that
-        // 26 + a 14pt left padding (= 40); deeper levels still
-        // nest +16. The trailing is matched to the parent's
-        // right content inset (26) so the subtask date ends the
-        // same distance from the window edge as a top-level
-        // task's last item.
+        // Host fills the cell edge-to-edge. All four insets are 0
+        // — the host's frame matches the cell exactly so SwiftUI
+        // content renders at its intrinsic vertical size (no
+        // stretched container, no per-cell layout drift). The
+        // parent→first-subtask gap is eliminated by SHRINKING the
+        // parent cell's height in `sizeForItemAt` (when followed
+        // by a subtask), not by warping this cell.
+        _ = isFirst   // kept for API stability; height shrink lives in sizeForItemAt
         let leading = host.leadingAnchor.constraint(
-            equalTo: view.leadingAnchor,
-            constant: 40 + CGFloat(max(0, depth - 1)) * 16)
-        let pad = SubtaskCellItem.halfGap
+            equalTo: view.leadingAnchor, constant: 0)
         NSLayoutConstraint.activate([
             host.topAnchor.constraint(equalTo: view.topAnchor,
-                                       constant: pad),
+                                       constant: 0),
             host.bottomAnchor.constraint(equalTo: view.bottomAnchor,
-                                          constant: -pad),
+                                          constant: 0),
             leading,
             host.trailingAnchor.constraint(equalTo: view.trailingAnchor,
-                                            constant: -26),
+                                            constant: 0),
         ])
         hosting = host
         leadingConstraint = leading

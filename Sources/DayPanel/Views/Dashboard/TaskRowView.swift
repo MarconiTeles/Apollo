@@ -276,9 +276,11 @@ struct TaskRowView: View, Equatable {
             // bumped fillTint).
             // Editorial: no status-tinted glass card. The row is
             // a paper line — transparent at rest, a soft cream
-            // wash on hover, separated by a hairline rule. Status
-            // identity moves to the dot+word StatusMark below,
-            // not a filled card.
+            // wash on hover, separated by a hairline rule. The
+            // AppKit cell port (TaskRowCellView) paints a slim
+            // 4pt category-colour stripe on the leading edge for
+            // the dashboard's NSCollectionListView path; this
+            // SwiftUI fallback keeps the editorial baseline.
             .background(rowHover ? Editorial.card : Color.clear)
             .overlay(alignment: .bottom) {
                 Rectangle().fill(Editorial.rule).frame(height: 1)

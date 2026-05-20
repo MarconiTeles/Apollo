@@ -34,7 +34,7 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
     /// bottom; the inner `rowView` is inset by this padding so
     /// the rounded card itself stays at its original 78pt
     /// height regardless of the cell's outer height.
-    static let bakedVerticalGap: CGFloat = 14.79768470
+    static let bakedVerticalGap: CGFloat = 17.79768470
     static var halfGap: CGFloat { bakedVerticalGap * 0.5 }
 
     private(set) var rowView: TaskRowContentView!
@@ -88,8 +88,8 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
         for panel in [leftPanel, rightPanel] {
             panel.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(panel)
-            let lead  = panel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12)
-            let trail = panel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12)
+            let lead  = panel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 0)
+            let trail = panel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 0)
             NSLayoutConstraint.activate([
                 lead,
                 trail,
@@ -110,8 +110,8 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
         rowView = TaskRowContentView(frame: .zero)
         rowView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(rowView)
-        let rowLead  = rowView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12)
-        let rowTrail = rowView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12)
+        let rowLead  = rowView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 0)
+        let rowTrail = rowView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 0)
         NSLayoutConstraint.activate([
             rowLead,
             rowTrail,
@@ -194,7 +194,7 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
               hasChildren: Bool = false,
               isExpanded: Bool = false) {
         boundTask = task
-        let extraLead = 12 + CGFloat(depth) * subtaskCardLeadingExtra
+        let extraLead = CGFloat(depth) * subtaskCardLeadingExtra
         rowLeadingConstraint?.constant   =  extraLead
         leftPanelLeading?.constant       =  extraLead
         rightPanelLeading?.constant      =  extraLead
@@ -641,7 +641,7 @@ final class TaskRowContentView: NSView {
     /// Total parent-cell vertical: 14 + 20 + 8 + 22 + 14 = 78pt
     /// — fits exactly in the 78pt slot. Subtask rows render via
     /// `compactRow` and ignore this constant.
-    private let verticalPad: CGFloat = 14
+    private let verticalPad: CGFloat = 10
     /// Width of the checkbox icon slot. Bumped 14 → 16.1pt
     /// (+15%) per user request; the SF Symbol point size below
     /// scales to match.
@@ -724,6 +724,22 @@ final class TaskRowContentView: NSView {
         return l
     }()
 
+    /// Faint accent wash painted across the whole row at 3% —
+    /// the cell's "category by status" cue. Persistent sublayer
+    /// so it shows from the first frame regardless of what
+    /// `applyRowBackground` paints on the main `backgroundColor`.
+    /// `backgroundColor` is updated per task; frame is set in
+    /// `layout()`.
+    private let bodyTintLayer: CALayer = {
+        let l = CALayer()
+        l.opacity         = 0.03
+        l.cornerRadius    = 4
+        l.cornerCurve     = .continuous
+        l.masksToBounds   = true
+        return l
+    }()
+
+
     private func commonInit() {
         wantsLayer = true
         // Editorial: near-rectangular, flat — no rounded glass
@@ -731,6 +747,10 @@ final class TaskRowContentView: NSView {
         layer?.cornerRadius  = 4
         layer?.cornerCurve   = .continuous
         layer?.masksToBounds = false   // shadow needs to escape
+        // Order (bottom-up): bodyTintLayer (3% accent wash) →
+        // bottomRule (hairline). Both sit BELOW the row's
+        // subviews so text/icons stay crisp.
+        layer?.addSublayer(bodyTintLayer)
         layer?.addSublayer(bottomRule)
 
         // Force-reset hover state when a scroll starts. Without
@@ -1205,12 +1225,12 @@ final class TaskRowContentView: NSView {
         // is behind it ("sem fundo"). Resting fill = the canvas
         // paper itself, so the row is solid yet visually
         // seamless (only the hairline rule separates rows).
+        // The status-colour wash that identifies each category
+        // lives on a dedicated `tintLayer` sublayer (see
+        // `commonInit` + `refreshTintLayer`) so it persists
+        // regardless of what this method paints on `backgroundColor`.
         let target: CGColor
         if swipeOffset != 0 {
-            // Cream paper (NOT white) while sliding — an opaque
-            // canvas-coloured row that reveals the muted action
-            // panel where it moves away. The old `Editorial.page`
-            // flashed a white sheet over the cream canvas.
             target = NSColor(Editorial.paper).cgColor
         } else if isHovered {
             target = NSColor(Editorial.card).cgColor     // warm hover wash
@@ -1333,6 +1353,14 @@ final class TaskRowContentView: NSView {
         }
         expandPill.isExpanded = isExpanded
         self.cachedStatusHex = task.statusDisplayHex
+        // Repaint the 3% accent wash with the new status colour.
+        // Disable implicit CALayer actions so recycled cells
+        // don't flash a colour crossfade on rebind.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        bodyTintLayer.backgroundColor =
+            NSColor(Color(hex: cachedStatusHex)).cgColor
+        CATransaction.commit()
         // Reset transient hover state so a recycled cell doesn't
         // inherit a leftover hover halo / DONE pill from the
         // previous task. CRITICAL: cancel any in-flight Core
@@ -1553,8 +1581,10 @@ final class TaskRowContentView: NSView {
         // an animated frame change would smear the rule.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        bottomRule.frame = CGRect(x: 0, y: bounds.height - 1,
-                                  width: w, height: 1)
+        // 3% accent wash fills the whole row.
+        bodyTintLayer.frame = bounds
+        bottomRule.frame    = CGRect(x: 0, y: bounds.height - 1,
+                                     width: w, height: 1)
         CATransaction.commit()
 
         // Per-row indent for nested subtask rows. depth=0

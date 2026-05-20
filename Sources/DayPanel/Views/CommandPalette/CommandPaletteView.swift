@@ -303,11 +303,19 @@ struct CommandPaletteView: View {
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            (isSelected
-                ? Editorial.ink.opacity(0.05)
-                : isHovered
-                    ? Editorial.ink.opacity(0.035)
-                    : Color.clear)
+            // 3% wash in the row's accent (task status colour for
+            // tasks, calendar colour for events, category colour
+            // for commands) so the palette mirrors the same colour
+            // language as the task list. The selection / hover ink
+            // overlay sits on top.
+            ZStack {
+                item.tint.opacity(0.03)
+                if isSelected {
+                    Editorial.ink.opacity(0.05)
+                } else if isHovered {
+                    Editorial.ink.opacity(0.035)
+                }
+            }
         )
         .overlay(alignment: .leading) {
             Rectangle()

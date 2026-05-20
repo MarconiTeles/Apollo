@@ -2251,9 +2251,15 @@ struct SubtaskRow: View, Equatable {
     /// on `task` changes via the `subs` ForEach and passes
     /// fresh values down.
     let appState: AppState
+    /// Leading indent for the row CONTENT (checkbox/title/etc),
+    /// applied INSIDE the row so the category-colour wash still
+    /// extends to the leading edge. The dashboard's
+    /// `SubtaskCellItem` passes the per-depth nesting indent
+    /// here; the popup uses the default 0.
+    var leadingIndent: CGFloat = 0
 
     static func == (lhs: SubtaskRow, rhs: SubtaskRow) -> Bool {
-        lhs.task == rhs.task
+        lhs.task == rhs.task && lhs.leadingIndent == rhs.leadingIndent
     }
 
     @State private var completing: Bool = false
@@ -2390,6 +2396,19 @@ struct SubtaskRow: View, Equatable {
                 }
             }
             .padding(.vertical, 12)
+            // Content paddings sit INSIDE the background so the
+            // 3% accent wash spans the full leading-to-trailing
+            // edge of the row, while the actual content (checkbox,
+            // title, date) keeps the nesting indent + a 14pt
+            // right gutter to match the parent rows' inner inset.
+            .padding(.leading, leadingIndent)
+            .padding(.trailing, 14)
+            // 3% accent wash — matches the parent task list so
+            // subtasks share the same colour-by-category language.
+            // Applies in BOTH contexts where SubtaskRow renders:
+            // the dashboard's expanded inline list and the task
+            // detail popup's subtask list.
+            .background(Color(hex: task.statusDisplayHex).opacity(0.03))
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()

@@ -536,18 +536,25 @@ struct TaskFilterBar: View {
                 HStack(alignment: .firstTextBaseline, spacing: 24) {
                     pills
                 }
-                .padding(.horizontal, 12)
+                // Leading inset matches the task TITLE's x-offset
+                // inside each row (`leadingPad 14 + checkSize 16.1 +
+                // titleGroupSpacing 8 ≈ 38pt`) so the first pill
+                // (e.g. "Todos") lines up vertically with the row
+                // titles below, now that the rows render edge-to-
+                // edge with no horizontal cell inset.
+                .padding(.leading, 38)
+                .padding(.trailing, 12)
                 .padding(.vertical, 12)
             }
             .frame(height: 52)
-            // Closing 1px rule, inset 12pt each side so it lines
-            // up with the inter-task separators (the task rowView
-            // is pinned 12pt in from the cell edges).
+            // Closing 1px rule, full-bleed — matches the new
+            // edge-to-edge task hairlines so the bar's divider
+            // and the inter-task separators read as one continuous
+            // ruling system.
             .overlay(alignment: .bottom) {
                 Rectangle()
                     .fill(Editorial.rule)
                     .frame(height: 1)
-                    .padding(.horizontal, 12)
             }
             // Explicit clip — `.clipped()` forces the rendered
             // content to stay inside the bar's frame even if

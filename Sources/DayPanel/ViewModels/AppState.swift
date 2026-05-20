@@ -241,6 +241,11 @@ final class AppState: ObservableObject {
     /// overlay can scale from exactly that position.
     @Published var detailEvent:        CalendarEvent? = nil
     @Published var detailEventOrigin:  CGRect         = .zero
+    /// Set to a calendar event to surface the global "transform
+    /// into task" sheet (rendered by `ContentView`). Triggered
+    /// from the event detail header AND the right-click menu on
+    /// any timeline event card. Cleared when the sheet dismisses.
+    @Published var pendingConversion:  CalendarEvent? = nil
     /// Task detail popup — opened from the new "open" button on a task
     /// row (the one above the inline-expand chevron). Same pattern as
     /// the event overlay so the popup scales out of the button.
@@ -3785,12 +3790,16 @@ final class AppState: ObservableObject {
 
     /// Turns a calendar event into a ClickUp task. The task's
     /// due date is the event's start; notes/location/guests are
-    /// folded into the description. When `deleteOriginal` (the
-    /// default — "transform", not "copy") the source event is
-    /// removed afterwards.
+    /// folded into the description. `status` and `assigneeIds`
+    /// override the list defaults when provided. When
+    /// `deleteOriginal` (the default — "transform", not "copy")
+    /// the source event is removed afterwards; pass `false` to
+    /// keep BOTH the event and the new task.
     @discardableResult
     func convertEventToTask(_ event: CalendarEvent,
-                            deleteOriginal: Bool = true)
+                            deleteOriginal: Bool = true,
+                            status: String? = nil,
+                            assigneeIds: [Int] = [])
         async -> CUTask? {
         var lines: [String] = []
         if let n = event.notes?
@@ -3812,10 +3821,11 @@ final class AppState: ObservableObject {
         let task = await createTask(
             title:       event.title,
             description: lines.joined(separator: "\n"),
-            status:      nil,
+            status:      status,
             priority:    0,
             startDate:   event.isAllDay ? nil : event.startDate,
-            dueDate:     event.startDate
+            dueDate:     event.startDate,
+            assigneeIds: assigneeIds
         )
         if task != nil, deleteOriginal {
             await deleteEvent(event)

@@ -18,13 +18,57 @@ struct FloatingModal<Content: View>: View {
     /// effect; this combines anisotropic shrink + perspective
     /// twist + funnel translation, which reads as the genie suck.)
     var genie: Bool = false
+    /// When true, the panel enters/exits as a sheet of paper
+    /// being placed on the desk — a calm "Editorial" settle:
+    /// drops in a touch larger and higher with a slight 3D fall
+    /// tilt and a hand-placed skew that straightens as it lands,
+    /// with a soft shadow that tightens on touchdown. Takes
+    /// precedence over `genie` when both are set.
+    var paper: Bool = false
+    /// When true, the panel slides UP from the bottom of the
+    /// window (and slides back down on dismiss) — a sheet-from-
+    /// footer entrance. Takes precedence over `paper` / `genie`
+    /// when set.
+    var fromBottom: Bool = false
     @ViewBuilder let content: () -> Content
 
     /// Genie timing — a fast, non-bouncy curve that accelerates
     /// the panel into / out of the button (springs read wrong for
     /// a "suck into the dock" motion).
     private var genieAnim: Animation {
-        .timingCurve(0.36, 0.0, 0.22, 1.0, duration: 0.48)
+        // Suction curve: a long, gentle hold near the wide end
+        // then a hard acceleration into the focal point — the
+        // characteristic "lingers, then gets yanked into the
+        // Dock" cadence of the OS genie. Slightly longer than a
+        // plain ease (0.55s) so the funnel/stretch phases have
+        // room to read instead of blurring past.
+        .timingCurve(0.45, 0.0, 0.15, 1.0, duration: 0.55)
+    }
+
+    /// Paper-settle timing — a calm spring with a hint of flex on
+    /// touchdown (the sheet gives slightly as it meets the desk,
+    /// then stills). Low bounce keeps it "Editorial Calm", not
+    /// springy.
+    private var paperAnim: Animation {
+        .spring(response: 0.52, dampingFraction: 0.74)
+    }
+
+    /// Removal is quicker and damped flat — the sheet is lifted
+    /// cleanly off the desk, no flex.
+    private var paperDismissAnim: Animation {
+        .spring(response: 0.40, dampingFraction: 0.92)
+    }
+
+    /// Slide-up-from-bottom timing — a calm spring with a very
+    /// light bounce at the top of the rise so the sheet "lands".
+    private var bottomAnim: Animation {
+        .spring(response: 0.48, dampingFraction: 0.82)
+    }
+
+    /// Dismiss for `fromBottom`: a faster, fully damped fall
+    /// back down — no flex, no bounce.
+    private var bottomDismissAnim: Animation {
+        .spring(response: 0.38, dampingFraction: 0.95)
     }
 
     /// Pixel delta from the centre of the window (popup's resting place)
@@ -73,8 +117,12 @@ struct FloatingModal<Content: View>: View {
                     .transition(popupTransition)
             }
         }
-        .animation(genie ? genieAnim
-                          : .spring(duration: 0.45, bounce: 0.30),
+        .animation(fromBottom
+                    ? (isPresented ? bottomAnim : bottomDismissAnim)
+                    : (paper
+                        ? (isPresented ? paperAnim : paperDismissAnim)
+                        : (genie ? genieAnim
+                                 : .spring(duration: 0.45, bounce: 0.30))),
                    value: isPresented)
     }
 
@@ -104,12 +152,39 @@ struct FloatingModal<Content: View>: View {
     /// Combined scale + translate so the popup appears to fly out of the
     /// button position and grow into place.
     private var popupTransition: AnyTransition {
-        if genie {
-            let active   = GenieModifier(progress: 0, focal: offsetDelta)
-            let identity = GenieModifier(progress: 1, focal: offsetDelta)
+        if fromBottom {
+            // Slide up from the bottom edge of the window (and
+            // slide back down on dismiss), with a quick opacity
+            // fade so the sheet doesn't pop in at the boundary.
             return .asymmetric(
-                insertion: .modifier(active: active, identity: identity),
-                removal:   .modifier(active: active, identity: identity)
+                insertion: .move(edge: .bottom).combined(with: .opacity),
+                removal:   .move(edge: .bottom).combined(with: .opacity)
+            )
+        }
+        if paper {
+            let incoming = PaperSettleModifier(progress: 0, focal: offsetDelta)
+            let resting  = PaperSettleModifier(progress: 1, focal: offsetDelta)
+            return .asymmetric(
+                insertion: .modifier(active: incoming, identity: resting),
+                removal:   .modifier(active: incoming, identity: resting)
+            )
+        }
+        if genie {
+            // Entry inverts BOTH the rotation direction and its
+            // easing curve (see GenieEffect); the exit keeps the
+            // original suck so only the "fly out" spins the other
+            // way, with the opposite curve.
+            let inActive   = GenieModifier(progress: 0, focal: offsetDelta,
+                                           invertRotation: true)
+            let inIdentity = GenieModifier(progress: 1, focal: offsetDelta,
+                                           invertRotation: true)
+            let outActive  = GenieModifier(progress: 0, focal: offsetDelta,
+                                           invertRotation: false)
+            let outIdentity = GenieModifier(progress: 1, focal: offsetDelta,
+                                            invertRotation: false)
+            return .asymmetric(
+                insertion: .modifier(active: inActive,  identity: inIdentity),
+                removal:   .modifier(active: outActive, identity: outIdentity)
             )
         }
         let active   = PopupTransform(scale: 0.02, offset: offsetDelta, opacity: 0)
@@ -121,10 +196,80 @@ struct FloatingModal<Content: View>: View {
     }
 
     private func dismiss() {
-        withAnimation(genie ? genieAnim
-                            : .spring(duration: 0.40, bounce: 0.20)) {
+        withAnimation(fromBottom
+                        ? bottomDismissAnim
+                        : (paper ? paperDismissAnim
+                                 : (genie ? genieAnim
+                                          : .spring(duration: 0.40, bounce: 0.20)))) {
             isPresented = false
         }
+    }
+}
+
+// MARK: - Paper-settle transition
+
+/// "Editorial Calm" entrance: the panel is a sheet of paper drawn
+/// out of the trigger button and set down on the desk. It emerges
+/// small from the click point and grows into place while a gentle
+/// 3-D fall tilt and a small hand-placed skew level out, and a
+/// soft ink shadow tightens onto the page as it touches down.
+/// Reversing the same modifier on removal pulls the sheet back
+/// down into the button.
+private struct PaperSettleModifier: ViewModifier, Animatable {
+    /// 0 = incoming (small, at the click point), 1 = resting
+    /// (full size, centred, flat on the desk).
+    var progress: CGFloat
+    /// Pixel delta from window centre → trigger-button centre, so
+    /// the sheet flies in from / out to the exact click origin.
+    let focal: CGSize
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let p = min(1, max(0, progress))
+        let r = 1 - p                      // distance from the desk
+
+        // Quick, soft fade so the sheet is readable almost
+        // immediately and only the motion sells the entrance.
+        let fade = Double(min(1, p * 2.4))
+
+        // Scale: emerges as a small sheet from the button and
+        // grows to full size. Stays large enough (0.30, not a
+        // pinpoint) so it still reads as paper, not a dot.
+        let startScale: CGFloat = 0.30
+        let scale = startScale + (1 - startScale) * p
+
+        // Position: travels from the click origin to the centred
+        // resting place. `focal · r` puts the (scaled) sheet over
+        // the trigger button at the start and at zero when settled.
+        let dx = focal.width  * r
+        let dy = focal.height * r
+
+        // Fall tilt (top edge pitched back toward you) eases out as
+        // it lands; small in-plane skew straightens on touchdown.
+        let pitch = 11 * r                 // degrees, X axis
+        let skew  = -2.2 * r               // degrees, Z axis
+
+        // Shadow: large/soft/offset while airborne, tightening and
+        // settling close as it meets the desk.
+        let shadowRadius = 6 + 26 * r
+        let shadowY      = 5 + 20 * r
+        let shadowOpacity = 0.22 - 0.10 * r
+
+        return content
+            .rotation3DEffect(.degrees(pitch),
+                              axis: (x: 1, y: 0, z: 0),
+                              anchor: .center,
+                              perspective: 0.55)
+            .rotationEffect(.degrees(skew))
+            .scaleEffect(scale)
+            .offset(x: dx, y: dy)
+            .shadow(color: Editorial.ink.opacity(shadowOpacity),
+                    radius: shadowRadius, x: 0, y: shadowY)
+            .opacity(fade)
     }
 }
 
@@ -138,6 +283,10 @@ struct FloatingModal<Content: View>: View {
 private struct GenieModifier: ViewModifier, Animatable {
     var progress: CGFloat          // 1 = full/centred, 0 = collapsed into focal
     let focal: CGSize              // delta from window centre → button centre
+    /// On entry we flip the spin direction AND invert its easing
+    /// curve so the surface unwinds the opposite way as it flies
+    /// out of the button. Constant across a transition pair.
+    var invertRotation: Bool = false
 
     var animatableData: CGFloat {
         get { progress }
@@ -145,17 +294,28 @@ private struct GenieModifier: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        content
-            .modifier(GenieEffect(progress: progress, focal: focal))
-            // Fade only over the last third of the collapse so the
-            // shape is still readable while it funnels in.
-            .opacity(Double(min(1, max(0, progress * 3))))
+        let pc = min(1, max(0, progress))
+        return content
+            .modifier(GenieEffect(progress: progress, focal: focal,
+                                  invertRotation: invertRotation))
+            // Motion blur: scales with how far the surface is from
+            // its resting state, so it smears while flying/funnelling
+            // and resolves to perfectly crisp the instant it settles
+            // (radius = 0 exactly at p = 1). The 1.3 power keeps the
+            // blur subtle through the middle and only heavy near the
+            // button, reading as speed rather than a soft focus.
+            .blur(radius: 11 * pow(1 - pc, 1.3))
+            // Stay almost fully opaque while it funnels — the OS
+            // genie keeps the surface readable and only winks out
+            // in the final ~18% as it disappears into the Dock.
+            .opacity(Double(min(1, max(0, (progress - 0.02) * 5.5))))
     }
 }
 
 private struct GenieEffect: GeometryEffect {
     var progress: CGFloat
     let focal: CGSize
+    var invertRotation: Bool = false
 
     var animatableData: CGFloat {
         get { progress }
@@ -163,27 +323,64 @@ private struct GenieEffect: GeometryEffect {
     }
 
     func effectValue(size: CGSize) -> ProjectionTransform {
-        let p = max(0.0001, min(1, progress))
+        let p  = max(0.0001, min(1, progress))
+        let c  = 1 - p                       // collapse amount (0 full → 1 sucked in)
 
-        // Anisotropic shrink: the neck (width) pinches faster than
-        // the body (height) — the signature genie funnel.
-        let sx = pow(p, 1.9)
-        let sy = pow(p, 0.85)
+        // ── 1. Anisotropic shrink with a vertical STRETCH bump.
+        // The width pinches hard and early (the "neck"); the
+        // height first ELONGATES past 1.0 around the middle of
+        // the collapse — the genie stretches tall and thin as it
+        // gets sucked — then snaps down to nothing. `sin(π·c)`
+        // peaks at the midpoint and is 0 at both ends, so the
+        // resting state (p=1) is untouched.
+        let sx      = pow(p, 2.4)
+        let stretch = 1.0 + 0.42 * sin(.pi * c) * p
+        let sy      = pow(p, 0.55) * stretch
 
-        // Funnel translation toward the button as it collapses.
-        let tx = focal.width  * (1 - p)
-        let ty = focal.height * (1 - p)
+        // ── 2. Curved funnel path toward the focal point.
+        // A blend of linear + quadratic pull so the surface
+        // *arcs* into the button (accelerating at the end)
+        // instead of sliding there in a straight line.
+        let c2 = c * c
+        let tx = focal.width  * (0.30 * c + 0.70 * c2)
+        let ty = focal.height * (0.24 * c + 0.76 * c2)
 
         let cx = size.width  / 2
         let cy = size.height / 2
+        let dir = atan2(focal.height, focal.width)   // toward the trigger
 
         var m = CATransform3DIdentity
-        // Perspective deepens as it's pulled in → the "suck" read.
-        m.m34 = -1.0 / 900.0 * (1 - p)
+        // ── 3. Deep, eased perspective → the trailing edge
+        // keystones into a trapezoid (the funnel taper) and the
+        // whole surface reads as being pulled *through* a hole
+        // rather than uniformly scaled. Ramps in on a 1.4 power
+        // so the wide end stays flat and the spout bends late.
+        m.m34 = -1.0 / 620.0 * pow(c, 1.4)
         m = CATransform3DTranslate(m, cx + tx, cy + ty, 0)
         m = CATransform3DScale(m, sx, sy, 1)
-        // Slight Y-twist while collapsing — the genie curl.
-        m = CATransform3DRotate(m, (1 - p) * 0.45, 0, 1, 0)
+        // The spout curl (rotation about Y) + a slight lean toward
+        // the focal direction (rotation about Z) so the funnel
+        // bends the way the OS genie does — toward the Dock point,
+        // not straight down.
+        //
+        // Exit keeps the original feel: linear Y, ease-in (c²) Z —
+        // the twist stays put then resolves late as it sucks in.
+        // ENTRY inverts the sign (it unwinds the other way) and is
+        // WINDOWED to the first half of the flight: the rotation
+        // is fully resolved by the animation midpoint (p = 0.5)
+        // and stays at zero for the second half — the surface
+        // finishes straightening out while it's still growing into
+        // place. Within that first half it rides an ease-out curve
+        // (the inverted complement of the exit's ease-in) so the
+        // spin decelerates as it resolves instead of snapping.
+        let rotSign: CGFloat = invertRotation ? -1 : 1
+        // Windowed phase: 1 at p=0 → 0 at p≥0.5 (entry only).
+        let rPhase   = max(0, min(1, (0.5 - p) / 0.5))
+        let rEaseOut = rPhase * (2 - rPhase)             // ease-out of rPhase
+        let yDrive: CGFloat  = invertRotation ? rEaseOut : c
+        let zDrive: CGFloat  = invertRotation ? rEaseOut : c2
+        m = CATransform3DRotate(m, rotSign * yDrive * 0.62,            0, 1, 0)
+        m = CATransform3DRotate(m, rotSign * zDrive * 0.30 * sin(dir), 0, 0, 1)
         m = CATransform3DTranslate(m, -cx, -cy, 0)
         return ProjectionTransform(m)
     }

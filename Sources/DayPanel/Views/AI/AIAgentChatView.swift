@@ -90,6 +90,12 @@ struct AIAgentChatView: View {
         // host frame doesn't visually stretch any single
         // element edge-to-edge.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Hide the scroll indicators across the WHOLE Apollo-IA
+        // panel — transcript, "diário do dia" columns, mention
+        // picker. `.scrollIndicators(.hidden)` propagates via
+        // the environment to any nested `ScrollView`, so we set
+        // it once at the root instead of dotting it on each one.
+        .scrollIndicators(.hidden)
         // No panel background, border, or shadow — the items
         // (header, suggestion tiles, composer) float directly
         // over the blurred dashboard backdrop installed at
@@ -1213,7 +1219,10 @@ struct AIAgentChatView: View {
                 handleDroppedProviders($0)
             }
         }
-        .background(Editorial.paper)
+        // Pure white background to clearly delineate the composer
+        // as a text input surface, separating it visually from the
+        // cream paper canvas of the rest of the chat.
+        .background(Editorial.page)
         .animation(.spring(response: 0.32, dampingFraction: 0.85),
                    value: pendingAttachments)
         .animation(.easeOut(duration: 0.16), value: isDropTargeted)

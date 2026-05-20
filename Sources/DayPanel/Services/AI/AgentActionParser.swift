@@ -204,21 +204,84 @@ enum AgentActionParser {
             )
 
         case "CONVERT_EVENT_TO_TASK", "EVENT_TO_TASK":
-            guard let ref = attrs["event_id"] ?? attrs["title"]
-                            ?? attrs["event"],
+            // The source event ref carries the EVENT identity; an
+            // optional `new_title` lets the AI rename the task as
+            // it converts (so `title` is reserved for the source
+            // lookup, NOT a destination override). All the other
+            // attrs mirror CREATE_TASK so a single conversion can
+            // assign, set status, attach files, mention people, etc.
+            guard let ref = attrs["event_id"] ?? attrs["event"]
+                            ?? attrs["title"],
                   !ref.isEmpty
             else { return nil }
-            return .convertEventToTask(eventRef: ref)
+            let delSrc:   String? = attrs["delete_source"]
+                ?? attrs["delete"] ?? attrs["delete_event"]
+            let newTit:   String? = attrs["new_title"] ?? attrs["task_title"]
+            let stat:     String? = attrs["status"]
+            let prio:     String? = attrs["priority"] ?? attrs["priority_label"]
+            let assg:     String? = attrs["assignees"] ?? attrs["assignee"]
+                ?? attrs["mentioned"] ?? attrs["mentions"]
+            let desc:     String? = attrs["description"] ?? attrs["body"]
+                ?? attrs["notes"]
+            let stt:      String? = attrs["start"] ?? attrs["start_date"]
+            let due:      String? = attrs["due"] ?? attrs["due_date"]
+                ?? attrs["deadline"]
+            let tagAttr:  String? = attrs["tags"] ?? attrs["labels"]
+            let lnkAttr:  String? = attrs["links"] ?? attrs["link"]
+                ?? attrs["url"] ?? attrs["urls"]
+            let attAttr:  String? = attrs["attachments"] ?? attrs["files"]
+                ?? attrs["file"] ?? attrs["attachment"]
+            return .convertEventToTask(
+                eventRef:      ref,
+                deleteSource:  delSrc,
+                titleOverride: newTit,
+                status:        stat,
+                priority:      prio,
+                assignees:     assg,
+                description:   desc,
+                start:         stt,
+                due:           due,
+                tags:          tagAttr,
+                links:         lnkAttr,
+                attachments:   attAttr)
 
         case "CONVERT_TASK_TO_EVENT", "TASK_TO_EVENT":
-            guard let ref = attrs["task_id"] ?? attrs["title"]
-                            ?? attrs["task"],
+            guard let ref = attrs["task_id"] ?? attrs["task"]
+                            ?? attrs["title"],
                   !ref.isEmpty
             else { return nil }
+            let delSrc:  String? = attrs["delete_source"]
+                ?? attrs["delete"] ?? attrs["delete_task"]
+            let newTit:  String? = attrs["new_title"] ?? attrs["event_title"]
+            let stt:     String? = attrs["start"] ?? attrs["start_date"]
+            let endA:    String? = attrs["end"] ?? attrs["end_date"]
+            let durA:    String? = attrs["duration"] ?? attrs["minutes"]
+            let loc:     String? = attrs["location"] ?? attrs["where"]
+                ?? attrs["place"]
+            let gst:     String? = attrs["guests"] ?? attrs["attendees"]
+                ?? attrs["invite"] ?? attrs["invitees"]
+            let nts:     String? = attrs["notes"] ?? attrs["description"]
+                ?? attrs["body"]
+            let mtg:     String? = attrs["meeting_url"] ?? attrs["meet"]
+                ?? attrs["zoom"] ?? attrs["video"]
+            let col:     String? = attrs["color"] ?? attrs["colour"]
+            let avail:   String? = attrs["availability"] ?? attrs["busy"]
+            let alm:     String? = attrs["alarm"] ?? attrs["reminder"]
+                ?? attrs["lembrete"]
             return .convertTaskToEvent(
-                taskRef: ref,
-                start: attrs["start"] ?? attrs["start_date"],
-                durationMinutes: attrs["duration"] ?? attrs["minutes"])
+                taskRef:         ref,
+                deleteSource:    delSrc,
+                titleOverride:   newTit,
+                start:           stt,
+                end:             endA,
+                durationMinutes: durA,
+                location:        loc,
+                guests:          gst,
+                notes:           nts,
+                meetingURL:      mtg,
+                color:           col,
+                availability:    avail,
+                alarm:           alm)
 
         // ── Read / fetch markers ───────────────────────────
         // Format mirrors the mutation markers — same parser

@@ -90,17 +90,44 @@ enum AgentAction {
         durationMinutes: String
     )
 
-    /// Transform an event into a ClickUp task (the event is
-    /// removed; its notes/location/guests fold into the task
-    /// description, due = the event's start).
-    case convertEventToTask(eventRef: String)
-
-    /// Transform a ClickUp task into a calendar event (the task
-    /// is removed). `start`/`durationMinutes` are optional — the
-    /// app falls back to the task's own start/due window.
-    case convertTaskToEvent(taskRef: String,
+    /// Transform an event into a ClickUp task. The new task is
+    /// created with the event's data folded in (notes, location,
+    /// guests → description; start → due). Any of the create-
+    /// task fields below override the derived defaults so the
+    /// AI can enrich the conversion (assignees, status, links,
+    /// attachments, etc.). `deleteSource` defaults to "true";
+    /// pass "false"/"no"/"não" to keep BOTH the event and the
+    /// new task.
+    case convertEventToTask(eventRef: String,
+                            deleteSource: String?,
+                            titleOverride: String?,
+                            status: String?,
+                            priority: String?,
+                            assignees: String?,
+                            description: String?,
                             start: String?,
-                            durationMinutes: String?)
+                            due: String?,
+                            tags: String?,
+                            links: String?,
+                            attachments: String?)
+
+    /// Transform a ClickUp task into a calendar event. Mirrors
+    /// `convertEventToTask` — any create-event field can be
+    /// supplied (guests, location, meetingURL, etc.); the rest
+    /// fall back to the task's own start/due window.
+    case convertTaskToEvent(taskRef: String,
+                            deleteSource: String?,
+                            titleOverride: String?,
+                            start: String?,
+                            end: String?,
+                            durationMinutes: String?,
+                            location: String?,
+                            guests: String?,
+                            notes: String?,
+                            meetingURL: String?,
+                            color: String?,
+                            availability: String?,
+                            alarm: String?)
 
     // ── Extended task mutations ────────────────────────────
 

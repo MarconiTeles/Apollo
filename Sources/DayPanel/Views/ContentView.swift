@@ -235,7 +235,7 @@ struct ContentView: View {
                     isPresented: $showNewEvent,
                     origin:      newEventOrigin,
                     windowSize:  windowGeo.size,
-                    genie:       true
+                    fromBottom:  true
                 ) {
                     CreateEventSheet(onClose: { showNewEvent = false })
                         .environmentObject(appState)
@@ -243,7 +243,8 @@ struct ContentView: View {
                 FloatingModal(
                     isPresented: $showNewTask,
                     origin:      newTaskOrigin,
-                    windowSize:  windowGeo.size
+                    windowSize:  windowGeo.size,
+                    fromBottom:  true
                 ) {
                     CreateTaskSheet(onClose: { showNewTask = false })
                         .environmentObject(appState)
@@ -251,11 +252,40 @@ struct ContentView: View {
                 FloatingModal(
                     isPresented: $showSettings,
                     origin:      settingsOrigin,
-                    windowSize:  windowGeo.size
+                    windowSize:  windowGeo.size,
+                    fromBottom:  true
                 ) {
                     SettingsView(onClose: { showSettings = false })
                         .environmentObject(appState)
                 }
+                // Global "transform event into task" overlay. Driven
+                // by `appState.pendingConversion` so any surface
+                // (event detail header, timeline right-click) can
+                // open the same modal. Wrapped in `FloatingModal`
+                // (not the system `.sheet`) so it picks up Apollo's
+                // editorial chrome — no system rounded sheet corners
+                // — and rides the bottom-rise animation that the
+                // other create sheets use.
+                FloatingModal(
+                    isPresented: Binding(
+                        get: { appState.pendingConversion != nil },
+                        set: { if !$0 { appState.pendingConversion = nil } }
+                    ),
+                    windowSize: windowGeo.size,
+                    fromBottom: true
+                ) {
+                    if let ev = appState.pendingConversion {
+                        ConvertEventToTaskSheet(
+                            event:   ev,
+                            onClose: { appState.pendingConversion = nil },
+                            onDone:  { appState.pendingConversion = nil }
+                        )
+                        .environmentObject(appState)
+                    }
+                }
+                // Sits ABOVE the EventDetail (which uses zIndex 1000)
+                // so the convert sheet always wins focus.
+                .zIndex(2000)
                 // ClickUp list picker — same sheet Settings/Onboarding
                 // use, surfaced from the toolbar pill so the user
                 // can switch lists in one click without opening

@@ -113,30 +113,92 @@ final class AgentActionExecutor {
                 appState: appState
             )
 
-        case let .convertEventToTask(ref):
+        case let .convertEventToTask(ref, delSrc, newTitle, status, priority,
+                                     assignees, description, start, due, tags,
+                                     links, attachments):
             guard let event = resolveEvent(ref: ref, in: appState) else {
                 return .failed(reason: "Evento '\(ref)' não encontrado")
             }
-            guard let task = await appState
-                .convertEventToTask(event) else {
-                return .failed(
-                    reason: "Não foi possível transformar o evento em tarefa")
+            // Merge event-derived defaults with user overrides.
+            let titleM       = (newTitle?.isEmpty == false) ? newTitle : event.title
+            let descM        = mergedConvertDescription(userDesc: description,
+                                                        event: event)
+            let dueM         = due ?? Self.isoDateTimeFormatter
+                .string(from: event.startDate)
+            let startM       = start
+                ?? (event.isAllDay ? nil
+                    : Self.isoDateTimeFormatter.string(from: event.startDate))
+            // Funnel through the canonical create-task pipeline so
+            // mentions / attachments / links land the same way they
+            // do for plain CREATE_TASK markers.
+            let result = await runCreateTask(
+                title:       titleM ?? event.title,
+                priority:    priority,
+                due:         dueM,
+                status:      status,
+                assignees:   assignees,
+                description: descM,
+                start:       startM,
+                tags:        tags,
+                parent:      nil,
+                links:       links,
+                attachments: attachments,
+                appState:    appState
+            )
+            // Delete source unless the user opted to keep both.
+            if case .createdTask = result,
+               !isFalseString(delSrc) {
+                await appState.deleteEvent(event)
             }
-            return .createdTask(task)
+            return result
 
-        case let .convertTaskToEvent(ref, start, dur):
+        case let .convertTaskToEvent(ref, delSrc, newTitle, start, end, dur,
+                                     location, guests, notes, meetingURL,
+                                     color, availability, alarm):
             guard let task = resolveTask(ref: ref, in: appState) else {
                 return .failed(reason: "Tarefa '\(ref)' não encontrada")
             }
-            let startDate = start.flatMap { Self.parseDateTime($0) }
-            let minutes   = dur.flatMap { Self.parseDurationMinutes($0) }
-            guard let event = await appState.convertTaskToEvent(
-                task, start: startDate,
-                durationMinutes: minutes) else {
-                return .failed(
-                    reason: "Não foi possível transformar a tarefa em evento")
+            // Derive defaults from the task's start→due window
+            // (matching the legacy `AppState.convertTaskToEvent`
+            // logic) and let the user-supplied attrs override.
+            let derivedStart = task.startDate
+                ?? task.dueDate ?? Date().addingTimeInterval(3600)
+            let derivedMinutes: Int = {
+                if let s = task.startDate, let d = task.dueDate, d > s {
+                    return min(Int(d.timeIntervalSince(s) / 60), 8 * 60)
+                }
+                return 60
+            }()
+            let derivedEnd = derivedStart
+                .addingTimeInterval(TimeInterval(derivedMinutes * 60))
+            let startM = start ?? Self.isoDateTimeFormatter
+                .string(from: derivedStart)
+            let endM   = end ?? Self.isoDateTimeFormatter
+                .string(from: derivedEnd)
+            let titleM = (newTitle?.isEmpty == false) ? newTitle : task.title
+            let notesM = mergedConvertNotes(userNotes: notes, task: task)
+            // Route through the canonical create-event pipeline so
+            // guests / location / meeting URL etc. all land the
+            // same way they do for plain CREATE_EVENT markers.
+            let result = await runCreateEvent(
+                title:           titleM ?? task.title,
+                start:           startM,
+                end:             endM,
+                durationMinutes: dur,
+                location:        location,
+                guests:          guests,
+                notes:           notesM,
+                meetingURL:      meetingURL,
+                color:           color,
+                availability:    availability,
+                alarm:           alarm,
+                appState:        appState
+            )
+            if case .createdEvent = result,
+               !isFalseString(delSrc) {
+                await appState.deleteTask(task)
             }
-            return .createdEvent(event)
+            return result
 
         // ── Read / fetch routing ───────────────────────────
 
@@ -1675,6 +1737,83 @@ final class AgentActionExecutor {
     /// Maps the model's priority vocabulary to ClickUp's
     /// integer codes. Tolerant of pt-BR / en-US variants
     /// because the prompt accepts both.
+    /// Shared ISO-8601 formatter (date+time, UTC offset) used to
+    /// stringify Dates from convert-action sources so the strings
+    /// round-trip back through `parseDateTime` cleanly when we
+    /// hand them to `runCreateTask` / `runCreateEvent`. Distinct
+    /// from the existing date-only `isoFormatter` further down
+    /// (used by `parseDueDate`) — this one preserves the time.
+    private static let isoDateTimeFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    // MARK: - Convert helpers
+
+    /// True when the supplied string looks like the user opting
+    /// OUT of source-deletion ("false"/"no"/"não"/"keep"/etc).
+    private func isFalseString(_ s: String?) -> Bool {
+        guard let raw = s?.trimmingCharacters(in: .whitespaces).lowercased(),
+              !raw.isEmpty else { return false }
+        return ["false", "no", "não", "nao", "0", "keep",
+                "manter", "ambos", "both"].contains(raw)
+    }
+
+    /// Combines an optional user-supplied description with the
+    /// canonical event-derived block (notes / Local / Link /
+    /// Participantes + the "Convertido de…" footer). The user
+    /// text goes FIRST so it's the prominent body; the derived
+    /// context follows.
+    private func mergedConvertDescription(
+        userDesc: String?, event: CalendarEvent
+    ) -> String {
+        var lines: [String] = []
+        if let u = userDesc?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !u.isEmpty {
+            lines.append(u)
+            lines.append("")     // blank line between user + derived
+        }
+        if let n = event.notes?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !n.isEmpty { lines.append(n) }
+        if let loc = event.location?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !loc.isEmpty { lines.append("Local: \(loc)") }
+        if let url = event.meetingURL {
+            lines.append("Link: \(url.absoluteString)")
+        }
+        let guests = event.attendees
+            .map { $0.name.isEmpty ? ($0.email ?? "") : $0.name }
+            .filter { !$0.isEmpty }
+        if !guests.isEmpty {
+            lines.append("Participantes: \(guests.joined(separator: ", "))")
+        }
+        lines.append("— Convertido de um evento do calendário.")
+        return lines.joined(separator: "\n")
+    }
+
+    /// Mirrors `mergedConvertDescription` for the task→event
+    /// direction: user notes first, then the task's body + the
+    /// "Convertido da tarefa…" footer.
+    private func mergedConvertNotes(
+        userNotes: String?, task: CUTask
+    ) -> String {
+        var parts: [String] = []
+        if let u = userNotes?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !u.isEmpty {
+            parts.append(u)
+            parts.append("")
+        }
+        if let d = task.description?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !d.isEmpty { parts.append(d) }
+        parts.append("— Convertido da tarefa do ClickUp · \(task.priorityLabel).")
+        return parts.joined(separator: "\n")
+    }
+
     private static func priorityCode(from raw: String) -> Int? {
         switch raw.lowercased() {
         case "urgent", "urgente":         return 1

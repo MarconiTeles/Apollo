@@ -459,7 +459,24 @@ private struct AgendaDaySection: View, Equatable {
                     // need a custom `Layout` protocol impl,
                     // not an inline GR.
                     ForEach(events) { event in
-                        AgendaEventCard(event: event, onTap: handleTap)
+                        AgendaEventCard(
+                            event:       event,
+                            onTap:       handleTap,
+                            onConvert:   { appState.pendingConversion = $0 },
+                            onCopyLink:  { ev in
+                                let url = ev.meetingURL?.absoluteString
+                                    ?? ev.location ?? ""
+                                guard !url.isEmpty else { return }
+                                let pb = NSPasteboard.general
+                                pb.clearContents()
+                                pb.setString(url, forType: .string)
+                                appState.notify(.success,
+                                                title: "Link copiado",
+                                                message: url)
+                            },
+                            onDelete:    { ev in
+                                Task { await appState.deleteEvent(ev) }
+                            })
                             .equatable()
                             // Smooth fade-in when an overlay
                             // calendar adds a new event to the
@@ -578,6 +595,13 @@ struct AgendaEventCard: View, Equatable {
     /// now reads ZERO state from AppState; the parent
     /// `AgendaDaySection` wires the click action.
     let onTap: (CalendarEvent) -> Void
+    /// Right-click context-menu actions. Closures keep the card
+    /// free of `@EnvironmentObject AppState`, preserving the
+    /// scroll-time Equatable short-circuit; the parent
+    /// `AgendaDaySection` wires them to AppState.
+    var onConvert: ((CalendarEvent) -> Void)? = nil
+    var onCopyLink: ((CalendarEvent) -> Void)? = nil
+    var onDelete: ((CalendarEvent) -> Void)? = nil
 
     /// Editorial hover wash (not compared by `==` — @State is
     /// intentionally excluded from the Equatable short-circuit).
@@ -705,15 +729,36 @@ struct AgendaEventCard: View, Equatable {
             // tuned independently — the prototype's uniform 16
             // left too much air between the time and the title.
             HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Text("\(timeStart) → \(timeEnd)")
-                    .font(Editorial.sans(12, .medium))
-                    .monospacedDigit()
-                    .tracking(0.3)
-                    .foregroundStyle(isDeclined ? Editorial.inkMute
-                                                : Editorial.inkSoft)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(width: 88, alignment: .leading)
+                // Times are ALWAYS stacked one above the other,
+                // matching the prototype's `PEventLine`. The old
+                // single `Text("HH:MM → HH:MM")` relied on the
+                // 88pt column being narrow enough to force a
+                // natural wrap — but 13 chars at sans 12 fit on a
+                // single line, so the wrap silently never fired.
+                // An explicit VStack guarantees the layout
+                // regardless of column width.
+                Group {
+                    if event.isAllDay {
+                        Text("Dia inteiro")
+                    } else {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("\(timeStart) →")
+                            Text(timeEnd)
+                        }
+                    }
+                }
+                .font(Editorial.sans(12, .medium))
+                .monospacedDigit()
+                .tracking(0.3)
+                .foregroundStyle(isDeclined ? Editorial.inkMute
+                                            : Editorial.inkSoft)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                // Trimmed 10pt — was 88, now 78. Pulls the event
+                // title closer to the time column so the meta
+                // ("09:30 →") and the title read as a single
+                // unit instead of being separated by a wide gutter.
+                .frame(width: 78, alignment: .leading)
 
                 titleParagraph
                     .multilineTextAlignment(.leading)
@@ -756,6 +801,75 @@ struct AgendaEventCard: View, Equatable {
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { hover = hovering }
         }
+        // Right-click context menu rendered via a native NSMenu
+        // overlay rather than SwiftUI `.contextMenu`. The host
+        // List would otherwise show its row-selection highlight
+        // (blue rectangle around the WHOLE day section) on
+        // right-click; the AppKit overlay intercepts the right-
+        // click before the List sees it, so no row selection
+        // is triggered. Left-clicks pass through untouched (the
+        // overlay's `hitTest` returns nil unless a right button
+        // is currently pressed).
+        .background(
+            EventRightClickCatcher { buildContextMenu() }
+                .allowsHitTesting(true)
+        )
+    }
+
+    /// Builds the native NSMenu for this event. Constructed once
+    /// per right-click — items pull from the closures supplied by
+    /// the parent so the menu mirrors the data on every open.
+    private func buildContextMenu() -> NSMenu {
+        let m = NSMenu()
+        m.autoenablesItems = false
+
+        let openItem = NSMenuItem(title: "Abrir evento",
+                                  action: nil, keyEquivalent: "")
+        openItem.image = NSImage(systemSymbolName: "doc.text.magnifyingglass",
+                                 accessibilityDescription: nil)
+        openItem.target = MenuActionTarget.shared
+        openItem.action = #selector(MenuActionTarget.perform(_:))
+        openItem.representedObject = { [event] in onTap(event) } as MenuAction
+        m.addItem(openItem)
+
+        let hasLink = event.meetingURL != nil
+            || !(event.location ?? "").isEmpty
+        if let onCopyLink, hasLink {
+            let copy = NSMenuItem(title: "Copiar link",
+                                  action: nil, keyEquivalent: "")
+            copy.image = NSImage(systemSymbolName: "link",
+                                 accessibilityDescription: nil)
+            copy.target = MenuActionTarget.shared
+            copy.action = #selector(MenuActionTarget.perform(_:))
+            copy.representedObject = { [event] in onCopyLink(event) } as MenuAction
+            m.addItem(copy)
+        }
+
+        m.addItem(.separator())
+
+        if let onConvert {
+            let conv = NSMenuItem(title: "Transformar em tarefa",
+                                  action: nil, keyEquivalent: "")
+            conv.image = NSImage(systemSymbolName: "arrow.2.squarepath",
+                                 accessibilityDescription: nil)
+            conv.target = MenuActionTarget.shared
+            conv.action = #selector(MenuActionTarget.perform(_:))
+            conv.representedObject = { [event] in onConvert(event) } as MenuAction
+            m.addItem(conv)
+        }
+
+        if let onDelete {
+            m.addItem(.separator())
+            let del = NSMenuItem(title: "Excluir evento",
+                                 action: nil, keyEquivalent: "")
+            del.image = NSImage(systemSymbolName: "trash",
+                                accessibilityDescription: nil)
+            del.target = MenuActionTarget.shared
+            del.action = #selector(MenuActionTarget.perform(_:))
+            del.representedObject = { [event] in onDelete(event) } as MenuAction
+            m.addItem(del)
+        }
+        return m
     }
 
     /// Time pieces (the column wraps the two on its own).
@@ -861,3 +975,69 @@ private struct CompactLabelStyle: LabelStyle {
         }
     }
 }
+
+// MARK: - Native right-click menu host
+//
+// SwiftUI's `.contextMenu` on a `List` row triggers the
+// underlying NSTableView's row-selection highlight (a blue
+// rectangle around the entire row) before the menu opens.
+// For the timeline — where each List row contains a whole day
+// section with multiple events — that meant right-clicking a
+// single event lit up the WHOLE day. This catcher pops up the
+// menu via AppKit before the List sees the event, so no row
+// selection ever fires. `hitTest` is left-click-transparent
+// (returns `nil` unless the secondary mouse button is currently
+// pressed), so the SwiftUI Button below still receives normal
+// taps untouched.
+
+/// A closure stored in an NSMenuItem's `representedObject`.
+/// Retained boxed by reference inside the target's `perform`.
+typealias MenuAction = () -> Void
+
+/// Single shared @objc target used as the action receiver for
+/// every dynamically-built NSMenuItem. Reads the item's
+/// `representedObject` (the closure) and invokes it.
+final class MenuActionTarget: NSObject {
+    static let shared = MenuActionTarget()
+    @objc func perform(_ sender: NSMenuItem) {
+        (sender.representedObject as? MenuAction)?()
+    }
+}
+
+struct EventRightClickCatcher: NSViewRepresentable {
+    let menuBuilder: () -> NSMenu
+
+    func makeNSView(context: Context) -> CatcherView {
+        let v = CatcherView()
+        v.menuBuilder = menuBuilder
+        return v
+    }
+    func updateNSView(_ nsView: CatcherView, context: Context) {
+        nsView.menuBuilder = menuBuilder
+    }
+
+    final class CatcherView: NSView {
+        var menuBuilder: () -> NSMenu = { NSMenu() }
+
+        /// Be click-through for LEFT mouse events (so the
+        /// SwiftUI Button underneath receives taps normally),
+        /// but opaque for right-clicks so they hit this view
+        /// and `rightMouseDown(with:)` fires instead of
+        /// bubbling up to the host List. We can read the
+        /// currently-pressed buttons from `NSEvent`; bit 1
+        /// (value 2) is the secondary mouse button.
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            if NSEvent.pressedMouseButtons & 2 == 2 {
+                return self
+            }
+            return nil
+        }
+
+        override func rightMouseDown(with event: NSEvent) {
+            let menu = menuBuilder()
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        }
+    }
+}
+
+

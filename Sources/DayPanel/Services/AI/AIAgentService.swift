@@ -2104,16 +2104,24 @@ final class AIAgentService: ObservableObject {
           - Use quando o usuário disser coisas como "agenda 2h pra trabalhar no pitch amanhã", "bloqueia tempo pro X"
 
         • Transformar evento em tarefa:
-          [[CONVERT_EVENT_TO_TASK title="Título do evento"]]
-          - Cria uma tarefa no ClickUp a partir do evento (notas/local/convidados viram a descrição, vencimento = início do evento) e REMOVE o evento do calendário
-          - Use para "transforma esse evento em tarefa", "vira a reunião X numa task"
+          [[CONVERT_EVENT_TO_TASK title="Título do evento" status="Doing" assignees="@joão" priority="alta" description="texto extra" tags="ux,prio" links="https://figma.com/..." attachments="/Users/m/file.pdf" delete_source="false"]]
+          - Cria uma tarefa no ClickUp a partir do evento. Notas/local/convidados do evento sempre são incorporados à descrição; QUALQUER campo de CREATE_TASK pode ser usado AQUI também: `status`, `assignees` (com @-menções), `priority`, `description` (texto extra que aparece ANTES do bloco derivado do evento), `tags`, `start`, `due`, `links`, `attachments` (mesmo fluxo de CREATE_TASK — anexos abrem o seletor de arquivo nativo se o path não puder ser lido direto), `new_title` (renomeia a tarefa)
+          - `delete_source` controla se o evento original será removido: padrão é remover; passe `"false"`/`"não"` pra manter ambos
+          - Use para "transforma esse evento em tarefa", "vira a reunião X numa task com o Marco como responsável"
 
         • Transformar tarefa em evento:
-          [[CONVERT_TASK_TO_EVENT title="Título da tarefa" start="amanhã 14:00" duration="1h"]]
-          - Cria um evento no calendário a partir da tarefa e REMOVE a tarefa do ClickUp
-          - `start` e `duration` são opcionais — sem eles o app usa a janela de início/vencimento da própria tarefa (ou a próxima hora cheia)
-          - Use para "transforma essa tarefa em evento", "joga a task X na agenda amanhã 14h"
-          - Ambas as conversões removem o item de origem — só emita se o usuário pediu para TRANSFORMAR/converter
+          [[CONVERT_TASK_TO_EVENT title="Título da tarefa" start="amanhã 14:00" duration="1h" location="Sala 3" guests="ana@x.com,bruno@y.com" meeting_url="https://meet..." notes="agenda da reunião" color="banana" availability="livre" alarm="10min" delete_source="false"]]
+          - Cria um evento no calendário a partir da tarefa. QUALQUER campo de CREATE_EVENT pode ser usado: `start`, `end`/`duration`, `location`, `guests`, `notes` (texto extra ANTES do corpo da tarefa), `meeting_url`, `color`, `availability` (livre/ocupado), `alarm`, `new_title`
+          - Se `start`/`duration` não forem dados, o app usa a janela de início/vencimento da própria tarefa (ou a próxima hora cheia, 60 min)
+          - `delete_source` controla se a tarefa original será removida: padrão é remover; passe `"false"`/`"não"` pra manter ambos
+
+        ## ESCLARECIMENTO ANTES DE CONVERTER
+
+        Conversões removem o item de origem por padrão e geram um novo objeto com responsável/status/horário implícitos. Antes de emitir um marcador `CONVERT_*`, GARANTA que o usuário forneceu — explicitamente ou implicitamente — os seguintes essenciais:
+        - **Evento → Tarefa**: quem é o RESPONSÁVEL e em qual STATUS a tarefa vai entrar. Se faltar, FAÇA UMA PERGUNTA (ex.: "Quem fica responsável e em qual status entra?") em vez de chutar.
+        - **Tarefa → Evento**: QUANDO o evento começa (se a tarefa não tiver start/due usáveis) e se haverá CONVIDADOS. Se faltar START, pergunte: "Que dia e horário?".
+        - Em qualquer direção, se o usuário pedir explicitamente pra anexar arquivo, mencionar pessoas, etc., aproveite a conversão pra incluir tudo no MESMO marcador (não precisa de uma segunda interação).
+        - Se o usuário disser "transforma em tarefa MAS NÃO APAGA o evento" (ou variações), passe `delete_source="false"` no marcador.
 
         ───────────────────────────────────────────────────────
         EXEMPLOS DE CROSS-REFERENCE
