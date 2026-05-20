@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.6.13</title>
-      <pubDate>Mon, 18 May 2026 17:55:32 +0000</pubDate>
-      <sparkle:version>55</sparkle:version>
-      <sparkle:shortVersionString>1.6.13</sparkle:shortVersionString>
+      <title>Apollo 1.6.14</title>
+      <pubDate>Wed, 20 May 2026 14:07:06 +0000</pubDate>
+      <sparkle:version>56</sparkle:version>
+      <sparkle:shortVersionString>1.6.14</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Apollo agora fica sempre no tema claro "Editorial Calm" — o modo escuro do macOS não altera mais nada na interface. Correção: a faixa inferior da lista de eventos não escurece mais (resíduo preto) quando o sistema está em modo escuro.]]></description>
+      <description><![CDATA[Cor de categoria de volta nas tarefas, subtarefas e no command palette (3% do tom do status). Lista mais densa: linhas 10% menores e gap maior entre elas; sem espaços vazios entre tarefa e subtarefas. Horários dos eventos sempre em duas linhas (HH:MM / HH:MM). Menu de botão-direito nos eventos do calendário (abrir, copiar link, transformar em tarefa, excluir). Janela "Transformar em tarefa" repaginada: status, múltiplos responsáveis com busca, toggle pra manter ou apagar o evento original. Apollo IA: campo de texto em branco puro, telas de Nova Tarefa e Configurações sobem do rodapé como a de Novo Evento, barras de rolagem escondidas. A IA agora consegue converter eventos ↔ tarefas com TODOS os campos de criação (anexos, menções, convidados, locais, links) e pede esclarecimento quando faltar status/responsável.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.6.13/Apollo-1.6.13.zip"
-        sparkle:edSignature="rWWb0/rZWzddyWq/v0qAm5bf0zNgqHyrKXOJt2CLrBq+0jOeFZR1/q+3pgSO0Bq8K8jmF3K5aXaaxGScOYgaAA=="
-        length="38471828"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.6.14/Apollo-1.6.14.zip"
+        sparkle:edSignature="wuZpkzMfse54g9qsSPfcmMfQbuEpCOZWenuQ8WQOdNg9xEloniw0E3hKfcj8hx5Yfpwslb5vGxUXG/fILSwXCA=="
+        length="38671030"
         type="application/octet-stream" />
     </item>
   </channel>
