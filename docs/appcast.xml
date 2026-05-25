@@ -5,18 +5,18 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.7.2</title>
-      <pubDate>Mon, 25 May 2026 17:15:59 +0000</pubDate>
-      <sparkle:version>59</sparkle:version>
-      <sparkle:shortVersionString>1.7.2</sparkle:shortVersionString>
+      <title>Apollo 1.7.3</title>
+      <pubDate>Mon, 25 May 2026 18:08:51 +0000</pubDate>
+      <sparkle:version>60</sparkle:version>
+      <sparkle:shortVersionString>1.7.3</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Notificações de menção.
+      <description><![CDATA[Telas de atualização redesenhadas.
 
-• Agora você é notificado quando alguém te menciona em um comentário — incluindo as menções que chegam em reviews (respostas/threads) e em qualquer tarefa visível, não só nas que você criou ou é responsável.]]></description>
+• As telas de 'nova versão', download e instalação agora seguem o design do Apollo (Editorial Calm), centralizadas sobre a janela do app, no lugar das janelas padrão do sistema.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.2/Apollo-1.7.2.zip"
-        sparkle:edSignature="nKdHsycmtfQ1gGwRTQ0ZUjMBOqS4IoefYz8N+quCY4vNzMY+JkP+CCOABLfuxcQWhvKVRSBe3F7kV7cXp7OJAA=="
-        length="39530888"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.3/Apollo-1.7.3.zip"
+        sparkle:edSignature="7GTIx3BHKoBwh8pYEEpVlZB/NLKZjB8gUAQvmf4onHAbJ2j4cupNd6nI6w2YCD11wFE9dzFzoANuwBTSpb6lBw=="
+        length="39664877"
         type="application/octet-stream" />
     </item>
   </channel>
