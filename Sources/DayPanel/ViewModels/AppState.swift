@@ -3284,6 +3284,10 @@ final class AppState: ObservableObject {
     /// refresh on its own). `reviewPostTaskId` scopes it to the right task.
     @Published var reviewPostTick = 0
     var reviewPostTaskId: String?
+    /// When a review is posted as a REPLY, this is the parent comment id so the
+    /// comments section can auto-expand that thread (otherwise the analysis sits
+    /// collapsed behind "Responder · N"). nil when posted as a top-level comment.
+    var reviewPostParentId: String?
 
     /// Legacy hidden marker prefixing the review-JSON URL (older comments).
     /// Still parsed for back-compat; new comments use the visible link below.
@@ -3350,6 +3354,7 @@ final class AppState: ObservableObject {
             }
         }
 
+        let postedAsReply = !(target?.isEmpty ?? true)
         do {
             if let target, !target.isEmpty {
                 _ = try await cuSvc.addCommentReply(commentId: target, text: full, assignee: assignee)
@@ -3360,9 +3365,12 @@ final class AppState: ObservableObject {
         } catch {
             Log.error("postReviewComment: \(error)")
         }
-        // Auto-reload the open comments section — no manual refresh.
+        // Auto-reload the open comments section — no manual refresh. When posted
+        // as a reply, also hand over the parent id so the section auto-expands
+        // that thread (otherwise the analysis stays hidden behind "Responder").
         await MainActor.run {
             reviewPostTaskId = taskId
+            reviewPostParentId = postedAsReply ? target : nil
             reviewPostTick &+= 1
         }
     }

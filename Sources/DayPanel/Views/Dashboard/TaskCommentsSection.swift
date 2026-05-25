@@ -338,8 +338,15 @@ struct TaskCommentsSection: View, Equatable {
         // Auto-reload when a review was just posted to THIS task (no manual
         // refresh) — so the review comment + its "Ver review" appear at once.
         .onChange(of: appState.reviewPostTick) { _, _ in
-            if appState.reviewPostTaskId == task.id {
-                Task { await refresh() }
+            guard appState.reviewPostTaskId == task.id else { return }
+            let parent = appState.reviewPostParentId
+            Task {
+                // Expand the parent thread BEFORE refreshing so refresh() loads
+                // its replies — otherwise the review analysis sits collapsed.
+                if let parent {
+                    await MainActor.run { _ = expandedReplies.insert(parent) }
+                }
+                await refresh()
             }
         }
     }
@@ -1086,6 +1093,13 @@ struct TaskCommentsSection: View, Equatable {
             self.comments = cs.sorted { $0.date < $1.date }
             self.events   = es
             self.loading  = false
+        }
+        // Reply threads are shown EXPANDED by default — replies should be
+        // visible, not hidden behind "Responder · N" (the toggle can still
+        // collapse them). This also surfaces review analyses on open.
+        let parentsWithReplies = cs.filter { $0.replyCount > 0 }.map(\.id)
+        if !parentsWithReplies.isEmpty {
+            await MainActor.run { expandedReplies.formUnion(parentsWithReplies) }
         }
         // Re-fetch any expanded threads so reaction/reply counts stay live.
         for parentId in expandedReplies {
