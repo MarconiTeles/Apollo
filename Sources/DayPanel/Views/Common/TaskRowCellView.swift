@@ -1986,15 +1986,18 @@ final class StatusPillView: NSView {
 
     func configure(label text: String, hex: String) {
         self.hex = hex
-        self.label.stringValue = text
         let color = NSColor(Color(hex: hex))
-        // SwiftUI: .foregroundStyle(color)
-        // Editorial: the DOT carries the status colour; the
-        // word stays ink-soft; the chevron is faint. No fill,
-        // no border on the pill itself.
+        // Editorial all-caps: the word is UPPERCASE, tinted with the status's
+        // own colour (matches the dot), with caps tracking.
+        self.label.attributedStringValue = NSAttributedString(
+            string: text.uppercased(),
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 10.5, weight: .semibold),
+                .foregroundColor: color,
+                .kern: 0.6,
+            ])
         self.dotView.layer?.backgroundColor = color.cgColor
         self.dotView.isHidden = false
-        self.label.textColor              = NSColor(Editorial.inkSoft)
         self.chevronIcon.contentTintColor = NSColor(Editorial.inkFaint)
         self.layer?.borderWidth     = 0
         self.layer?.backgroundColor = NSColor.clear.cgColor
