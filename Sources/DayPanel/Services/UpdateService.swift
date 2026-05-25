@@ -16,12 +16,12 @@ import Sparkle
 /// - exposes thin helpers (`presentUpdateUI()`, `dismissBanner()`,
 ///   `checkSilently()`) for buttons in the UI.
 ///
-/// The standard Sparkle modal continues to work for the explicit
-/// "Verificar Atualizações…" menu item — we do NOT swap in a custom
-/// `SPUUserDriver`. The banner is additive: it stays visible after
-/// the user clicks "Remind Me Later" on the Sparkle dialog and is
-/// dismissed only by installing the update, skipping it, or clicking
-/// the X.
+/// The actual update UI (found / downloading / installing) is rendered
+/// by `ApolloUpdateDriver`, a custom `SPUUserDriver` in Apollo's design
+/// language — we no longer use Sparkle's stock windows. This service is
+/// the ADDITIVE layer: the persistent banner + system / in-app
+/// notifications. The banner stays visible after the user clicks
+/// "Depois" and is dismissed only by installing, skipping, or the X.
 ///
 /// Not annotated `@MainActor` so the AppDelegate's `lazy var` can
 /// build it in a synchronous nonisolated context. The `@Published`
@@ -44,10 +44,10 @@ final class UpdateService: NSObject, ObservableObject {
 
     // MARK: - Wiring
 
-    /// Held weakly because the controller owns *us* (we're its
-    /// `updaterDelegate`) — making this strong would cause a
-    /// retain cycle. Set immediately after init in AppDelegate.
-    weak var updaterController: SPUStandardUpdaterController?
+    /// Held weakly because the updater retains *us* (we're its
+    /// `delegate`) — making this strong would cause a retain cycle.
+    /// Set immediately after init in AppDelegate.
+    weak var updater: SPUUpdater?
 
     /// Used to push an entry into the in-app notification log.
     /// Weak — AppState owns the rest of the dependency graph
@@ -72,7 +72,7 @@ final class UpdateService: NSObject, ObservableObject {
     /// even when the scheduled timer hasn't fired yet.
     @MainActor
     func checkSilently() {
-        updaterController?.updater.checkForUpdatesInBackground()
+        updater?.checkForUpdatesInBackground()
     }
 
     /// Open Sparkle's standard "found update / install" dialog,
@@ -81,7 +81,7 @@ final class UpdateService: NSObject, ObservableObject {
     /// before committing.
     @MainActor
     func presentUpdateUI() {
-        updaterController?.checkForUpdates(nil)
+        updater?.checkForUpdates()
     }
 
     /// Manual dismiss from the banner X. Hides the banner for

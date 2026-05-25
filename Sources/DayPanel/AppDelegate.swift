@@ -34,23 +34,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return s
     }()
 
-    private lazy var updaterController: SPUStandardUpdaterController = {
-        let controller = SPUStandardUpdaterController(
-            startingUpdater: true,
-            updaterDelegate: updateService,
-            // Same service also implements
-            // `SPUStandardUserDriverDelegate` — used to suppress
-            // the scheduled-check banner for updates tagged
-            // `<sparkle:channel>silent</sparkle:channel>` in the
-            // appcast. Manual checks ignore that suppression and
-            // show the install modal as usual.
-            userDriverDelegate: updateService
+    /// Our Editorial Calm replacement for Sparkle's stock update
+    /// windows. Sparkle drives it through the `SPUUserDriver` protocol;
+    /// it renders the SwiftUI `UpdaterCardView`. The silent-channel
+    /// suppression that used to live in `SPUStandardUserDriverDelegate`
+    /// now lives inside this driver's `showUpdateFound`.
+    private lazy var updateDriver = MainActor.assumeIsolated { ApolloUpdateDriver() }
+
+    /// Raw `SPUUpdater` (instead of `SPUStandardUpdaterController`) so we
+    /// can plug in our custom user driver. Started manually on launch so
+    /// the scheduled-check timer fires (interval via Info.plist
+    /// `SUScheduledCheckInterval`).
+    private lazy var updater: SPUUpdater = {
+        let u = SPUUpdater(
+            hostBundle: Bundle.main,
+            applicationBundle: Bundle.main,
+            userDriver: updateDriver,
+            delegate: updateService
         )
-        // The service exposes thin wrappers around `checkForUpdates`
-        // / `checkForUpdatesInBackground`; hand it back the
-        // controller so its banner buttons can route through Sparkle.
-        updateService.updaterController = controller
-        return controller
+        do {
+            try u.start()
+        } catch {
+            NSLog("[Apollo] Sparkle updater failed to start: %@",
+                  error.localizedDescription)
+        }
+        // The service exposes thin wrappers around `checkForUpdates` /
+        // `checkForUpdatesInBackground`; hand it the updater so the
+        // banner buttons can route through Sparkle.
+        updateService.updater = u
+        return u
     }()
 
     /// Spotlight-style ⌘K palette. Owns its own `NSPanel`
@@ -63,6 +75,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleCommandPalette(_ sender: Any?) {
         commandPaletteController.toggle()
+    }
+
+    /// "Verificar Atualizações…" menu action. Routes a user-initiated
+    /// check through the raw updater (which drives our custom UI).
+    @objc private func checkForUpdatesMenu(_ sender: Any?) {
+        updater.checkForUpdates()
+    }
+
+    /// Grey out the update menu item while a check can't be started
+    /// (e.g. one is already in flight). Only consulted for items whose
+    /// target is this AppDelegate.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(checkForUpdatesMenu(_:)) {
+            return updater.canCheckForUpdates
+        }
+        return true
     }
 
     /// `Bundle.main.infoDictionary` lookup used by the About
@@ -371,20 +399,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         aboutItem.target = self
         appMenu.addItem(aboutItem)
 
-        // ── Sparkle "Check for Updates…". `SPUStandardUpdaterController`
-        // exposes `checkForUpdates(_:)` and validates the menu item via
-        // `canCheckForUpdates`, so the entry greys out when an update
-        // check is already in flight. The target is the controller (NOT
-        // self) — Sparkle's validator only matches if the action's
-        // target is the updater controller itself.
+        // ── Sparkle "Check for Updates…". With a raw `SPUUpdater` (so we
+        // can use our custom user driver) there's no built-in menu
+        // validator, so we route through an AppDelegate selector and
+        // grey the item out via `validateMenuItem` while a check can't
+        // run. Touching `updater` here also starts it on launch.
         appMenu.addItem(.separator())
         let updateItem = NSMenuItem(
             title: "Verificar Atualizações…",
-            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+            action: #selector(checkForUpdatesMenu(_:)),
             keyEquivalent: ""
         )
-        updateItem.target = updaterController
+        updateItem.target = self
         appMenu.addItem(updateItem)
+        _ = updater   // force lazy init → starts the scheduled-check timer
 
         appMenu.addItem(.separator())
 
