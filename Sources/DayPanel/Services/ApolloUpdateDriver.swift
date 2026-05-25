@@ -205,11 +205,44 @@ final class ApolloUpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         phase = newPhase
         if window == nil { buildWindow() }
         guard let window else { return }
+        // Size the window to the card's fitting size BEFORE centring.
+        // The card height changes per phase; if we centre while the
+        // window still holds a stale size, the content then grows
+        // downward and lands off-centre. Forcing the final size first
+        // keeps every phase centred on the app window.
+        if let hostView = window.contentViewController?.view {
+            hostView.layoutSubtreeIfNeeded()
+            let fitting = hostView.fittingSize
+            if fitting.width > 0, fitting.height > 0 {
+                window.setContentSize(fitting)
+            }
+        }
+        centerOverAppWindow(window)
         if !window.isVisible {
-            window.center()
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+        } else {
+            window.orderFront(nil)
         }
+    }
+
+    /// Centre the update card over Apollo's main window (not the whole
+    /// screen), falling back to screen-centre if no app window is found.
+    private func centerOverAppWindow(_ w: NSWindow) {
+        let host = NSApp.windows.first {
+            $0 !== w
+                && $0.isVisible
+                && $0.isOnActiveSpace
+                && $0.styleMask.contains(.titled)
+                && $0.frame.width > 300
+        }
+        guard let host else { w.center(); return }
+        let hostFrame = host.frame
+        let size = w.frame.size
+        w.setFrameOrigin(NSPoint(
+            x: hostFrame.midX - size.width / 2,
+            y: hostFrame.midY - size.height / 2
+        ))
     }
 
     private func finish() {
