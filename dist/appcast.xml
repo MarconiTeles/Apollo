@@ -5,18 +5,18 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.7.3</title>
-      <pubDate>Mon, 25 May 2026 18:08:51 +0000</pubDate>
-      <sparkle:version>60</sparkle:version>
-      <sparkle:shortVersionString>1.7.3</sparkle:shortVersionString>
+      <title>Apollo 1.7.4</title>
+      <pubDate>Mon, 25 May 2026 19:38:14 +0000</pubDate>
+      <sparkle:version>61</sparkle:version>
+      <sparkle:shortVersionString>1.7.4</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Telas de atualização redesenhadas.
+      <description><![CDATA[Correção no campo de comentários.
 
-• As telas de 'nova versão', download e instalação agora seguem o design do Apollo (Editorial Calm), centralizadas sobre a janela do app, no lugar das janelas padrão do sistema.]]></description>
+• Apertar Enter no campo de comentário de uma tarefa agora quebra a linha normalmente (antes selecionava o texto). Cmd+Enter envia o comentário.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.3/Apollo-1.7.3.zip"
-        sparkle:edSignature="7GTIx3BHKoBwh8pYEEpVlZB/NLKZjB8gUAQvmf4onHAbJ2j4cupNd6nI6w2YCD11wFE9dzFzoANuwBTSpb6lBw=="
-        length="39664877"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.4/Apollo-1.7.4.zip"
+        sparkle:edSignature="cUDZJcOlj0zf0SK+ScAnW/j725HvmbnK2y61jONkGPI75fO+4bPexCYTTPHoSLTRHoF3i3HQg1t2hwgLAm8/BQ=="
+        length="39667310"
         type="application/octet-stream" />
     </item>
   </channel>
