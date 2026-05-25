@@ -3350,26 +3350,35 @@ final class AppState: ObservableObject {
         let members = mentionMemberIds.compactMap { id in
             availableMembers.first { $0.id == id }
         }
-        // `@username` text is visual; the reliable notification is `assignee`.
-        let prefix = members.map { "@\($0.username)" }.joined(separator: " ")
         let assignee = mentionMemberIds.first
 
-        // 1. Build the comment as a RICH `comment` segment array: the analysis
-        //    text + a labeled "VER REVIEW" hyperlink segment that hides the long
-        //    inline-payload URL (?z=…). The whole review rides in the link, so
-        //    there's no upload and no CORS-blocked fetch in the web viewer.
+        // `@username` text for the OPTIMISTIC local echo only (display string).
+        let prefix = members.map { "@\($0.username)" }.joined(separator: " ")
         let bodyText = prefix.isEmpty ? text : "\(prefix)\n\(text)"
-        guard !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let link = Self.reviewLink(reviewJSON: reviewJSON)
-        var segments: [[String: Any]] = [["text": bodyText]]
+
+        // 1. Build the comment as a RICH `comment` segment array. A mention MUST
+        //    be a `type: "tag"` segment carrying `user.id` — that's the form that
+        //    fires ClickUp's notification and renders the @chip. A plain `@name`
+        //    text segment (what we used before) showed the name but pinged
+        //    nobody. The analysis text follows, then a labeled "VER REVIEW"
+        //    hyperlink segment hides the long inline-payload URL (?z=…). The whole
+        //    review rides in the link — no upload, no CORS-blocked fetch.
+        var segments: [[String: Any]] = []
+        for (i, m) in members.enumerated() {
+            if i > 0 { segments.append(["text": " "]) }
+            segments.append(["text": "@\(m.username)", "type": "tag", "user": ["id": m.id]])
+        }
+        if !members.isEmpty { segments.append(["text": "\n"]) }
         if let link {
             // The "▶ " marker is a separate text segment so the linked label is
             // exactly `reviewLinkText` (extractReview matches `[VER REVIEW](…)`).
             // Non-breaking space — ClickUp trims a normal trailing space.
-            segments = [
-                ["text": bodyText + "\n\n▶\u{00A0}"],
-                ["text": Self.reviewLinkText, "attributes": ["link": link]],
-            ]
+            segments.append(["text": text + "\n\n▶\u{00A0}"])
+            segments.append(["text": Self.reviewLinkText, "attributes": ["link": link]])
+        } else {
+            segments.append(["text": text])
         }
 
         // 2. Thread under the video's comment when there is one.
