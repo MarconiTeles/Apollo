@@ -58,7 +58,11 @@ struct TaskCommentsSection: View, Equatable {
     @State private var uploadFilename:  String?     = nil
     @State private var uploadIndex:     Int         = 0
     @State private var uploadTotal:     Int         = 0
-    @FocusState private var draftFocused: Bool
+    // Plain @State (not @FocusState) so it can two-way bind to the
+    // AppKit-backed GrowingTextView, which reports/accepts focus.
+    @State private var draftFocused: Bool = false
+    /// Measured height of the growing composer text view.
+    @State private var composerHeight: CGFloat = 20
 
     // Per-comment ephemeral UI state
     @State private var expandedReplies: Set<String> = []
@@ -751,33 +755,32 @@ struct TaskCommentsSection: View, Equatable {
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
 
-                TextField(
-                    "Escreva um comentário…  •  use @ para mencionar",
-                    text: $draft,
-                    axis: .vertical
-                )
-                .focused($draftFocused)
-                .focusEffectDisabled()
-                .textFieldStyle(.plain)
-                .font(Editorial.serif(13))
-                .foregroundStyle(Editorial.ink)
-                .lineLimit(1...8)
-                .padding(.horizontal, 12)
-                .padding(.top, pendingAttachments.isEmpty ? 10 : 8)
-                .padding(.bottom, 6)
-                .onChange(of: draft) { _, new in updateMentionState(text: new) }
-                // Cmd+Return submits without inserting a
-                // newline. Plain Return falls through to the
-                // TextField's default newline-insert behaviour
-                // (the right call for a multi-line composer —
-                // shoving Return = send would surprise users
-                // who paste multi-paragraph text).
-                .onKeyPress(.return, phases: .down) { event in
-                    if event.modifiers.contains(.command) {
-                        Task { await send() }
-                        return .handled
+                // Multi-line composer backed by NSTextView (see
+                // GrowingTextView). SwiftUI's TextField(axis: .vertical)
+                // mis-handled Return on this macOS build — it committed
+                // the field and selected the whole line instead of
+                // inserting a newline. Here Return = newline, Cmd+Return
+                // = send. Placeholder is overlaid since NSTextView has none.
+                ZStack(alignment: .topLeading) {
+                    if draft.isEmpty {
+                        Text("Escreva um comentário…  •  use @ para mencionar")
+                            .font(Editorial.serif(13))
+                            .foregroundStyle(Editorial.inkFaint)
+                            .allowsHitTesting(false)
+                            .padding(.horizontal, 12)
+                            .padding(.top, (pendingAttachments.isEmpty ? 10 : 8) + 2)
                     }
-                    return .ignored
+                    GrowingTextView(
+                        text: $draft,
+                        height: $composerHeight,
+                        isFocused: $draftFocused,
+                        onSubmit: { Task { await send() } }
+                    )
+                    .frame(height: composerHeight)
+                    .padding(.horizontal, 12)
+                    .padding(.top, pendingAttachments.isEmpty ? 10 : 8)
+                    .padding(.bottom, 6)
+                    .onChange(of: draft) { _, new in updateMentionState(text: new) }
                 }
 
                 // ── Toolbar row (pinned to the bottom) ─────
@@ -815,6 +818,9 @@ struct TaskCommentsSection: View, Equatable {
                     }
                     .buttonStyle(.plain).focusEffectDisabled()
                     .disabled(!canSend)
+                    // Cmd+Return is handled inside GrowingTextView's
+                    // onSubmit (it has focus while composing), so no
+                    // keyboardShortcut here — that would double-fire.
                     .help("Enviar comentário (⌘⏎)")
                 }
                 .padding(.horizontal, 6)
