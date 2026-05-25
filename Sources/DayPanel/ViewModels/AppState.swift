@@ -3330,7 +3330,8 @@ final class AppState: ObservableObject {
     /// daypanel://review-done callback — exactly like the native flow. nil when
     /// unconfigured.
     static func reviewOpenLink(mediaUrl: String, ext: String, title: String,
-                               taskId: String, commentId: String, uploaderId: Int?) -> String? {
+                               taskId: String, commentId: String,
+                               uploaderId: Int?, uploaderName: String? = nil) -> String? {
         guard !reviewViewerBase.isEmpty, !mediaUrl.isEmpty else { return nil }
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~") // RFC 3986 unreserved
@@ -3338,6 +3339,9 @@ final class AppState: ObservableObject {
         var link = "\(reviewViewerBase)/?m=\(enc(mediaUrl))&x=\(enc(ext))&t=\(enc(title))"
         link += "&task=\(enc(taskId))&cmt=\(enc(commentId))"
         if let uploaderId { link += "&up=\(uploaderId)" }
+        // `un=` gives the web a fallback display name for the @mention chip; the
+        // notification itself rides on `up=` (the user id). Web-only.
+        if let uploaderName, !uploaderName.isEmpty { link += "&un=\(enc(uploaderName))" }
         return link
     }
 
@@ -3478,9 +3482,11 @@ final class AppState: ObservableObject {
                          reviewableFiles: [(url: String, ext: String, title: String)]) async -> CUComment? {
         let members = mentionMemberIds.compactMap { id in availableMembers.first { $0.id == id } }
         let uploader = clickUpAuthService.userId
+        let uploaderName = availableMembers.first { $0.id == uploader }?.username
         let links: [(label: String, url: String, title: String)] = reviewableFiles.compactMap { f in
             guard let link = Self.reviewOpenLink(mediaUrl: f.url, ext: f.ext, title: f.title,
-                                                 taskId: task.id, commentId: "", uploaderId: uploader)
+                                                 taskId: task.id, commentId: "", uploaderId: uploader,
+                                                 uploaderName: uploaderName)
             else { return nil }
             return (label: Self.reviewOpenLinkText, url: link, title: f.title)
         }
