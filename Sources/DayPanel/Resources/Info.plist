@@ -48,8 +48,6 @@
 	<string>Apollo</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
-	<key>NSRequiresAquaSystemAppearance</key>
-	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 	<key>NSUserNotificationsUsageDescription</key>

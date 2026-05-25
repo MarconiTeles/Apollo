@@ -278,6 +278,87 @@ extension NSColor {
         let b = Int((rgb.blueComponent  * 255).rounded())
         return String(format: "#%02X%02X%02X", r, g, b)
     }
+
+    /// Opaque sRGB colour from a `#RRGGBB` string.
+    convenience init(hexString: String) {
+        var s = hexString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("#") { s = String(s.dropFirst()) }
+        var rgb: UInt64 = 0
+        Scanner(string: s).scanHexInt64(&rgb)
+        self.init(srgbRed: CGFloat((rgb & 0xFF0000) >> 16) / 255,
+                  green:   CGFloat((rgb & 0x00FF00) >>  8) / 255,
+                  blue:    CGFloat( rgb & 0x0000FF)        / 255,
+                  alpha: 1)
+    }
+
+    /// A dynamic colour that resolves to `light` or `dark` per the
+    /// active drawing appearance — the foundation of Apollo's
+    /// "Editorial Calm" dark mode. Both inputs are `#RRGGBB`;
+    /// optional per-mode alpha bakes the translucent ink / rule
+    /// steps straight into the token so callers don't re-apply
+    /// `.opacity()`.
+    static func editorial(light: String,
+                          dark: String,
+                          lightAlpha: CGFloat = 1,
+                          darkAlpha: CGFloat = 1) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let isDark =
+                appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return isDark
+                ? NSColor(hexString: dark).withAlphaComponent(darkAlpha)
+                : NSColor(hexString: light).withAlphaComponent(lightAlpha)
+        }
+    }
+}
+
+extension NSColor {
+    /// A status colour that stays as-authored in light mode but
+    /// becomes brighter + more saturated in dark mode. ClickUp's
+    /// muted editorial status hues (slate, terracotta, plum, ochre…)
+    /// read as murky low-contrast smudges over the charcoal dark
+    /// canvas, so in dark we push brightness up and floor saturation
+    /// — the category colour stays vivid everywhere it appears
+    /// (dots, pills, washes, flags, the DONE pill, pickers).
+    static func vibrantStatus(hex: String) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let base = NSColor(hexString: hex).usingColorSpace(.sRGB)
+                ?? NSColor(hexString: hex)
+            let isDark =
+                appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            guard isDark else { return base }
+            var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            base.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+            let nb = min(1.0, max(b + 0.26, 0.74))   // brighter, with a floor
+            let ns = min(1.0, max(s, 0.60))          // keep it vivid
+            return NSColor(hue: h, saturation: ns, brightness: nb, alpha: a)
+        }
+    }
+}
+
+extension Color {
+    /// SwiftUI wrapper over `NSColor.vibrantStatus(hex:)`. Use this
+    /// instead of `Color(hex:)` for ANY status-derived colour so it
+    /// brightens consistently in dark mode.
+    init(statusHex hex: String) {
+        self = Color(nsColor: .vibrantStatus(hex: hex))
+    }
+}
+
+extension NSView {
+    /// Resolve a (possibly dynamic) SwiftUI `Color` to a `CGColor`
+    /// under THIS view's effective appearance. CALayer colours are
+    /// static snapshots, so a dynamic colour assigned to
+    /// `layer.backgroundColor` outside a draw cycle would otherwise
+    /// freeze at whatever appearance was current. Pinning the read
+    /// to the view's real light/dark state keeps AppKit layers in
+    /// sync with the SwiftUI surfaces around them.
+    func editorialCG(_ color: Color) -> CGColor {
+        var out = NSColor(color).cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            out = NSColor(color).cgColor
+        }
+        return out
+    }
 }
 
 // MARK: - Google Calendar palette snap

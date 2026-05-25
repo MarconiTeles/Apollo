@@ -2409,7 +2409,7 @@ private struct TaskChatPill: View {
     @State private var completing: Bool = false
     @State private var hoveringCheckbox: Bool = false
 
-    private var statusColor: Color { Color(hex: task.statusDisplayHex) }
+    private var statusColor: Color { Color(statusHex: task.statusDisplayHex) }
 
     /// O(1) lookup against AppState's pre-resolved index. See
     /// `TaskRowView.doneTargetStatus` for full rationale.
@@ -2531,7 +2531,7 @@ private struct TaskChatPill: View {
                     Text(target.status.uppercased())
                         .font(Editorial.sans(10, .semibold))
                         .tracking(0.4)
-                        .foregroundStyle(Color(hex: target.displayHex))
+                        .foregroundStyle(Color(statusHex: target.displayHex))
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3)
                         .background(
@@ -2661,7 +2661,7 @@ private struct TaskChatPillGhost: View {
         if let hit = appState.availableStatuses.first(
             where: { $0.status.lowercased() == needle }
         ) {
-            return Color(hex: hit.displayHex)
+            return Color(statusHex: hit.displayHex)
         }
         return Color.gray
     }
@@ -3908,7 +3908,7 @@ private struct SuggestionTile: View {
     /// Compact pill for a pending task inside the today
     /// tile. Status badge + title.
     private func todayTaskPill(_ task: CUTask) -> some View {
-        let statusColor = Color(hex: task.statusDisplayHex)
+        let statusColor = Color(statusHex: task.statusDisplayHex)
         return HStack(spacing: 8) {
             Capsule()
                 .fill(statusColor)

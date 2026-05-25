@@ -218,7 +218,7 @@ private struct NotificationRow: View, Equatable {
         case .task:
             if let id = notification.targetId,
                let task = appState.tasksById[id] {
-                return Color(hex: task.statusDisplayHex)
+                return Color(statusHex: task.statusDisplayHex)
             }
         case .event:
             if let id = notification.targetId,

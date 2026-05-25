@@ -236,11 +236,12 @@ enum DescriptionAttachmentRenderer {
     private static func makeAttachmentCard(filename: String,
                                            font: NSFont,
                                            maxWidth: CGFloat) -> NSImage? {
+        let isDark = NSApp.effectiveAppearance.bestMatch(
+            from: [.darkAqua, .aqua]) == .darkAqua
         let key = CacheKey(filename: filename,
                            fontSize: font.pointSize,
                            maxWidth: maxWidth,
-                           isDark: NSApp.effectiveAppearance.bestMatch(
-                                from: [.darkAqua, .aqua]) == .darkAqua)
+                           isDark: isDark)
         if let cached = cache[key] { return cached }
 
         // Filename gets middle-truncated to ~36 chars before being
@@ -249,12 +250,14 @@ enum DescriptionAttachmentRenderer {
         // `maxWidth` minus padding.
         // Editorial: New York italic in the app's cinnabar accent
         // on a paper chip — not white on a saturated emerald fill.
-        let editorialAccent = NSColor(srgbRed: 0.780, green: 0.196,
-                                      blue: 0.106, alpha: 1.0)   // #C7321B
-        let editorialCard = NSColor(srgbRed: 0.988, green: 0.980,
-                                    blue: 0.961, alpha: 1.0)   // #FCFAF5
-        let editorialRule = NSColor(srgbRed: 0.078, green: 0.075,
-                                    blue: 0.059, alpha: 0.10)  // ink @ 10%
+        // Colours are baked into the bitmap (NSImage), so they're
+        // resolved here per the cached `isDark` flag rather than via
+        // a dynamic NSColor.
+        let editorialAccent = NSColor(hexString: isDark ? "#E04A2E" : "#C7321B")
+        let editorialCard   = NSColor(hexString: isDark ? "#2B2820" : "#FCFAF5")
+        let editorialRule   = isDark
+            ? NSColor(hexString: "#F3EFE6").withAlphaComponent(0.14)
+            : NSColor(hexString: "#14130F").withAlphaComponent(0.10)
         // New York (system serif) italic.
         let cardFont: NSFont = {
             let size = font.pointSize - 1

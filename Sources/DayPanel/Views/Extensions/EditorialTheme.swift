@@ -1,4 +1,39 @@
 import SwiftUI
+import AppKit
+
+/// App-wide appearance choice, persisted in `AppState`. Drives
+/// `NSApp.appearance`; the Editorial tokens are dynamic colours
+/// that resolve light/dark off whatever this pins.
+enum AppearanceMode: String, CaseIterable, Identifiable {
+    case light, dark, system
+
+    var id: String { rawValue }
+
+    /// `nil` = follow the system. Otherwise an explicit pin.
+    var nsAppearance: NSAppearance? {
+        switch self {
+        case .light:  return NSAppearance(named: .aqua)
+        case .dark:   return NSAppearance(named: .darkAqua)
+        case .system: return nil
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .light:  return "Claro"
+        case .dark:   return "Escuro"
+        case .system: return "Sistema"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .light:  return "sun.max"
+        case .dark:   return "moon.stars"
+        case .system: return "circle.lefthalf.filled"
+        }
+    }
+}
 
 // Apollo "Editorial Calm" design language — the SwiftUI port of
 // `editorial-tokens.jsx` from the navigable prototype
@@ -16,46 +51,52 @@ import SwiftUI
 
 enum Editorial {
 
-    // ── Surface
-    static let paper    = Color(hex: "#FAF7F0")   // warm cream — outer canvas
-    static let page     = Color(hex: "#FFFFFF")   // pure white — surfaces
-    static let card     = Color(hex: "#FCFAF5")   // off-white — secondary surfaces
-    static let ink      = Color(hex: "#14130F")   // warm black
+    // ── Surface (light / dark). Light is the original "Editorial
+    //    Calm" cream-and-ink palette; dark is a neutral charcoal
+    //    scale anchored on Claude's app canvas (#1F1F1E) so the two
+    //    apps share the same dark tone. Surfaces step up in
+    //    luminance for elevation; the warm-white ink + cinnabar
+    //    accent keep the editorial character on top.
+    static let paper    = Color(nsColor: .editorial(light: "#FAF7F0", dark: "#1F1F1E"))  // outer canvas (= Claude bg)
+    static let page     = Color(nsColor: .editorial(light: "#FFFFFF", dark: "#2A2A29"))  // primary surface
+    static let card     = Color(nsColor: .editorial(light: "#FCFAF5", dark: "#242423"))  // secondary surface
+    static let ink      = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6"))  // body type
 
     /// Surface for the redesigned popup windows (detail / create /
     /// settings / filters / notifications / command palette).
-    /// A near-neutral soft off-white — the warm yellow cast of
-    /// `paper` pulled out so floating windows read calmer and
-    /// don't fight the content inside them.
-    static let popup    = Color(hex: "#FCFCFC")
+    static let popup    = Color(nsColor: .editorial(light: "#FCFCFC", dark: "#262625"))
 
-    static let inkSoft  = Color(hex: "#14130F").opacity(0.62)
-    static let inkMute  = Color(hex: "#14130F").opacity(0.42)
-    static let inkFaint = Color(hex: "#14130F").opacity(0.22)
-    static let rule     = Color(hex: "#14130F").opacity(0.10)
-    static let ruleSoft = Color(hex: "#14130F").opacity(0.06)
+    // Translucent ink steps — alpha baked per mode so dark mode
+    // reads off a warm-white ink instead of warm-black.
+    static let inkSoft  = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6", lightAlpha: 0.62, darkAlpha: 0.64))
+    static let inkMute  = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6", lightAlpha: 0.42, darkAlpha: 0.46))
+    static let inkFaint = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6", lightAlpha: 0.22, darkAlpha: 0.28))
+    static let rule     = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6", lightAlpha: 0.10, darkAlpha: 0.13))
+    static let ruleSoft = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6", lightAlpha: 0.06, darkAlpha: 0.08))
 
-    // ── Single accent — cinnabar (newsroom red)
-    static let accent     = Color(hex: "#C7321B")
-    static let accentSoft = Color(hex: "#C7321B").opacity(0.10)
+    // ── Single accent — cinnabar (newsroom red), nudged brighter
+    //    in dark so it keeps punching against the warm-black canvas.
+    static let accent     = Color(nsColor: .editorial(light: "#C7321B", dark: "#E04A2E"))
+    static let accentSoft = Color(nsColor: .editorial(light: "#C7321B", dark: "#E04A2E", lightAlpha: 0.10, darkAlpha: 0.18))
 
     /// Status colors — used ONLY as dots + caption text, never
     /// as a filled pill (that's the whole point of the redesign).
-    /// Keyed by ClickUp's canonical status family.
-    /// Muted, denser editorial palette — desaturated warm tones
-    /// that sit coherently with the cream paper, warm ink and the
-    /// single cinnabar accent (no vivid web hues).
+    /// Keyed by ClickUp's canonical status family. Light tones are
+    /// the muted editorial palette; `Color(statusHex:)` lifts each
+    /// hue to a brighter, more vibrant version in dark mode — the
+    /// same transform applied to every other status colour in the
+    /// app, so labels, dots, pills and washes stay consistent.
     static func statusColor(_ family: String) -> Color {
         switch family {
-        case "todo":        return Color(hex: "#54577E")  // muted slate-indigo
-        case "doing":       return Color(hex: "#B0612E")  // muted terracotta
-        case "review":      return Color(hex: "#7A6597")  // muted dusty plum
-        case "liberado":    return Color(hex: "#9A7B1F")  // deep muted ochre
-        case "complete":    return Color(hex: "#3F6B4A")  // muted forest sage
-        case "backlog":     return Color(hex: "#5E5786")  // muted violet-slate
-        case "cancelado":   return Color(hex: "#B0402C")  // muted brick (accent kin)
-        case "recorrentes": return Color(hex: "#7E6597")  // muted lavender
-        default:            return Color(hex: "#54577E")
+        case "todo":        return Color(statusHex: "#54577E")  // slate-indigo
+        case "doing":       return Color(statusHex: "#B0612E")  // terracotta
+        case "review":      return Color(statusHex: "#7A6597")  // dusty plum
+        case "liberado":    return Color(statusHex: "#9A7B1F")  // ochre
+        case "complete":    return Color(statusHex: "#3F6B4A")  // forest sage
+        case "backlog":     return Color(statusHex: "#5E5786")  // violet-slate
+        case "cancelado":   return Color(statusHex: "#B0402C")  // brick (accent kin)
+        case "recorrentes": return Color(statusHex: "#7E6597")  // lavender
+        default:            return Color(statusHex: "#54577E")
         }
     }
 

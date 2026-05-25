@@ -20,7 +20,7 @@ struct StatusPickerPopover: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(statuses) { status in
                 let isSelected  = status.status == currentStatusName
-                let statusColor = Color(hex: status.displayHex)
+                let statusColor = Color(statusHex: status.displayHex)
                 Button {
                     onSelect(status)
                 } label: {

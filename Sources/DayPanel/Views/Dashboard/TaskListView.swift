@@ -649,7 +649,7 @@ struct TaskFilterBar: View {
             filterPill(
                 label:    s.status.uppercased(),
                 count:    counts[s.status] ?? 0,
-                color:    Color(hex: s.displayHex),
+                color:    Color(statusHex: s.displayHex),
                 isActive: appState.selectedTaskStatus == s.status
             ) { selectStatus(s.status) }
         }

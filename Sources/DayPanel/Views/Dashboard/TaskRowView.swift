@@ -503,7 +503,7 @@ struct TaskRowView: View, Equatable {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(hex: target.displayHex).opacity(0.92))
+                .background(Color(statusHex: target.displayHex).opacity(0.92))
                 .opacity(rightProgress)
             }
             if let prev = previousStatus {
@@ -518,7 +518,7 @@ struct TaskRowView: View, Equatable {
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(hex: prev.displayHex).opacity(0.92))
+                .background(Color(statusHex: prev.displayHex).opacity(0.92))
                 .opacity(leftProgress)
             }
         }

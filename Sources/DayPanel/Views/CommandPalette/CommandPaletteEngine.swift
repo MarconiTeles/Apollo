@@ -223,7 +223,7 @@ enum CommandPaletteEngine {
             title: task.title,
             subtitle: parts.joined(separator: " · "),
             icon: task.isCompleted ? "checkmark.circle.fill" : "circle",
-            tint: Color(hex: task.statusDisplayHex),
+            tint: Color(statusHex: task.statusDisplayHex),
             kind: .task,
             perform: {
                 appState.detailTaskOrigin = .zero

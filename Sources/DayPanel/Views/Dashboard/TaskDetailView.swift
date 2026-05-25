@@ -621,7 +621,7 @@ struct TaskDetailView: View, Equatable {
             spacing: 22
         ) {
             kvCell("Status") {
-                let c = Color(hex: task.statusDisplayHex)
+                let c = Color(statusHex: task.statusDisplayHex)
                 Button { showStatusMenu.toggle() } label: {
                     HStack(spacing: 7) {
                         Circle().fill(c).frame(width: 8, height: 8)
@@ -830,7 +830,7 @@ struct TaskDetailView: View, Equatable {
     }
 
     private var statusRow: some View {
-        let color = Color(hex: task.statusDisplayHex)
+        let color = Color(statusHex: task.statusDisplayHex)
 
         let pill = HStack(spacing: 4) {
             Text(task.status.uppercased())
@@ -1766,8 +1766,7 @@ struct TaskDetailView: View, Equatable {
         } label: {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(Color(hex: resolved?.statusDisplayHex ?? "#87909E")
-                          ?? .gray)
+                    .fill(Color(statusHex: resolved?.statusDisplayHex ?? "#87909E"))
                     .frame(width: 7, height: 7)
                 Text(resolved?.title ?? "Tarefa \(id.prefix(8))…")
                     .font(.caption)
@@ -2399,7 +2398,7 @@ struct SubtaskRow: View, Equatable {
                 // the row isn't crowded.
                 if !hoveringCheckbox || task.isCompleted {
                     Circle()
-                        .fill(Color(hex: task.statusDisplayHex))
+                        .fill(Color(statusHex: task.statusDisplayHex))
                         .frame(width: 7, height: 7)
                         .opacity(task.isCompleted ? 0.55 : 1)
                         .transition(.opacity)
@@ -2427,7 +2426,7 @@ struct SubtaskRow: View, Equatable {
             // Applies in BOTH contexts where SubtaskRow renders:
             // the dashboard's expanded inline list and the task
             // detail popup's subtask list.
-            .background(Color(hex: task.statusDisplayHex).opacity(0.03))
+            .background(Color(statusHex: task.statusDisplayHex).opacity(0.03))
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()

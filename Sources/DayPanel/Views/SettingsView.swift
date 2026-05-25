@@ -944,7 +944,7 @@ private struct ClickUpSection: View {
         let target   = mapped.flatMap { name in
             appState.availableStatuses.first(where: { $0.status == name })
         }
-        let curColor = Color(hex: current.displayHex)
+        let curColor = Color(statusHex: current.displayHex)
 
         return GlassFormRow {
             // ── Block 1: current status (read-only)
@@ -989,7 +989,7 @@ private struct ClickUpSection: View {
                 }
             } label: {
                 if let t = target {
-                    let tColor = Color(hex: t.displayHex)
+                    let tColor = Color(statusHex: t.displayHex)
                     HStack(spacing: 4) {
                         Circle().fill(tColor).frame(width: 6, height: 6)
                         Text(t.status.uppercased())
@@ -1683,6 +1683,20 @@ private struct AppSection: View {
     var body: some View {
         GlassSectionCard(title: "App", icon: "gearshape") {
             VStack(spacing: 6) {
+                GlassFormRow {
+                    Text("Aparência").font(.subheadline)
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { appState.appearanceMode },
+                        set: { appState.setAppearanceMode($0) }
+                    )) {
+                        ForEach(AppearanceMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 200)
+                }
                 GlassFormRow {
                     Toggle("Modo menu bar", isOn: Binding(
                         get: { appState.menuBarMode },

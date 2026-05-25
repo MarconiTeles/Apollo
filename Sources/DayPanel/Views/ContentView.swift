@@ -591,13 +591,13 @@ struct ContentView: View {
         // helps the design — without paying the system-wide tax
         // of a window-wide blur.
         .background(
-            // Pinned to the Editorial cream canvas. Previously
-            // `Color(nsColor: .windowBackgroundColor)`, which
-            // resolves against the SYSTEM appearance and turned
-            // the root backdrop BLACK under macOS Dark Mode
-            // (visible through the timeline's bottom fade). The
-            // app is hard-locked to the light Editorial theme,
-            // so the backdrop is now an explicit constant.
+            // The Editorial canvas. `Editorial.paper` is a dynamic
+            // token (cream in light, warm-black in dark) that
+            // resolves off the app's pinned appearance — NOT the
+            // raw system `.windowBackgroundColor`, so the backdrop
+            // always matches the chosen Editorial theme rather than
+            // jumping to the system grey/black behind the timeline
+            // fade.
             Editorial.paper
                 .ignoresSafeArea()
         )

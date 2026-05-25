@@ -184,7 +184,7 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
         // can't flash a stale band — or a transparent gap — in
         // the moment before `bind`.
         rowView.layer?.removeAnimation(forKey: "hoverWash")
-        rowView.layer?.backgroundColor = NSColor(Editorial.paper).cgColor
+        rowView.layer?.backgroundColor = rowView.editorialCG(Editorial.paper)
         rowView.layer?.shadowOpacity = 0
     }
 
@@ -1231,11 +1231,11 @@ final class TaskRowContentView: NSView {
         // regardless of what this method paints on `backgroundColor`.
         let target: CGColor
         if swipeOffset != 0 {
-            target = NSColor(Editorial.paper).cgColor
+            target = editorialCG(Editorial.paper)
         } else if isHovered {
-            target = NSColor(Editorial.card).cgColor     // warm hover wash
+            target = editorialCG(Editorial.card)     // warm hover wash
         } else {
-            target = NSColor(Editorial.paper).cgColor    // = canvas, opaque
+            target = editorialCG(Editorial.paper)    // = canvas, opaque
         }
 
         if animated {
@@ -1349,17 +1349,16 @@ final class TaskRowContentView: NSView {
         expandPill.isHidden    = !hasChildren
         expandHitZone.isHidden = !hasChildren
         if hasChildren {
-            expandPill.tint = NSColor(Color(hex: task.statusDisplayHex))
+            expandPill.tint = NSColor(Color(statusHex: task.statusDisplayHex))
         }
         expandPill.isExpanded = isExpanded
         self.cachedStatusHex = task.statusDisplayHex
-        // Repaint the 3% accent wash with the new status colour.
+        // Repaint the status wash with the new status colour.
         // Disable implicit CALayer actions so recycled cells
         // don't flash a colour crossfade on rebind.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        bodyTintLayer.backgroundColor =
-            NSColor(Color(hex: cachedStatusHex)).cgColor
+        repaintTint()
         CATransaction.commit()
         // Reset transient hover state so a recycled cell doesn't
         // inherit a leftover hover halo / DONE pill from the
@@ -1450,6 +1449,21 @@ final class TaskRowContentView: NSView {
 
     // MARK: Appearance application
 
+    /// Repaint the status wash sublayer for the current appearance.
+    /// Light mode keeps the raw muted status hue at 3%; dark mode
+    /// swaps in the pre-lightened `fillTint` at a slightly higher
+    /// opacity so the category colour stays readable over the
+    /// warm-black canvas instead of collapsing into murk.
+    private func repaintTint() {
+        let isDark =
+            effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let tint: Color = isDark
+            ? Color.fillTint(forBaseHex: cachedStatusHex, scheme: .dark)
+            : Color(hex: cachedStatusHex)
+        bodyTintLayer.backgroundColor = editorialCG(tint)
+        bodyTintLayer.opacity = isDark ? 0.02 : 0.03
+    }
+
     private func applyAppearance() {
         guard let task else { return }
         let scheme: ColorScheme =
@@ -1464,8 +1478,13 @@ final class TaskRowContentView: NSView {
         // is the live source of truth (hover/swipe states); this
         // just sets the resting paper so there's never a frame
         // of transparency between bind and the first hover.
-        layer?.backgroundColor = NSColor(Editorial.paper).cgColor
+        layer?.backgroundColor = editorialCG(Editorial.paper)
         layer?.shadowOpacity   = 0
+        // Hairline rule + status wash also live on CALayers, whose
+        // colours are static snapshots — repaint them here so a
+        // light↔dark switch (or first bind) resolves correctly.
+        bottomRule.backgroundColor = editorialCG(Editorial.rule)
+        repaintTint()
 
         let ink      = NSColor(Editorial.ink)
         let inkMute  = NSColor(Editorial.inkMute)
@@ -1848,10 +1867,14 @@ final class TaskRowContentView: NSView {
         )
     }
 
-    // Re-apply colours when system theme switches.
+    // Re-apply colours when the theme switches (system change or
+    // the in-app appearance picker). `applyAppearance` repaints the
+    // static layers; `applyRowBackground` restores the live resting
+    // / hover fill under the new appearance.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         applyAppearance()
+        applyRowBackground(animated: false)
     }
 }
 
@@ -1986,7 +2009,7 @@ final class StatusPillView: NSView {
 
     func configure(label text: String, hex: String) {
         self.hex = hex
-        let color = NSColor(Color(hex: hex))
+        let color = NSColor.vibrantStatus(hex: hex)
         // Editorial all-caps: the word is UPPERCASE, tinted with the status's
         // own colour (matches the dot), with caps tracking.
         self.label.attributedStringValue = NSAttributedString(
@@ -1996,7 +2019,7 @@ final class StatusPillView: NSView {
                 .foregroundColor: color,
                 .kern: 0.6,
             ])
-        self.dotView.layer?.backgroundColor = color.cgColor
+        self.dotView.layer?.backgroundColor = self.editorialCG(Color(statusHex: hex))
         self.dotView.isHidden = false
         self.chevronIcon.contentTintColor = NSColor(Editorial.inkFaint)
         self.layer?.borderWidth     = 0
@@ -2112,9 +2135,9 @@ final class DonePillView: NSView {
         // the colour of the STATUS it represents (the done
         // target) — e.g. cinnabar for "Cancelado", gold for
         // "Liberado" — not a fixed accent.
-        self.label.textColor   = NSColor(Color(hex: hex))
-        layer?.backgroundColor = NSColor(Editorial.page).cgColor
-        layer?.borderColor     = NSColor(Editorial.rule).cgColor
+        self.label.textColor   = NSColor.vibrantStatus(hex: hex)
+        layer?.backgroundColor = editorialCG(Editorial.page)
+        layer?.borderColor     = editorialCG(Editorial.rule)
         label.sizeToFit()
         needsLayout = true
     }
@@ -2518,7 +2541,7 @@ final class SwipeActionPanelView: NSView {
         // while the icon + word carry the colour at full
         // strength — same "status as coloured mark" language
         // used by StatusMark / the done pill.
-        let color = NSColor(Color(hex: hex))
+        let color = NSColor.vibrantStatus(hex: hex)
         layer?.backgroundColor = color.withAlphaComponent(0.10).cgColor
         icon.contentTintColor  = color
         label.textColor        = color

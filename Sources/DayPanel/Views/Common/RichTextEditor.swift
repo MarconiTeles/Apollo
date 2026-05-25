@@ -116,7 +116,7 @@ struct RichTextEditor: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.font = NSFont.systemFont(ofSize: fontSize)
-        textView.textColor = NSColor(srgbRed: 0.078, green: 0.075, blue: 0.059, alpha: 1.0)
+        textView.textColor = NSColor.editorial(light: "#14130F", dark: "#F3EFE6")
         textView.isRichText = true
         textView.usesFontPanel = false
         textView.usesRuler = false
@@ -130,9 +130,9 @@ struct RichTextEditor: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.textContainerInset = NSSize(width: 5, height: 8)
         textView.linkTextAttributes = [
-            // Editorial cinnabar (#C7321B) instead of system blue.
-            .foregroundColor: NSColor(srgbRed: 0.780, green: 0.196,
-                                      blue: 0.106, alpha: 1.0),
+            // Editorial cinnabar instead of system blue (brighter
+            // in dark so links stay legible on the warm-black body).
+            .foregroundColor: NSColor.editorial(light: "#C7321B", dark: "#E04A2E"),
             .cursor:          NSCursor.pointingHand,
         ]
 
@@ -231,7 +231,7 @@ struct RichTextEditor: NSViewRepresentable {
             let attributed = DescriptionAttachmentRenderer.render(
                 text,
                 font: NSFont.systemFont(ofSize: fontSize),
-                textColor: NSColor(srgbRed: 0.078, green: 0.075, blue: 0.059, alpha: 1.0)
+                textColor: NSColor.editorial(light: "#14130F", dark: "#F3EFE6")
             )
             textView.textStorage?.setAttributedString(attributed)
             // In display mode the user can't accidentally type
@@ -353,10 +353,9 @@ struct RichTextEditor: NSViewRepresentable {
         guard full.length > 0 else { return }
 
         let defaultColor = textView.textColor
-            ?? NSColor(srgbRed: 0.078, green: 0.075, blue: 0.059, alpha: 1.0)
+            ?? NSColor.editorial(light: "#14130F", dark: "#F3EFE6")
         let defaultFont = textView.font ?? NSFont.systemFont(ofSize: 13)
-        let mentionColor = NSColor(srgbRed: 0.780, green: 0.196,
-                                   blue: 0.106, alpha: 1.0)
+        let mentionColor = NSColor.editorial(light: "#C7321B", dark: "#E04A2E")
         let mentionFont = NSFont.systemFont(ofSize: defaultFont.pointSize,
                                             weight: .semibold)
 

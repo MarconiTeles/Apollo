@@ -145,19 +145,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Launch
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // ── Hard-lock the entire app to the light "Editorial
-        //    Calm" appearance. The Info.plist key
-        //    `NSRequiresAquaSystemAppearance` is Apple's
-        //    canonical opt-out (the system never even hands us a
-        //    dark appearance), and pinning `NSApp.appearance`
-        //    here is the runtime belt-and-suspenders: it cascades
-        //    to every window, popover, NSPanel (command palette),
-        //    the main menu, the About panel, and makes every
-        //    SwiftUI `@Environment(\.colorScheme)` resolve to
-        //    `.light`. Because it's an explicit pin (not "follow
-        //    system"), toggling macOS Dark Mode while Apollo is
-        //    running changes nothing inside the app.
-        NSApp.appearance = NSAppearance(named: .aqua)
+        // ── Apply the user's appearance choice (Claro / Escuro /
+        //    Sistema). Pinning `NSApp.appearance` cascades to every
+        //    window, popover, NSPanel (command palette), the main
+        //    menu, the About panel, and makes SwiftUI's
+        //    `@Environment(\.colorScheme)` + our dynamic Editorial
+        //    tokens resolve to the chosen mode. Default is `.system`
+        //    (follow macOS); the `NSRequiresAquaSystemAppearance`
+        //    opt-out was removed from Info.plist so `.dark` /
+        //    `.system` can actually take effect.
+        appState.applyAppearanceMode()
 
         // Take ownership of UNUserNotificationCenter delivery + click
         // handling so foreground banners show up and notification

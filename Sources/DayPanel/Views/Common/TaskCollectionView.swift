@@ -804,6 +804,9 @@ final class SubtaskCellItem: NSCollectionViewItem {
     func bind(task: CUTask, appState: AppState, depth: Int,
               isLast: Bool = false, isFirst: Bool = false) {
         bottomRule.isHidden = !isLast
+        // CALayer colours are static snapshots — resolve the rule
+        // hue under the current appearance so it tracks dark mode.
+        bottomRule.layer?.backgroundColor = bottomRule.editorialCG(Editorial.rule)
         hosting?.removeFromSuperview()
         // The depth-aware indent is injected INSIDE SubtaskRow now
         // (via its `leadingIndent` param) so the host can extend

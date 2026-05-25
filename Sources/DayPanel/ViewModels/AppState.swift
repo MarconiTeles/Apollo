@@ -490,6 +490,10 @@ final class AppState: ObservableObject {
     }
 
     // MARK: - Preferences (UserDefaults)
+    /// App-wide appearance. `.light` keeps the original Editorial
+    /// Calm cream palette (default); `.dark` pins the warm-black
+    /// twin; `.system` follows macOS. Applied via `NSApp.appearance`.
+    @Published var appearanceMode:      AppearanceMode
     @Published var menuBarMode:         Bool
     @Published var autoSyncInterval:    Int      // minutes, 0 = disabled
     @Published var selectedCalendarIds: [String]
@@ -652,6 +656,9 @@ final class AppState: ObservableObject {
     // MARK: - Init
 
     init() {
+        appearanceMode      = AppearanceMode(
+            rawValue: UserDefaults.standard.string(forKey: "dp_appearanceMode") ?? ""
+        ) ?? .system   // default: follow macOS (overridable in Settings)
         menuBarMode         = UserDefaults.standard.bool(forKey: "dp_menuBarMode")
         let saved           = UserDefaults.standard.object(forKey: "dp_autoSyncInterval") as? Int
         autoSyncInterval    = saved ?? 5
@@ -1374,6 +1381,24 @@ final class AppState: ObservableObject {
 
 
     // MARK: - Preference setters (persist + react)
+
+    /// Persist + apply the appearance choice. Setting
+    /// `NSApp.appearance` cascades to every window, popover, the
+    /// command-palette panel, and makes SwiftUI's
+    /// `@Environment(\.colorScheme)` (plus our dynamic Editorial
+    /// tokens) resolve to the chosen mode immediately.
+    func setAppearanceMode(_ mode: AppearanceMode) {
+        appearanceMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: "dp_appearanceMode")
+        applyAppearanceMode()
+    }
+
+    /// Push the current `appearanceMode` onto `NSApp`. Safe to call
+    /// once `NSApp` exists (AppDelegate calls it on launch; the
+    /// setter calls it on every change).
+    func applyAppearanceMode() {
+        NSApp.appearance = appearanceMode.nsAppearance
+    }
 
     func setMenuBarMode(_ value: Bool) {
         menuBarMode = value
