@@ -1038,10 +1038,10 @@ struct TaskRowView: View, Equatable {
             Circle()
                 .fill(color)
                 .frame(width: 7, height: 7)
-            Text(task.status.capitalized)
-                .font(Editorial.sans(11.5, .medium))
-                .foregroundStyle(Editorial.inkSoft)
-                .tracking(0.2)
+            Text(task.status.uppercased())
+                .font(Editorial.sans(10.5, .semibold))
+                .foregroundStyle(color)            // status's own accent colour
+                .tracking(0.6)                     // editorial all-caps tracking
                 .lineLimit(1)
                 .truncationMode(.tail)
             Image(systemName: "chevron.down")
