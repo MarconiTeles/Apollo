@@ -414,6 +414,15 @@ final class AppState: ObservableObject {
     private var lastSeenProofingCounts: [String: Int] = [:]
 
     private var lastSeenCommentByTask: [String: String] = [:]
+    /// Per top-level-comment reply count last seen by the poller.
+    /// Review @mentions land as THREADED replies, not top-level
+    /// comments — so the task-level lastSeen diff never sees them.
+    /// We detect "this comment got new replies" cheaply by
+    /// comparing the `reply_count` ClickUp already returns on the
+    /// top-level fetch (no extra call), and only pull the thread
+    /// when the count actually went up.
+    private var lastReplyCountByComment: [String: Int] = [:]
+    private static let replyCountKey = "dp_lastReplyCountByComment"
     /// Cooldown timestamp per task. Without this, the 30s
     /// fast-sync would refetch every assigned/created task's
     /// comments twice a minute — wasted bandwidth and
@@ -655,6 +664,10 @@ final class AppState: ObservableObject {
         if let stored = UserDefaults.standard.dictionary(forKey: Self.commentSeenKey)
             as? [String: String] {
             lastSeenCommentByTask = stored
+        }
+        if let storedReplies = UserDefaults.standard.dictionary(forKey: Self.replyCountKey)
+            as? [String: Int] {
+            lastReplyCountByComment = storedReplies
         }
         // Load per-status DONE-action mapping (JSON {currentStatus: targetStatus}).
         if let data = UserDefaults.standard.data(forKey: "dp_doneActionByStatus"),
@@ -2864,17 +2877,22 @@ final class AppState: ObservableObject {
     //
     // Polled at the tail of each `sync()` so a teammate's
     // comment / @-mention surfaces as a macOS banner without
-    // the user having to open the task. Scope is intentionally
-    // narrow — we only poll tasks the user has skin in (an
-    // assignee or the creator) so we stay well under
-    // ClickUp's 100-call/minute rate limit, and we throttle
-    // per-task to once a minute. Mentions in tasks the user
-    // is NOT involved in still surface — but only when the
-    // user opens that task's popup (the timeline already
-    // fetches comments at that point).
+    // the user having to open the task. Two tiers:
+    //   • tasks the user is involved in (assignee/creator) get
+    //     the full treatment — every new top-level comment AND
+    //     every new threaded reply, mention or not.
+    //   • every OTHER loaded task is scanned in mentions-only
+    //     mode, so an @mention anywhere visible still pings you
+    //     without turning unrelated tasks into a firehose.
+    // Threaded replies (where review @mentions land) are pulled
+    // only when a comment's reply_count actually grows — cheap,
+    // and it keeps us under ClickUp's 100-call/minute ceiling.
+    // A shared 30-task cap + 60s per-task throttle bound the cost.
     private func saveCommentSeen() {
         UserDefaults.standard.set(lastSeenCommentByTask,
                                   forKey: Self.commentSeenKey)
+        UserDefaults.standard.set(lastReplyCountByComment,
+                                  forKey: Self.replyCountKey)
     }
 
     /// Polls comments for tasks the connected user is involved
@@ -2888,22 +2906,34 @@ final class AppState: ObservableObject {
 
         let now = Date()
         let throttle: TimeInterval = 60
-        let candidates: [CUTask] = await MainActor.run {
-            tasks.filter { task in
-                let isAssignee = task.assignees.contains { $0.id == me }
-                let isCreator  = task.creator?.id == me
-                guard isAssignee || isCreator else { return false }
+        // Two tiers, both throttled to once per task per minute:
+        //   • involved (assignee/creator): full treatment —
+        //     "novo comentário" AND "@você foi mencionado".
+        //   • others (any other loaded task): MENTIONS ONLY — so
+        //     being @mentioned anywhere visible pings you, without
+        //     blasting every comment on tasks you have no stake in.
+        let (involved, others): ([CUTask], [CUTask]) = await MainActor.run {
+            var inv: [CUTask] = []
+            var oth: [CUTask] = []
+            for task in tasks {
                 let last = lastCommentPollAt[task.id] ?? .distantPast
-                return now.timeIntervalSince(last) >= throttle
+                guard now.timeIntervalSince(last) >= throttle else { continue }
+                let mine = task.assignees.contains { $0.id == me } || task.creator?.id == me
+                if mine { inv.append(task) } else { oth.append(task) }
             }
+            return (inv, oth)
         }
-        // Hard cap so a sudden jump in eligible tasks (e.g.
-        // bulk-assign) doesn't spike the API bill.
-        let capped = Array(candidates.prefix(30))
+        // Involved first, then others, under one shared cap so a big
+        // workspace can't spike the API bill. (cap 30, throttled
+        // 60s/task → comfortably under ClickUp's 100-call/min ceiling
+        // even with the occasional reply-thread look-up.)
+        let work: [(task: CUTask, mentionsOnly: Bool)] =
+            involved.map { ($0, false) } + others.map { ($0, true) }
+        let capped = Array(work.prefix(30))
         guard !capped.isEmpty else { return }
 
         await MainActor.run {
-            for task in capped { lastCommentPollAt[task.id] = now }
+            for item in capped { lastCommentPollAt[item.task.id] = now }
         }
 
         // Limited concurrency — running all 30 fetches at once
@@ -2911,10 +2941,11 @@ final class AppState: ObservableObject {
         // a safe sweet spot.
         await withTaskGroup(of: Void.self) { group in
             var inFlight = 0
-            for task in capped {
+            for item in capped {
                 if inFlight >= 4 { _ = await group.next(); inFlight -= 1 }
                 group.addTask { [weak self] in
-                    await self?.checkComments(forTask: task)
+                    await self?.checkComments(forTask: item.task,
+                                              mentionsOnly: item.mentionsOnly)
                 }
                 inFlight += 1
             }
@@ -2928,7 +2959,7 @@ final class AppState: ObservableObject {
     /// record the latest id without notifying so the user
     /// isn't blasted with old comments on first launch / new
     /// task assignment.
-    private func checkComments(forTask task: CUTask) async {
+    private func checkComments(forTask task: CUTask, mentionsOnly: Bool = false) async {
         guard let comments = try? await cuSvc.getTaskComments(taskId: task.id),
               !comments.isEmpty
         else { return }
@@ -2937,6 +2968,7 @@ final class AppState: ObservableObject {
         let sorted = comments.sorted { $0.date > $1.date }
         let latestId = sorted[0].id
 
+        // ── Top-level comments ──────────────────────────────────
         await MainActor.run {
             let prev = lastSeenCommentByTask[task.id]
             // Always record the latest BEFORE notifying so a
@@ -2945,18 +2977,59 @@ final class AppState: ObservableObject {
             lastSeenCommentByTask[task.id] = latestId
             saveCommentSeen()
 
-            guard let prev else { return }   // bootstrap silent
-            // Newest-first: notify everything BEFORE we hit the
-            // previously-seen id. If the prev id was deleted on
-            // the server, fall back to notifying just the
-            // single latest comment so the user isn't silently
-            // catching up.
-            if let cutoff = sorted.firstIndex(where: { $0.id == prev }) {
-                for c in sorted.prefix(cutoff) {
-                    handleNewComment(c, on: task)
+            if let prev {
+                // Newest-first: notify everything BEFORE we hit the
+                // previously-seen id. If the prev id was deleted on
+                // the server, fall back to notifying just the
+                // single latest comment so the user isn't silently
+                // catching up.
+                if let cutoff = sorted.firstIndex(where: { $0.id == prev }) {
+                    for c in sorted.prefix(cutoff) {
+                        handleNewComment(c, on: task, mentionsOnly: mentionsOnly)
+                    }
+                } else {
+                    handleNewComment(sorted[0], on: task, mentionsOnly: mentionsOnly)
                 }
-            } else {
-                handleNewComment(sorted[0], on: task)
+            }
+            // (no prev → bootstrap silent for top-level)
+        }
+
+        // ── Threaded replies ────────────────────────────────────
+        // Review @mentions arrive as replies to (often OLD) parent
+        // comments, which the task-level diff above never sees. We
+        // detect "this comment gained replies" for free from the
+        // reply_count ClickUp already returned, and only pull a
+        // thread when its count actually grew.
+        let storedCounts = await MainActor.run { lastReplyCountByComment }
+        var countUpdates: [String: Int] = [:]
+        for parent in sorted where parent.replyCount > 0 {
+            guard let prevCount = storedCounts[parent.id] else {
+                // First sight of this comment's thread → record the
+                // count silently so we don't replay old replies.
+                countUpdates[parent.id] = parent.replyCount
+                continue
+            }
+            guard parent.replyCount > prevCount else {
+                // Unchanged, or a reply was deleted — keep our count
+                // in sync but don't fetch or notify.
+                if parent.replyCount != prevCount { countUpdates[parent.id] = parent.replyCount }
+                continue
+            }
+            let delta = parent.replyCount - prevCount
+            guard let replies = try? await cuSvc.getCommentReplies(commentId: parent.id),
+                  !replies.isEmpty else { continue }
+            let newest = Array(replies.sorted { $0.date > $1.date }.prefix(delta))
+            await MainActor.run {
+                for r in newest {
+                    handleNewComment(r, on: task, mentionsOnly: mentionsOnly)
+                }
+            }
+            countUpdates[parent.id] = parent.replyCount
+        }
+        if !countUpdates.isEmpty {
+            await MainActor.run {
+                for (id, count) in countUpdates { lastReplyCountByComment[id] = count }
+                saveCommentSeen()
             }
         }
     }
@@ -2971,7 +3044,7 @@ final class AppState: ObservableObject {
     /// `openNotificationTarget` flow opens the task popup; for
     /// subtasks (which carry their own task id) it opens the
     /// subtask directly.
-    private func handleNewComment(_ c: CUComment, on task: CUTask) {
+    private func handleNewComment(_ c: CUComment, on task: CUTask, mentionsOnly: Bool = false) {
         let me = clickUpAuthService.userId
         if let me, c.userId == me { return }
 
@@ -2984,6 +3057,12 @@ final class AppState: ObservableObject {
         let isMention = !myUsername.isEmpty
             && c.text.range(of: "@\(myUsername)",
                             options: .caseInsensitive) != nil
+
+        // Mentions-only mode (tasks the user neither created nor is
+        // assigned to): ping ONLY on a real @mention, never on a
+        // plain "novo comentário" — otherwise every comment on every
+        // visible task would become a notification firehose.
+        if mentionsOnly && !isMention { return }
 
         let subtitle = isMention
             ? "Você foi mencionado em um comentário"
