@@ -5,16 +5,24 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.6.14</title>
-      <pubDate>Wed, 20 May 2026 14:07:06 +0000</pubDate>
-      <sparkle:version>56</sparkle:version>
-      <sparkle:shortVersionString>1.6.14</sparkle:shortVersionString>
+      <title>Apollo 1.7.0</title>
+      <pubDate>Mon, 25 May 2026 15:32:32 +0000</pubDate>
+      <sparkle:version>57</sparkle:version>
+      <sparkle:shortVersionString>1.7.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Cor de categoria de volta nas tarefas, subtarefas e no command palette (3% do tom do status). Lista mais densa: linhas 10% menores e gap maior entre elas; sem espaços vazios entre tarefa e subtarefas. Horários dos eventos sempre em duas linhas (HH:MM / HH:MM). Menu de botão-direito nos eventos do calendário (abrir, copiar link, transformar em tarefa, excluir). Janela "Transformar em tarefa" repaginada: status, múltiplos responsáveis com busca, toggle pra manter ou apagar o evento original. Apollo IA: campo de texto em branco puro, telas de Nova Tarefa e Configurações sobem do rodapé como a de Novo Evento, barras de rolagem escondidas. A IA agora consegue converter eventos ↔ tarefas com TODOS os campos de criação (anexos, menções, convidados, locais, links) e pede esclarecimento quando faltar status/responsável.]]></description>
+      <description><![CDATA[Apollo Review chega ao Apollo.
+
+• Review integrado: revise vídeos e imagens com comentários e marcações ancoradas no tempo, direto numa folha dentro do Apollo.
+• Review na web: quem usa o ClickUp pode revisar pelo navegador — sem precisar do Apollo. Os links VER REVIEW e REVISAR aparecem no comentário do ClickUp.
+• Comentários em tempo real: a análise aparece na tarefa assim que é postada, sem precisar reabrir.
+• Nome do arquivo no topo de cada review.
+• Tela de carregamento ao abrir o vídeo e fundo do player alinhado ao tema.
+• Lista de tarefas e popup: status em caixa alta com a cor do status.
+• Correções: foco do botão de fechar e área-fantasma das notificações internas.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.6.14/Apollo-1.6.14.zip"
-        sparkle:edSignature="wuZpkzMfse54g9qsSPfcmMfQbuEpCOZWenuQ8WQOdNg9xEloniw0E3hKfcj8hx5Yfpwslb5vGxUXG/fILSwXCA=="
-        length="38671030"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.0/Apollo-1.7.0.zip"
+        sparkle:edSignature="iULERliZr/b8dNmawcOPemMGu4KH9pFzAWG8bQvSFFsZ8Ig3aMdzfNuWALi6za5gNlO6QoOfUT546KsqInK6BQ=="
+        length="39518928"
         type="application/octet-stream" />
     </item>
   </channel>
