@@ -3324,37 +3324,26 @@ final class AppState: ObservableObject {
     /// rides on a reviewable file's comment (shown only in ClickUp).
     static let reviewOpenLinkText = "REVISAR"
 
-    /// Build a link that opens the hosted viewer on a RAW file (no review yet) —
-    /// the "REVISAR" entry point for ClickUp users. nil when unconfigured.
-    static func reviewOpenLink(mediaUrl: String, ext: String, title: String) -> String? {
+    /// Build a link that opens the hosted EDITOR on a RAW file (the "REVISAR"
+    /// entry point). Carries the ClickUp context (task/comment/uploader) so the
+    /// web editor's "Concluir" can post the review back through Apollo via the
+    /// daypanel://review-done callback — exactly like the native flow. nil when
+    /// unconfigured.
+    static func reviewOpenLink(mediaUrl: String, ext: String, title: String,
+                               taskId: String, commentId: String, uploaderId: Int?) -> String? {
         guard !reviewViewerBase.isEmpty, !mediaUrl.isEmpty else { return nil }
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~") // RFC 3986 unreserved
         func enc(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s }
-        return "\(reviewViewerBase)/?m=\(enc(mediaUrl))&x=\(enc(ext))&t=\(enc(title))"
+        var link = "\(reviewViewerBase)/?m=\(enc(mediaUrl))&x=\(enc(ext))&t=\(enc(title))"
+        link += "&task=\(enc(taskId))&cmt=\(enc(commentId))"
+        if let uploaderId { link += "&up=\(uploaderId)" }
+        return link
     }
 
     /// After reviewable files are attached to a comment, edit that comment to
     /// append "REVISAR" web-review links (one per reviewable file). Shown only in
     /// ClickUp — Apollo strips them since it has the native REVIEW button.
-    func appendRevisarLinks(commentId: String, text: String, mentionMemberIds: [Int],
-                            files: [(url: String, ext: String, title: String)]) async {
-        let members = mentionMemberIds.compactMap { id in availableMembers.first { $0.id == id } }
-        let links: [(label: String, url: String)] = files.compactMap { f in
-            guard ReviewLink.isReviewable(f.ext),
-                  let link = Self.reviewOpenLink(mediaUrl: f.url, ext: f.ext, title: f.title)
-            else { return nil }
-            return (label: Self.reviewOpenLinkText, url: link)
-        }
-        guard !links.isEmpty else { return }
-        do {
-            try await cuSvc.appendReviewLinksToComment(
-                commentId: commentId, text: text, mentionedMembers: members, links: links)
-        } catch {
-            Log.error("appendRevisarLinks: \(error)")
-        }
-    }
-
     func postReviewComment(taskId: String, commentId: String?, attachmentId: String,
                            text: String, mentionMemberIds: [Int],
                            reviewJSON: Data = Data()) async {
@@ -3471,6 +3460,38 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Post a comment that carries a "REVISAR" web-review link for each reviewable
+    /// file (built at CREATE time so ClickUp renders the clean label reliably —
+    /// editing after the fact via PUT silently fails). Returns an optimistic
+    /// CUComment (id from the POST). The REVISAR segment is ClickUp-only — Apollo
+    /// strips it (it has the native REVIEW button).
+    func postFileComment(on task: CUTask, text: String, mentionMemberIds: [Int],
+                         reviewableFiles: [(url: String, ext: String, title: String)]) async -> CUComment? {
+        let members = mentionMemberIds.compactMap { id in availableMembers.first { $0.id == id } }
+        let uploader = clickUpAuthService.userId
+        let links: [(label: String, url: String, title: String)] = reviewableFiles.compactMap { f in
+            guard let link = Self.reviewOpenLink(mediaUrl: f.url, ext: f.ext, title: f.title,
+                                                 taskId: task.id, commentId: "", uploaderId: uploader)
+            else { return nil }
+            return (label: Self.reviewOpenLinkText, url: link, title: f.title)
+        }
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? " " : text
+        Log.info("postFileComment: \(reviewableFiles.count) reviewable, \(links.count) link(s)")
+        do {
+            guard let id = try await cuSvc.addTaskComment(
+                taskId: task.id, text: body, mentionedMembers: members,
+                links: links, assignee: mentionMemberIds.first) else { return nil }
+            let m = availableMembers.first { $0.id == uploader }
+            return CUComment(id: id, text: body, date: Date(), userId: uploader,
+                             userName: m?.username, userEmail: m?.email, userColor: m?.color,
+                             initials: m?.initials, profilePic: m?.profilePicture,
+                             resolved: false, reactions: [], replyCount: 0, attachments: [])
+        } catch {
+            Log.error("postFileComment: \(error)")
+            return nil
+        }
+    }
+
     func deleteComment(_ comment: CUComment) async {
         do {
             try await cuSvc.deleteTaskComment(commentId: comment.id)
@@ -3491,13 +3512,14 @@ final class AppState: ObservableObject {
     /// — same UX as drag-and-drop in ClickUp's own web UI.
     /// Returns true on success. `onProgress` receives upload fraction
     /// 0.0…1.0 from a background queue.
-    /// Returns the uploaded file's ClickUp URL on success (nil on failure) so the
-    /// caller can build a "REVISAR" web-review link for reviewable files.
+    /// Returns the uploaded file's ClickUp URL + attachment id on success (nil on
+    /// failure) so the caller can build a "REVISAR" link AND embed the file as a
+    /// comment segment.
     @discardableResult
     func uploadCommentAttachment(for task: CUTask,
                                  fileURL: URL,
                                  commentId: String? = nil,
-                                 onProgress: (@Sendable (Double) -> Void)? = nil) async -> URL? {
+                                 onProgress: (@Sendable (Double) -> Void)? = nil) async -> (url: URL, id: String?)? {
         do {
             let url = try await cuSvc.uploadAttachment(taskId:    task.id,
                                                        fileURL:   fileURL,
@@ -3508,7 +3530,8 @@ final class AppState: ObservableObject {
                        subtitle: "Anexo enviado",
                        message:  fileURL.lastPathComponent,
                        taskId:   task.id)
-            return url
+            guard let url else { return nil }
+            return (url: url, id: cuSvc.lastUploadedAttachmentId)
         } catch {
             Log.error("uploadCommentAttachment: \(error)")
             notifyTask(.error,

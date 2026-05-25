@@ -48,21 +48,19 @@ struct CommentBodyView: View, Equatable {
         url.contains("apollo-review") || url.contains("?z=") || url.contains("?d=")
     }
 
-    /// Splits viewer links off the comment text. Two kinds, both stripped from
-    /// the displayed text (Apollo renders its own affordances):
-    ///   • VER REVIEW (`?z=`/`?d=`) → returns a `source` so the body shows the
-    ///     native "Ver review" button.
-    ///   • REVISAR (`?m=`) → no button (the attachment already has REVIEW); the
-    ///     link is just removed so the raw markdown doesn't leak into Apollo.
-    /// Label/case-agnostic; also handles the legacy plain + hidden-marker forms.
+    /// Splits the review block off the comment text. The block is always the tail
+    /// "▶ …" appended to the body:
+    ///   • VER REVIEW (`?z=`/`?d=`) → a `source` so the body shows the "Ver
+    ///     review" button.
+    ///   • REVISAR (`?m=`) → just stripped; the file itself renders as a normal
+    ///     comment attachment (merged from its upload event), so Apollo shows the
+    ///     embedded card + native REVIEW while ClickUp shows the raw link.
     static func extractReview(_ text: String) -> (clean: String, source: ReviewSource?) {
-        // 1) Markdown links whose URL points at the viewer.
         if let re = try? NSRegularExpression(pattern: #"\[[^\]]*\]\(([^)]+)\)"#) {
             let ns = text as NSString
             let viewer = re.matches(in: text, range: NSRange(location: 0, length: ns.length))
                 .filter { isReviewLink(ns.substring(with: $0.range(at: 1))) }
             if !viewer.isEmpty {
-                // A button only for a real review payload (?z=/?d=), not ?m=.
                 var source: ReviewSource? = nil
                 for m in viewer {
                     let url = ns.substring(with: m.range(at: 1))
@@ -70,21 +68,20 @@ struct CommentBodyView: View, Equatable {
                         source = reviewSource(fromLink: url); break
                     }
                 }
-                let mut = NSMutableString(string: text)
-                for m in viewer.reversed() { mut.replaceCharacters(in: m.range, with: "") }
-                let clean = (mut as String)
-                    .replacingOccurrences(of: "▶", with: "") // strip the marker glyph
+                // The "▶ …" review block is appended at the END — cut there so the
+                // link AND the trailing filename text both drop out of display.
+                let clean = (text.firstIndex(of: "▶").map { String(text[..<$0]) } ?? text)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 return (clean, source)
             }
         }
-        // 2) Legacy plain "▶ Ver review: <url>".
+        // Legacy plain "▶ Ver review: <url>".
         if let r = text.range(of: AppState.reviewLinkLabel) {
             let linkStr = String(text[r.upperBound...].prefix { !$0.isWhitespace })
             let clean = String(text[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
             return (clean, reviewSource(fromLink: linkStr))
         }
-        // 3) Legacy hidden marker "⟦apollo-review⟧<url>".
+        // Legacy hidden marker "⟦apollo-review⟧<url>".
         if let r = text.range(of: AppState.reviewMarker) {
             let urlStr = String(text[r.upperBound...].prefix { !$0.isWhitespace })
             let clean = String(text[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)

@@ -852,14 +852,22 @@ final class ClickUpService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, _) = try await URLSession.shared.data(for: req)
-        // The POST response carries id/date but not the full user object,
-        // so re-fetch the list to get the canonical record back.
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let cid = json["id"] as? String {
-            let comments = try await getTaskComments(taskId: taskId)
-            return comments.first { $0.id == cid }
+        // The POST response carries id/date but not the full user object, so
+        // re-fetch for the canonical record. ClickUp's read lags a beat, so if
+        // the re-fetch misses, fall back to a minimal record built from the POST
+        // response — callers rely on a non-nil id to anchor uploads / edit it.
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let cid = json["id"] as? String else { return nil }
+        if let comments = try? await getTaskComments(taskId: taskId),
+           let found = comments.first(where: { $0.id == cid }) {
+            return found
         }
-        return nil
+        let dateMs = (json["date"] as? String).flatMap(Double.init)
+            ?? (json["date"] as? Double) ?? (Date().timeIntervalSince1970 * 1000)
+        return CUComment(id: cid, text: text, date: Date(timeIntervalSince1970: dateMs / 1000),
+                         userId: nil, userName: nil, userEmail: nil, userColor: nil,
+                         initials: nil, profilePic: nil, resolved: false,
+                         reactions: [], replyCount: 0, attachments: [])
     }
 
     /// Post a top-level comment from a pre-built `comment` segment array (e.g.
@@ -878,6 +886,33 @@ final class ClickUpService {
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, _) = try await URLSession.shared.data(for: req)
         return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String
+    }
+
+    /// Create a comment with text + mentions, optional embedded file attachments,
+    /// AND appended labeled-link segments (e.g. "REVISAR"). Built at CREATE time
+    /// (reliable — a PUT edit silently fails). The attachment-segment embed is
+    /// best-effort: if it produces no comment, we retry WITHOUT it so the
+    /// REVISAR link always lands. Returns the new comment's id.
+    func addTaskComment(taskId: String, text: String, mentionedMembers: [CUMember],
+                        attachmentIds: [String] = [],
+                        links: [(label: String, url: String, title: String)], assignee: Int? = nil) async throws -> String? {
+        var base = Self.buildCommentSegments(text: text, members: mentionedMembers)
+        for l in links {
+            base.append(["text": "\n▶\u{00A0}"])
+            base.append(["text": l.label, "attributes": ["link": l.url]]) // only the word is linked
+            if !l.title.isEmpty { base.append(["text": " \(l.title)"]) }    // filename as plain text
+        }
+        if !attachmentIds.isEmpty {
+            var withAtt = base
+            for aid in attachmentIds {
+                withAtt.append(["type": "attachment", "attachment_id": aid])
+            }
+            if let id = try? await addTaskComment(taskId: taskId, segments: withAtt, assignee: assignee) {
+                return id
+            }
+            Log.error("addTaskComment: embed-attachment create failed; retrying without embed")
+        }
+        return try await addTaskComment(taskId: taskId, segments: base, assignee: assignee)
     }
 
     /// Splits `text` into ClickUp's structured comment-segment
@@ -1035,28 +1070,6 @@ final class ClickUpService {
         return nil
     }
 
-    /// Rewrite an existing comment, preserving its text + mentions and APPENDING
-    /// labeled-link segments (e.g. "REVISAR"). Used after a reviewable file is
-    /// attached so ClickUp users get a web-review link; Apollo hides this link
-    /// since it has the native REVIEW button on the attachment.
-    func appendReviewLinksToComment(commentId: String, text: String,
-                                    mentionedMembers: [CUMember],
-                                    links: [(label: String, url: String)]) async throws {
-        guard let token else { throw CUError.notConfigured }
-        guard !links.isEmpty else { return }
-        var segments = Self.buildCommentSegments(text: text, members: mentionedMembers)
-        for l in links {
-            segments.append(["text": "\n▶\u{00A0}"])
-            segments.append(["text": l.label, "attributes": ["link": l.url]])
-        }
-        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))")!)
-        req.httpMethod = "PUT"
-        req.setValue(token,             forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["comment": segments])
-        _ = try await URLSession.shared.data(for: req)
-    }
-
     // MARK: - Attachments
     //
     // ClickUp accepts any file type via multipart upload to
@@ -1134,10 +1147,16 @@ final class ClickUpService {
                                                            delegate: delegate)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
+        lastUploadedAttachmentId = json["id"] as? String
         if let s = json["url"]         as? String, let u = URL(string: s) { return u }
         if let s = json["url_w_query"] as? String, let u = URL(string: s) { return u }
         return nil
     }
+
+    /// Attachment id from the most recent `uploadAttachment` call. Lets the
+    /// comment flow embed the file as a comment segment (the upload + the read
+    /// happen back-to-back on the same actor, so this is safe).
+    private(set) var lastUploadedAttachmentId: String?
 
     /// Flattens ClickUp's markdown `[label](url)` link syntax into a
     /// form the RichTextEditor (which relies on `NSDataDetector` for

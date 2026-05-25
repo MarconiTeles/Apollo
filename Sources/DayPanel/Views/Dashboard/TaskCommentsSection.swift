@@ -190,13 +190,16 @@ struct TaskCommentsSection: View, Equatable {
             // attachments) have no actor and never merge.
             guard let actorId = event.actor?.id else { continue }
 
-            // Latest same-user comment posted at or before the
-            // upload, within mergeWindow.
-            let candidate = sortedComments.last { c in
-                c.userId == actorId
-                  && c.date <= event.date
-                  && event.date.timeIntervalSince(c.date) <= mergeWindow
-            }
+            // Closest same-user comment within ±mergeWindow. Bidirectional
+            // because the file may be uploaded just BEFORE its comment (the
+            // review flow uploads first, then creates the "▶ REVISAR" comment)
+            // OR just after (the legacy compose-then-attach flow).
+            let candidate = sortedComments
+                .filter { c in
+                    c.userId == actorId
+                      && abs(c.date.timeIntervalSince(event.date)) <= mergeWindow
+                }
+                .min { abs($0.date.timeIntervalSince(event.date)) < abs($1.date.timeIntervalSince(event.date)) }
             if let target = candidate {
                 extrasByComment[target.id, default: []].append(att)
                 consumedEventIds.insert(event.id)
@@ -336,6 +339,12 @@ struct TaskCommentsSection: View, Equatable {
             if comments.isEmpty && events.isEmpty {
                 Task { await refresh() }
             }
+        }
+        // Refresh when Apollo regains focus — catches comments posted elsewhere
+        // while the task stayed open (e.g. a review submitted from the web
+        // editor in the browser). No manual refresh needed.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await refresh() }
         }
         // Auto-reload when a review was just posted to THIS task (no manual
         // refresh) — so the review comment + its "Ver review" appear at once.
@@ -1171,81 +1180,53 @@ struct TaskCommentsSection: View, Equatable {
         }
 
         await MainActor.run { posting = true }
-
-        // ── 1. Post the comment ────────────────────────────
-        // If the user only attached files (no typed message),
-        // ClickUp still expects a non-empty `comment_text`. A
-        // single space is the smallest value that keeps the
-        // bubble rendering essentially "files only".
         let commentBody = txt.isEmpty ? " " : txt
-        let posted = await appState.postComment(
-            on: task,
-            text: commentBody,
-            mentionedMemberIds: liveMentions
-        )
 
-        // ── 2. Upload pending attachments anchored to the new
-        //       comment, so they land inside the same bubble.
-        //       If the post failed we still try the uploads —
-        //       they'll appear as plain task attachments rather
-        //       than orphaning the files the user dragged in.
+        // ── 1. Upload files first → URLs. The "▶ REVISAR <file>" link is baked
+        //       into the comment at CREATE time (a PUT edit silently fails). The
+        //       file rides as a normal task attachment; Apollo reconstructs the
+        //       embedded card from the REVISAR link, ClickUp shows the link.
+        var uploaded: [(url: String, ext: String, title: String)] = []
         if !files.isEmpty {
             withAnimation(.easeInOut(duration: 0.18)) {
-                uploading      = true
-                uploadTotal    = files.count
-                uploadIndex    = 0
-                uploadProgress = 0
+                uploading = true; uploadTotal = files.count; uploadIndex = 0; uploadProgress = 0
             }
-            var uploaded: [(url: String, ext: String, title: String)] = []
             for (i, url) in files.enumerated() {
                 await MainActor.run {
-                    uploadFilename = url.lastPathComponent
-                    uploadIndex    = i + 1
-                    uploadProgress = 0
+                    uploadFilename = url.lastPathComponent; uploadIndex = i + 1; uploadProgress = 0
                 }
-                let resultURL = await appState.uploadCommentAttachment(
-                    for:       task,
-                    fileURL:   url,
-                    commentId: posted?.id
-                ) { p in
+                let result = await appState.uploadCommentAttachment(for: task, fileURL: url) { p in
                     Task { @MainActor in
                         if abs(p - uploadProgress) > 0.005 || p >= 1.0 {
-                            withAnimation(.linear(duration: 0.1)) {
-                                uploadProgress = p
-                            }
+                            withAnimation(.linear(duration: 0.1)) { uploadProgress = p }
                         }
                     }
                 }
-                if let resultURL {
-                    uploaded.append((url: resultURL.absoluteString,
+                if let result {
+                    uploaded.append((url: result.url.absoluteString,
                                      ext: url.pathExtension.lowercased(),
                                      title: url.lastPathComponent))
                 }
             }
             withAnimation(.easeInOut(duration: 0.25)) {
-                uploading      = false
-                uploadFilename = nil
-                uploadProgress = 0
-            }
-            // Add a "REVISAR" web-review link to the comment for each reviewable
-            // file (ClickUp-only; Apollo shows the native REVIEW button instead).
-            if let posted, !uploaded.isEmpty {
-                await appState.appendRevisarLinks(
-                    commentId: posted.id, text: commentBody,
-                    mentionMemberIds: liveMentions, files: uploaded)
+                uploading = false; uploadFilename = nil; uploadProgress = 0
             }
         }
 
-        // ── 3. Reset composer + reconcile the timeline ─────
-        // If `posted` is non-nil we trust it as the canonical
-        // record; otherwise we refresh from the server to pull
-        // back whatever did land (the upload may have created
-        // its own activity entries even if the comment POST
-        // failed).
+        // ── 2. Create the comment. With reviewable files, bake in "▶ REVISAR
+        //       <file>" (ClickUp-only; Apollo turns it into the embedded card).
+        let reviewable = uploaded.filter { ReviewLink.isReviewable($0.ext) }
+        let posted: CUComment?
+        if reviewable.isEmpty {
+            posted = await appState.postComment(on: task, text: commentBody, mentionedMemberIds: liveMentions)
+        } else {
+            posted = await appState.postFileComment(
+                on: task, text: commentBody, mentionMemberIds: liveMentions, reviewableFiles: reviewable)
+        }
+
+        // ── 3. Reset composer + reconcile the timeline.
         if posted != nil && files.isEmpty {
-            await MainActor.run {
-                if let p = posted { self.comments.append(p) }
-            }
+            await MainActor.run { if let p = posted { self.comments.append(p) } }
         } else {
             await refresh()
         }
