@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import AppKit
 import SwiftUI   // for withAnimation in openNotificationTarget
+import ReviewKit // ReviewHandoff (inline review payload codec)
 
 final class AppState: ObservableObject {
 
@@ -3288,6 +3289,9 @@ final class AppState: ObservableObject {
     /// comments section can auto-expand that thread (otherwise the analysis sits
     /// collapsed behind "Responder · N"). nil when posted as a top-level comment.
     var reviewPostParentId: String?
+    /// The freshly posted review comment, for an OPTIMISTIC insert into the
+    /// section (ClickUp's read endpoints lag a beat behind the write).
+    var reviewPostedReply: CUComment?
 
     /// Legacy hidden marker prefixing the review-JSON URL (older comments).
     /// Still parsed for back-compat; new comments use the visible link below.
@@ -3299,19 +3303,56 @@ final class AppState: ObservableObject {
     /// still reopens it natively, but ClickUp-web users only get a download.
     static let reviewViewerBase = "https://marconiteles.github.io/apollo-review"
 
-    /// Visible label that prefixes the review link in a comment. Apollo strips
-    /// this line and renders a native "Ver review" button; ClickUp web/mobile
-    /// users get the clickable link (to the hosted viewer when configured).
+    /// Legacy plain-text label (older comments: "▶ Ver review: <url>"). Still
+    /// parsed for back-compat; new comments use a compact markdown link.
     static let reviewLinkLabel = "▶ Ver review: "
 
-    /// Build the link that goes in the comment: the hosted viewer (carrying the
-    /// JSON URL in `?d=`) when configured, else the raw JSON URL.
-    static func reviewLink(jsonURL: String) -> String {
-        guard !reviewViewerBase.isEmpty else { return jsonURL }
+    /// Visible label for the review link in the ClickUp comment (uppercase).
+    static let reviewLinkText = "VER REVIEW"
+
+    /// Build the viewer link carrying the WHOLE review INLINE (`?z=<payload>`),
+    /// so the page needs no network fetch — the ClickUp attachment CDN doesn't
+    /// send CORS headers, so a `?d=<jsonURL>` fetch fails in the browser. The
+    /// payload rides as gzip+base64url (already URL-safe). nil when the viewer
+    /// base isn't configured or there's no review data.
+    static func reviewLink(reviewJSON: Data) -> String? {
+        guard !reviewViewerBase.isEmpty, !reviewJSON.isEmpty else { return nil }
+        return "\(reviewViewerBase)/?z=\(ReviewHandoff.encode(reviewJSON))"
+    }
+
+    /// Visible label for the "open this file in the web review tool" link that
+    /// rides on a reviewable file's comment (shown only in ClickUp).
+    static let reviewOpenLinkText = "REVISAR"
+
+    /// Build a link that opens the hosted viewer on a RAW file (no review yet) —
+    /// the "REVISAR" entry point for ClickUp users. nil when unconfigured.
+    static func reviewOpenLink(mediaUrl: String, ext: String, title: String) -> String? {
+        guard !reviewViewerBase.isEmpty, !mediaUrl.isEmpty else { return nil }
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~") // RFC 3986 unreserved
-        let enc = jsonURL.addingPercentEncoding(withAllowedCharacters: allowed) ?? jsonURL
-        return "\(reviewViewerBase)/?d=\(enc)"
+        func enc(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s }
+        return "\(reviewViewerBase)/?m=\(enc(mediaUrl))&x=\(enc(ext))&t=\(enc(title))"
+    }
+
+    /// After reviewable files are attached to a comment, edit that comment to
+    /// append "REVISAR" web-review links (one per reviewable file). Shown only in
+    /// ClickUp — Apollo strips them since it has the native REVIEW button.
+    func appendRevisarLinks(commentId: String, text: String, mentionMemberIds: [Int],
+                            files: [(url: String, ext: String, title: String)]) async {
+        let members = mentionMemberIds.compactMap { id in availableMembers.first { $0.id == id } }
+        let links: [(label: String, url: String)] = files.compactMap { f in
+            guard ReviewLink.isReviewable(f.ext),
+                  let link = Self.reviewOpenLink(mediaUrl: f.url, ext: f.ext, title: f.title)
+            else { return nil }
+            return (label: Self.reviewOpenLinkText, url: link)
+        }
+        guard !links.isEmpty else { return }
+        do {
+            try await cuSvc.appendReviewLinksToComment(
+                commentId: commentId, text: text, mentionedMembers: members, links: links)
+        } catch {
+            Log.error("appendRevisarLinks: \(error)")
+        }
     }
 
     func postReviewComment(taskId: String, commentId: String?, attachmentId: String,
@@ -3324,27 +3365,25 @@ final class AppState: ObservableObject {
         let prefix = members.map { "@\($0.username)" }.joined(separator: " ")
         let assignee = mentionMemberIds.first
 
-        // 1. Upload the full review JSON to the task first → get its URL. We
-        //    embed that URL as a hidden marker in the comment text (ClickUp does
-        //    NOT return comment-anchored attachments to us, so a task upload +
-        //    text marker is the reliable way to link "Ver review" to the comment).
-        var reviewURL: String?
-        if !reviewJSON.isEmpty {
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("apollo-review-\(attachmentId).json")
-            try? reviewJSON.write(to: tmp)
-            reviewURL = (try? await cuSvc.uploadAttachment(taskId: taskId, fileURL: tmp))?.absoluteString
+        // 1. Build the comment as a RICH `comment` segment array: the analysis
+        //    text + a labeled "VER REVIEW" hyperlink segment that hides the long
+        //    inline-payload URL (?z=…). The whole review rides in the link, so
+        //    there's no upload and no CORS-blocked fetch in the web viewer.
+        let bodyText = prefix.isEmpty ? text : "\(prefix)\n\(text)"
+        guard !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let link = Self.reviewLink(reviewJSON: reviewJSON)
+        var segments: [[String: Any]] = [["text": bodyText]]
+        if let link {
+            // The "▶ " marker is a separate text segment so the linked label is
+            // exactly `reviewLinkText` (extractReview matches `[VER REVIEW](…)`).
+            // Non-breaking space — ClickUp trims a normal trailing space.
+            segments = [
+                ["text": bodyText + "\n\n▶\u{00A0}"],
+                ["text": Self.reviewLinkText, "attributes": ["link": link]],
+            ]
         }
 
-        // 2. Build the comment text: @mention prefix + summary + visible link.
-        var full = prefix.isEmpty ? text : "\(prefix)\n\(text)"
-        if let reviewURL {
-            full += "\n\n\(Self.reviewLinkLabel)\(Self.reviewLink(jsonURL: reviewURL))"
-        }
-        full = full.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !full.isEmpty else { return }
-
-        // 3. Thread under the video's comment when there is one.
+        // 2. Thread under the video's comment when there is one.
         var target = commentId
         if target?.isEmpty ?? true {
             if let comments = try? await cuSvc.getTaskComments(taskId: taskId) {
@@ -3355,22 +3394,42 @@ final class AppState: ObservableObject {
         }
 
         let postedAsReply = !(target?.isEmpty ?? true)
+        var postedId: String?
         do {
             if let target, !target.isEmpty {
-                _ = try await cuSvc.addCommentReply(commentId: target, text: full, assignee: assignee)
+                postedId = try await cuSvc.addCommentReply(commentId: target, segments: segments, assignee: assignee)
             } else {
-                _ = try await cuSvc.addTaskComment(taskId: taskId, text: full,
-                                                   mentionedMembers: [], assignee: assignee)
+                postedId = try await cuSvc.addTaskComment(taskId: taskId, segments: segments, assignee: assignee)
             }
         } catch {
             Log.error("postReviewComment: \(error)")
         }
-        // Auto-reload the open comments section — no manual refresh. When posted
-        // as a reply, also hand over the parent id so the section auto-expands
-        // that thread (otherwise the analysis stays hidden behind "Responder").
+
+        // Build an OPTIMISTIC comment locally from the POST-response id + the
+        // connected user, so the section shows it INSTANTLY (ClickUp's read
+        // endpoints lag a beat). The real id means the later refresh dedups it.
+        var posted: CUComment?
+        if let postedId {
+            let me = clickUpAuthService.userId
+            let meMember = availableMembers.first { $0.id == me }
+            let displayText = link.map { "\(bodyText)\n\n▶\u{00A0}[\(Self.reviewLinkText)](\($0))" } ?? bodyText
+            posted = CUComment(
+                id: postedId, text: displayText, date: Date(),
+                userId: me, userName: meMember?.username, userEmail: meMember?.email,
+                userColor: meMember?.color, initials: meMember?.initials,
+                profilePic: meMember?.profilePicture,
+                resolved: false, reactions: [], replyCount: 0, attachments: []
+            )
+        }
+        // Auto-reload the open comments section — no manual refresh. Hand over the
+        // parent id (to auto-expand the thread) AND the freshly posted comment so
+        // the section can insert it OPTIMISTICALLY — ClickUp's read endpoints lag
+        // a second or two behind a write, so an immediate refresh alone often
+        // misses the new reply.
         await MainActor.run {
             reviewPostTaskId = taskId
             reviewPostParentId = postedAsReply ? target : nil
+            reviewPostedReply = posted
             reviewPostTick &+= 1
         }
     }
@@ -3432,21 +3491,24 @@ final class AppState: ObservableObject {
     /// — same UX as drag-and-drop in ClickUp's own web UI.
     /// Returns true on success. `onProgress` receives upload fraction
     /// 0.0…1.0 from a background queue.
+    /// Returns the uploaded file's ClickUp URL on success (nil on failure) so the
+    /// caller can build a "REVISAR" web-review link for reviewable files.
+    @discardableResult
     func uploadCommentAttachment(for task: CUTask,
                                  fileURL: URL,
                                  commentId: String? = nil,
-                                 onProgress: (@Sendable (Double) -> Void)? = nil) async -> Bool {
+                                 onProgress: (@Sendable (Double) -> Void)? = nil) async -> URL? {
         do {
-            _ = try await cuSvc.uploadAttachment(taskId:    task.id,
-                                                 fileURL:   fileURL,
-                                                 commentId: commentId,
-                                                 onProgress: onProgress)
+            let url = try await cuSvc.uploadAttachment(taskId:    task.id,
+                                                       fileURL:   fileURL,
+                                                       commentId: commentId,
+                                                       onProgress: onProgress)
             notifyTask(.success,
                        title:    task.title,
                        subtitle: "Anexo enviado",
                        message:  fileURL.lastPathComponent,
                        taskId:   task.id)
-            return true
+            return url
         } catch {
             Log.error("uploadCommentAttachment: \(error)")
             notifyTask(.error,
@@ -3454,7 +3516,7 @@ final class AppState: ObservableObject {
                        subtitle: "Falha no anexo",
                        message:  fileURL.lastPathComponent,
                        taskId:   task.id)
-            return false
+            return nil
         }
     }
 

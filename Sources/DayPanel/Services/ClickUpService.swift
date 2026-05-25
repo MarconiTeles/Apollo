@@ -862,6 +862,24 @@ final class ClickUpService {
         return nil
     }
 
+    /// Post a top-level comment from a pre-built `comment` segment array (e.g.
+    /// text + a labeled-link segment). Used by the review flow's top-level
+    /// fallback so the "Ver review" hyperlink renders cleanly. Returns the new
+    /// comment's id from the POST response (no re-fetch) for an instant insert.
+    func addTaskComment(taskId: String, segments: [[String: Any]],
+                        assignee: Int? = nil, notifyAll: Bool = false) async throws -> String? {
+        guard let token else { throw CUError.notConfigured }
+        var body: [String: Any] = ["comment": segments, "notify_all": notifyAll]
+        if let assignee { body["assignee"] = assignee }
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(taskId))/comment")!)
+        req.httpMethod = "POST"
+        req.setValue(token,             forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, _) = try await URLSession.shared.data(for: req)
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String
+    }
+
     /// Splits `text` into ClickUp's structured comment-segment
     /// array. Each `@username` substring whose username matches
     /// a resolved member becomes a `type: "tag"` segment with
@@ -978,12 +996,31 @@ final class ClickUpService {
     @discardableResult
     func addCommentReply(commentId: String, text: String,
                          assignee: Int? = nil) async throws -> CUComment? {
+        try await postReply(commentId: commentId,
+                            body: { var b: [String: Any] = ["comment_text": text, "notify_all": false]
+                                    if let assignee { b["assignee"] = assignee }; return b }())
+    }
+
+    /// Reply with a RICH `comment` segment array (e.g. a labeled hyperlink:
+    /// `{"text":"Ver review","attributes":{"link":"…"}}`) — gives a clean labeled
+    /// link in a THREADED reply. Returns the new comment's id straight from the
+    /// POST response (no lagging re-fetch), so the caller can show it instantly.
+    func addCommentReply(commentId: String, segments: [[String: Any]],
+                         assignee: Int? = nil) async throws -> String? {
         guard let token else { throw CUError.notConfigured }
-        // The reply endpoint only documents `comment_text` (+ assignee /
-        // notify_all) — the structured `comment` segment array is NOT accepted
-        // here, so we use plain text. `assignee` notifies the target user.
-        var body: [String: Any] = ["comment_text": text, "notify_all": false]
+        var body: [String: Any] = ["comment": segments, "notify_all": false]
         if let assignee { body["assignee"] = assignee }
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))/reply")!)
+        req.httpMethod = "POST"
+        req.setValue(token,             forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, _) = try await URLSession.shared.data(for: req)
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String
+    }
+
+    private func postReply(commentId: String, body: [String: Any]) async throws -> CUComment? {
+        guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))/reply")!)
         req.httpMethod = "POST"
         req.setValue(token,             forHTTPHeaderField: "Authorization")
@@ -996,6 +1033,28 @@ final class ClickUpService {
             return replies.first { $0.id == cid }
         }
         return nil
+    }
+
+    /// Rewrite an existing comment, preserving its text + mentions and APPENDING
+    /// labeled-link segments (e.g. "REVISAR"). Used after a reviewable file is
+    /// attached so ClickUp users get a web-review link; Apollo hides this link
+    /// since it has the native REVIEW button on the attachment.
+    func appendReviewLinksToComment(commentId: String, text: String,
+                                    mentionedMembers: [CUMember],
+                                    links: [(label: String, url: String)]) async throws {
+        guard let token else { throw CUError.notConfigured }
+        guard !links.isEmpty else { return }
+        var segments = Self.buildCommentSegments(text: text, members: mentionedMembers)
+        for l in links {
+            segments.append(["text": "\n▶\u{00A0}"])
+            segments.append(["text": l.label, "attributes": ["link": l.url]])
+        }
+        var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))")!)
+        req.httpMethod = "PUT"
+        req.setValue(token,             forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["comment": segments])
+        _ = try await URLSession.shared.data(for: req)
     }
 
     // MARK: - Attachments
@@ -2077,8 +2136,27 @@ final class ClickUpService {
             // as a structured `comment` array of segments. Concatenate the
             // segment texts when present.
             var text = item["comment_text"] as? String ?? ""
-            if text.isEmpty, let segs = item["comment"] as? [[String: Any]] {
-                text = segs.compactMap { $0["text"] as? String }.joined()
+            if let segs = item["comment"] as? [[String: Any]] {
+                // A review's "Ver review" link lives in a segment's
+                // `attributes.link` — `comment_text` DROPS the URL, so when a
+                // review link is present we rebuild from segments and re-encode
+                // that link as markdown `[label](url)` (CommentBodyView's
+                // extractReview recovers it). Other link segments are left as
+                // plain text, exactly as before (no regression).
+                let hasReviewLink = segs.contains { seg in
+                    guard let l = (seg["attributes"] as? [String: Any])?["link"] as? String else { return false }
+                    return l.contains("apollo-review") || l.contains("?z=")
+                }
+                if text.isEmpty || hasReviewLink {
+                    text = segs.map { seg -> String in
+                        let t = seg["text"] as? String ?? ""
+                        if let l = (seg["attributes"] as? [String: Any])?["link"] as? String, !l.isEmpty,
+                           (l.contains("apollo-review") || l.contains("?z=")) {
+                            return "[\(t)](\(l))"
+                        }
+                        return t
+                    }.joined()
+                }
             }
 
             // Date — ClickUp returns ms-since-epoch as a string

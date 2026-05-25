@@ -21,11 +21,25 @@ final class ReviewPresenter: ObservableObject {
         request = ReviewRequest(params: params)
     }
 
-    /// Re-open a saved review from its ClickUp JSON attachment.
+    /// Re-open a saved review from inline JSON data (the `?z=` payload decoded
+    /// from the comment link) — no download, works offline.
+    func presentSaved(jsonData: Data) {
+        request = ReviewRequest(savedJSON: jsonData)
+    }
+
+    /// Re-open a saved review from a JSON URL (legacy comments that linked an
+    /// uploaded ClickUp attachment). Apollo can fetch it directly (no CORS).
     func presentSaved(jsonURL: URL) {
         Task {
             guard let (data, _) = try? await URLSession.shared.data(from: jsonURL) else { return }
             await MainActor.run { self.request = ReviewRequest(savedJSON: data) }
         }
     }
+}
+
+/// Where a comment's "Ver review" payload comes from: inline data (new, `?z=`)
+/// or a JSON URL (legacy). Resolved by CommentBodyView.extractReview.
+enum ReviewSource: Equatable {
+    case data(Data)
+    case url(URL)
 }

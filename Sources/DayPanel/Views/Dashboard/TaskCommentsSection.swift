@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 
 // Comments thread for a single ClickUp task. Modeled after ClickUp's
@@ -39,6 +40,7 @@ struct TaskCommentsSection: View, Equatable {
         lhs.task == rhs.task && lhs.composerAtBottom == rhs.composerAtBottom
     }
 
+    @State private var lastReviewTick   = -1
     @State private var comments:        [CUComment] = []
     /// Typed activity events (status changes, file uploads,
     /// assignee adds, etc.) interleaved with comments to form
@@ -337,15 +339,36 @@ struct TaskCommentsSection: View, Equatable {
         }
         // Auto-reload when a review was just posted to THIS task (no manual
         // refresh) — so the review comment + its "Ver review" appear at once.
-        .onChange(of: appState.reviewPostTick) { _, _ in
+        // `.onReceive` (NOT `.onChange`): `appState` is a plain reference here,
+        // not an observed object, so its @Published changes never re-evaluate
+        // this body — onChange would never fire. Subscribing to the publisher
+        // directly works regardless.
+        .onReceive(appState.$reviewPostTick) { tick in
+            guard tick != lastReviewTick else { return } // skip the initial emit
+            lastReviewTick = tick
             guard appState.reviewPostTaskId == task.id else { return }
             let parent = appState.reviewPostParentId
+            let posted = appState.reviewPostedReply
             Task {
-                // Expand the parent thread BEFORE refreshing so refresh() loads
-                // its replies — otherwise the review analysis sits collapsed.
-                if let parent {
-                    await MainActor.run { _ = expandedReplies.insert(parent) }
+                // OPTIMISTIC: show the just-posted review immediately, before the
+                // server catches up. refresh() merges (never drops) these below.
+                await MainActor.run {
+                    if let parent {
+                        _ = expandedReplies.insert(parent)
+                        if let posted {
+                            var arr = repliesByParent[parent] ?? []
+                            if !arr.contains(where: { $0.id == posted.id }) {
+                                arr.append(posted)
+                                repliesByParent[parent] = arr.sorted { $0.date < $1.date }
+                            }
+                        }
+                    } else if let posted, !comments.contains(where: { $0.id == posted.id }) {
+                        comments = (comments + [posted]).sorted { $0.date < $1.date }
+                    }
                 }
+                // Reconcile with the server, retrying once to beat its lag.
+                await refresh()
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
                 await refresh()
             }
         }
@@ -1102,9 +1125,17 @@ struct TaskCommentsSection: View, Equatable {
             await MainActor.run { expandedReplies.formUnion(parentsWithReplies) }
         }
         // Re-fetch any expanded threads so reaction/reply counts stay live.
+        // MERGE rather than overwrite: keep any local-only (optimistically
+        // inserted) replies the server hasn't propagated yet — once it does,
+        // the same id arrives and the server copy wins.
         for parentId in expandedReplies {
             let r = await appState.loadReplies(to: parentId)
-            await MainActor.run { repliesByParent[parentId] = r.sorted { $0.date < $1.date } }
+            await MainActor.run {
+                var byId: [String: CUComment] = [:]
+                for c in (repliesByParent[parentId] ?? []) { byId[c.id] = c }
+                for c in r { byId[c.id] = c } // server copy wins on id match
+                repliesByParent[parentId] = byId.values.sorted { $0.date < $1.date }
+            }
         }
     }
 
@@ -1165,13 +1196,14 @@ struct TaskCommentsSection: View, Equatable {
                 uploadIndex    = 0
                 uploadProgress = 0
             }
+            var uploaded: [(url: String, ext: String, title: String)] = []
             for (i, url) in files.enumerated() {
                 await MainActor.run {
                     uploadFilename = url.lastPathComponent
                     uploadIndex    = i + 1
                     uploadProgress = 0
                 }
-                _ = await appState.uploadCommentAttachment(
+                let resultURL = await appState.uploadCommentAttachment(
                     for:       task,
                     fileURL:   url,
                     commentId: posted?.id
@@ -1184,11 +1216,23 @@ struct TaskCommentsSection: View, Equatable {
                         }
                     }
                 }
+                if let resultURL {
+                    uploaded.append((url: resultURL.absoluteString,
+                                     ext: url.pathExtension.lowercased(),
+                                     title: url.lastPathComponent))
+                }
             }
             withAnimation(.easeInOut(duration: 0.25)) {
                 uploading      = false
                 uploadFilename = nil
                 uploadProgress = 0
+            }
+            // Add a "REVISAR" web-review link to the comment for each reviewable
+            // file (ClickUp-only; Apollo shows the native REVIEW button instead).
+            if let posted, !uploaded.isEmpty {
+                await appState.appendRevisarLinks(
+                    commentId: posted.id, text: commentBody,
+                    mentionMemberIds: liveMentions, files: uploaded)
             }
         }
 

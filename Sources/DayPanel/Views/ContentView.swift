@@ -532,9 +532,12 @@ struct ContentView: View {
                             insertion: .offset(y: -8).combined(with: .opacity),
                             removal:   .opacity
                         ))
-                        .animation(.spring(duration: 0.4, bounce: 0.22),
-                                   value: bellPillNotif?.id)
-                        .allowsHitTesting(true)
+                        // Animation is driven ONLY by `withAnimation` at the
+                        // mutation sites (insert in the toast handler, remove in
+                        // collapseBellPill). A `.animation(value:)` modifier here
+                        // too double-drives the change and makes the removal
+                        // transition fail to complete — leaving an invisible
+                        // (opacity-0) but hit-testable ghost over the bell/toolbar.
                         .zIndex(1250)
                 }
             }
@@ -1232,7 +1235,9 @@ struct ContentView: View {
             .onChange(of: appState.toastQueue) { _, queue in
                 guard let next = queue.last else { return }
                 bellPillTask?.cancel()
-                bellPillNotif = next
+                withAnimation(.spring(duration: 0.4, bounce: 0.22)) {
+                    bellPillNotif = next
+                }
                 bellPillTask = Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 4_500_000_000)
                     if !Task.isCancelled { collapseBellPill() }

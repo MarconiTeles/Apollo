@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ReviewKit // ReviewHandoff (decode inline review payload from the link)
 
 // Renders a ClickUp comment body and converts URLs into typed attachment
 // cards (image / video / audio / generic file). Each card has a "open in
@@ -37,36 +38,77 @@ struct CommentBodyView: View, Equatable {
     var reviewActorName: String = "Revisor"
     /// The comment this body belongs to — so the review posts as a REPLY to it.
     var reviewCommentId: String? = nil
-    /// Parsed from a hidden marker in the comment text — the review-JSON URL.
-    /// When present, the body shows a "Ver review" button.
-    var reviewURL: URL? = nil
+    /// Parsed from the comment text — where the review payload lives (inline
+    /// data or a legacy JSON URL). When present, the body shows a "Ver review"
+    /// button.
+    var reviewSource: ReviewSource? = nil
 
-    /// Splits the review link off the comment text and resolves it to the
-    /// underlying JSON URL (for the native "Ver review" reopen). Handles the
-    /// new visible "▶ Ver review: <link>" line and the legacy hidden marker.
-    static func extractReview(_ text: String) -> (clean: String, url: URL?) {
-        if let r = text.range(of: AppState.reviewLinkLabel) {
-            let linkStr = text[r.upperBound...].prefix { !$0.isWhitespace }
-            let clean = String(text[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            return (clean, jsonURL(fromLink: String(linkStr)))
+    /// True for any URL that points at the hosted review viewer.
+    private static func isReviewLink(_ url: String) -> Bool {
+        url.contains("apollo-review") || url.contains("?z=") || url.contains("?d=")
+    }
+
+    /// Splits viewer links off the comment text. Two kinds, both stripped from
+    /// the displayed text (Apollo renders its own affordances):
+    ///   • VER REVIEW (`?z=`/`?d=`) → returns a `source` so the body shows the
+    ///     native "Ver review" button.
+    ///   • REVISAR (`?m=`) → no button (the attachment already has REVIEW); the
+    ///     link is just removed so the raw markdown doesn't leak into Apollo.
+    /// Label/case-agnostic; also handles the legacy plain + hidden-marker forms.
+    static func extractReview(_ text: String) -> (clean: String, source: ReviewSource?) {
+        // 1) Markdown links whose URL points at the viewer.
+        if let re = try? NSRegularExpression(pattern: #"\[[^\]]*\]\(([^)]+)\)"#) {
+            let ns = text as NSString
+            let viewer = re.matches(in: text, range: NSRange(location: 0, length: ns.length))
+                .filter { isReviewLink(ns.substring(with: $0.range(at: 1))) }
+            if !viewer.isEmpty {
+                // A button only for a real review payload (?z=/?d=), not ?m=.
+                var source: ReviewSource? = nil
+                for m in viewer {
+                    let url = ns.substring(with: m.range(at: 1))
+                    if url.contains("?z=") || url.contains("?d=") {
+                        source = reviewSource(fromLink: url); break
+                    }
+                }
+                let mut = NSMutableString(string: text)
+                for m in viewer.reversed() { mut.replaceCharacters(in: m.range, with: "") }
+                let clean = (mut as String)
+                    .replacingOccurrences(of: "▶", with: "") // strip the marker glyph
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return (clean, source)
+            }
         }
-        if let r = text.range(of: AppState.reviewMarker) {
-            let urlStr = text[r.upperBound...].prefix { !$0.isWhitespace }
+        // 2) Legacy plain "▶ Ver review: <url>".
+        if let r = text.range(of: AppState.reviewLinkLabel) {
+            let linkStr = String(text[r.upperBound...].prefix { !$0.isWhitespace })
             let clean = String(text[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            return (clean, URL(string: String(urlStr)))
+            return (clean, reviewSource(fromLink: linkStr))
+        }
+        // 3) Legacy hidden marker "⟦apollo-review⟧<url>".
+        if let r = text.range(of: AppState.reviewMarker) {
+            let urlStr = String(text[r.upperBound...].prefix { !$0.isWhitespace })
+            let clean = String(text[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return (clean, URL(string: urlStr).map { .url($0) })
         }
         return (text, nil)
     }
 
-    /// From a viewer link (`…/?d=<encoded jsonURL>`) recover the JSON URL; if the
-    /// string isn't a viewer link, treat it as the JSON URL directly.
-    private static func jsonURL(fromLink link: String) -> URL? {
-        if let comps = URLComponents(string: link),
-           let d = comps.queryItems?.first(where: { $0.name == "d" })?.value,
-           let u = URL(string: d) {
-            return u
+    /// Resolve a viewer link to its payload source: `?z=<inline>` → decoded data
+    /// (no fetch — the ClickUp CDN has no CORS), `?d=<jsonURL>` → that URL, and a
+    /// bare string → treat as the JSON URL directly.
+    private static func reviewSource(fromLink link: String) -> ReviewSource? {
+        if let comps = URLComponents(string: link) {
+            let items = comps.queryItems ?? []
+            if let z = items.first(where: { $0.name == "z" })?.value,
+               let data = ReviewHandoff.decode(z) {
+                return .data(data)
+            }
+            if let d = items.first(where: { $0.name == "d" })?.value,
+               let u = URL(string: d) {
+                return .url(u)
+            }
         }
-        return URL(string: link)
+        return URL(string: link).map { .url($0) }
     }
 
     /// Equatable so a parent's `.equatable()` modifier can
@@ -103,9 +145,9 @@ struct CommentBodyView: View, Equatable {
          reviewActorId: Int? = nil,
          reviewActorName: String = "Revisor",
          reviewCommentId: String? = nil) {
-        let (cleanText, rURL) = Self.extractReview(text)
+        let (cleanText, rSource) = Self.extractReview(text)
         self.text = cleanText
-        self.reviewURL = rURL
+        self.reviewSource = rSource
         self.attachments = attachments
         self.mentionUsernames = mentionUsernames
         self.reviewTaskId = reviewTaskId
@@ -149,16 +191,21 @@ struct CommentBodyView: View, Equatable {
             }
 
             // "Ver review" — reopen the full review (markup) from the comment.
-            if let reviewURL { reviewLinkCard(reviewURL) }
+            if let reviewSource { reviewLinkCard(reviewSource) }
         }
     }
 
     // MARK: - Structured attachment card
 
     /// "Ver review" card — reopens the full review (markup included) from the
-    /// JSON URL carried in the comment's hidden marker.
-    private func reviewLinkCard(_ url: URL) -> some View {
-        Button { ReviewPresenter.shared.presentSaved(jsonURL: url) } label: {
+    /// payload carried in the comment (inline data or a legacy JSON URL).
+    private func reviewLinkCard(_ source: ReviewSource) -> some View {
+        Button {
+            switch source {
+            case .data(let d): ReviewPresenter.shared.presentSaved(jsonData: d)
+            case .url(let u):  ReviewPresenter.shared.presentSaved(jsonURL: u)
+            }
+        } label: {
             HStack(spacing: 8) {
                 Image(systemName: "play.rectangle.fill").font(.system(size: 11))
                 Text("Ver review").font(Editorial.sans(12, .semibold))
