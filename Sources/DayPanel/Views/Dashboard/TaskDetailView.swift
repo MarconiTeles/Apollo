@@ -625,9 +625,12 @@ struct TaskDetailView: View, Equatable {
                 Button { showStatusMenu.toggle() } label: {
                     HStack(spacing: 7) {
                         Circle().fill(c).frame(width: 8, height: 8)
-                        Text(task.status.capitalized)
-                            .font(Editorial.sans(12))
-                            .foregroundStyle(Editorial.ink)
+                        // Editorial all-caps: word UPPERCASE, tinted with the
+                        // status's own colour (matches the list pill + the dot).
+                        Text(task.status.uppercased())
+                            .font(Editorial.sans(10.5, .semibold))
+                            .tracking(0.6)
+                            .foregroundStyle(c)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 8, weight: .semibold))
                             .foregroundStyle(Editorial.inkFaint)
