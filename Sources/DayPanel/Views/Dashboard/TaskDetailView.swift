@@ -1200,7 +1200,9 @@ struct TaskDetailView: View, Equatable {
                 ForEach(Self.versionGroupedAttachments(task.attachments)) { group in
                     if group.versions.count <= 1 {
                         AttachmentChip(attachment: group.newest,
-                                       taskURL: task.url)
+                                       taskURL: task.url,
+                                       taskId: task.id, listId: task.listId,
+                                       actorId: reviewActorId, actorName: reviewActorName)
                             .equatable()
                     } else {
                         attachmentVersionGroup(group)
@@ -1249,8 +1251,11 @@ struct TaskDetailView: View, Equatable {
     /// of its first-seen member; non-versioned files stay as
     /// singletons exactly where they were.
     static func versionGroupedAttachments(
-        _ atts: [CUTask.Attachment]
+        _ allAtts: [CUTask.Attachment]
     ) -> [AttachmentGroup] {
+        // Hide the review-JSON blobs Apollo uploads — they're internal plumbing
+        // for "Ver review", not user-facing files.
+        let atts = allAtts.filter { !$0.title.hasPrefix("apollo-review") }
         // base -> attachments (with parsed version)
         var buckets: [String: [(att: CUTask.Attachment, v: Int)]] = [:]
         for a in atts {
@@ -1280,13 +1285,22 @@ struct TaskDetailView: View, Equatable {
         return out
     }
 
+    /// Connected ClickUp user, for the REVIEW deep link's actor.
+    private var reviewActorId: Int? { appState.clickUpAuthService.userId }
+    private var reviewActorName: String {
+        let id = appState.clickUpAuthService.userId
+        return appState.availableMembers.first { $0.id == id }?.username ?? "Revisor"
+    }
+
     @ViewBuilder
     private func attachmentVersionGroup(_ group: AttachmentGroup) -> some View {
         let expanded = expandedVersionGroups.contains(group.id)
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 AttachmentChip(attachment: group.newest,
-                               taskURL: task.url)
+                               taskURL: task.url,
+                               taskId: task.id, listId: task.listId,
+                               actorId: reviewActorId, actorName: reviewActorName)
                     .equatable()
             }
             Button {
@@ -1318,7 +1332,9 @@ struct TaskDetailView: View, Equatable {
                 VStack(alignment: .leading, spacing: 5) {
                     ForEach(group.versions.dropFirst().map { $0 }) { old in
                         AttachmentChip(attachment: old,
-                                       taskURL: task.url)
+                                       taskURL: task.url,
+                                       taskId: task.id, listId: task.listId,
+                                       actorId: reviewActorId, actorName: reviewActorName)
                             .equatable()
                             .opacity(0.72)
                     }
@@ -2632,8 +2648,16 @@ private struct AttachmentChip: View, Equatable {
     /// context) don't carry a task URL.
     var taskURL: String? = nil
 
+    // Context for the "REVIEW" button (opens the Apollo Review app). Optional so
+    // call paths without a task context still compile.
+    var taskId: String? = nil
+    var listId: String? = nil
+    var actorId: Int? = nil
+    var actorName: String = "Revisor"
+
     static func == (lhs: AttachmentChip, rhs: AttachmentChip) -> Bool {
         lhs.attachment == rhs.attachment && lhs.taskURL == rhs.taskURL
+            && lhs.taskId == rhs.taskId && lhs.actorId == rhs.actorId
     }
 
     @State private var isHovered: Bool = false
@@ -2732,6 +2756,34 @@ private struct AttachmentChip: View, Equatable {
                 }
 
                 Spacer(minLength: 0)
+
+                // Apollo Review — primary affordance for reviewable media
+                // (video/image/PDF). Opens the native review app via the
+                // apolloreview:// scheme; bypasses the chip's download path.
+                if ReviewLink.isReviewable(attachment.ext), let taskId, let actorId {
+                    Button {
+                        ReviewPresenter.shared.present(
+                            ReviewLink.params(attachment: attachment, taskId: taskId, listId: listId,
+                                              uploaderId: attachment.uploaderId,
+                                              actorId: actorId, actorName: actorName))
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "play.rectangle.fill")
+                                .font(.system(size: 9, weight: .semibold))
+                            Text("REVIEW")
+                                .font(Editorial.sans(9.5, .bold))
+                                .tracking(0.4)
+                        }
+                        .foregroundStyle(Editorial.page)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(Editorial.accent))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Abrir no Apollo Review")
+                }
 
                 // When the attachment has unresolved annotations
                 // AND we know the parent task's ClickUp URL, show

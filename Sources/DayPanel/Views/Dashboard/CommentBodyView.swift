@@ -30,12 +30,52 @@ struct CommentBodyView: View, Equatable {
     /// re-highlight until the comment list refreshes.
     var mentionUsernames: [String] = []
 
+    // Context for the "REVIEW" button on reviewable attachments.
+    var reviewTaskId: String? = nil
+    var reviewListId: String? = nil
+    var reviewActorId: Int? = nil
+    var reviewActorName: String = "Revisor"
+    /// The comment this body belongs to — so the review posts as a REPLY to it.
+    var reviewCommentId: String? = nil
+    /// Parsed from a hidden marker in the comment text — the review-JSON URL.
+    /// When present, the body shows a "Ver review" button.
+    var reviewURL: URL? = nil
+
+    /// Splits the review link off the comment text and resolves it to the
+    /// underlying JSON URL (for the native "Ver review" reopen). Handles the
+    /// new visible "▶ Ver review: <link>" line and the legacy hidden marker.
+    static func extractReview(_ text: String) -> (clean: String, url: URL?) {
+        if let r = text.range(of: AppState.reviewLinkLabel) {
+            let linkStr = text[r.upperBound...].prefix { !$0.isWhitespace }
+            let clean = String(text[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return (clean, jsonURL(fromLink: String(linkStr)))
+        }
+        if let r = text.range(of: AppState.reviewMarker) {
+            let urlStr = text[r.upperBound...].prefix { !$0.isWhitespace }
+            let clean = String(text[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return (clean, URL(string: String(urlStr)))
+        }
+        return (text, nil)
+    }
+
+    /// From a viewer link (`…/?d=<encoded jsonURL>`) recover the JSON URL; if the
+    /// string isn't a viewer link, treat it as the JSON URL directly.
+    private static func jsonURL(fromLink link: String) -> URL? {
+        if let comps = URLComponents(string: link),
+           let d = comps.queryItems?.first(where: { $0.name == "d" })?.value,
+           let u = URL(string: d) {
+            return u
+        }
+        return URL(string: link)
+    }
+
     /// Equatable so a parent's `.equatable()` modifier can
     /// short-circuit re-renders when neither the text nor the
     /// attachment list changed. Comparing the raw fields is
     /// cheap and avoids the NSDataDetector reparse below.
     static func == (lhs: CommentBodyView, rhs: CommentBodyView) -> Bool {
         lhs.text == rhs.text && lhs.attachments == rhs.attachments
+            && lhs.reviewTaskId == rhs.reviewTaskId && lhs.reviewActorId == rhs.reviewActorId
     }
 
     /// Cached, parsed body parts — the text broken into runs of
@@ -57,11 +97,23 @@ struct CommentBodyView: View, Equatable {
 
     init(text: String,
          attachments: [CUTask.Attachment] = [],
-         mentionUsernames: [String] = []) {
-        self.text = text
+         mentionUsernames: [String] = [],
+         reviewTaskId: String? = nil,
+         reviewListId: String? = nil,
+         reviewActorId: Int? = nil,
+         reviewActorName: String = "Revisor",
+         reviewCommentId: String? = nil) {
+        let (cleanText, rURL) = Self.extractReview(text)
+        self.text = cleanText
+        self.reviewURL = rURL
         self.attachments = attachments
         self.mentionUsernames = mentionUsernames
-        let parsed = Self.parse(text: text)
+        self.reviewTaskId = reviewTaskId
+        self.reviewListId = reviewListId
+        self.reviewActorId = reviewActorId
+        self.reviewActorName = reviewActorName
+        self.reviewCommentId = reviewCommentId
+        let parsed = Self.parse(text: cleanText)
         self.cachedParts = parsed
         self.inlineUrlSet = Set(parsed.compactMap { p -> String? in
             if case .url(let u, _) = p { return u.absoluteString }
@@ -90,19 +142,44 @@ struct CommentBodyView: View, Equatable {
             // Structured attachments — those uploaded via the
             // paperclip / drag-drop and not present in the text.
             // Skip any whose URL we already rendered inline.
-            ForEach(attachments.filter { !inlineUrlSet.contains($0.url) },
-                    id: \.id) { att in
-                structuredCard(att)
+            ForEach(attachments.filter {
+                !inlineUrlSet.contains($0.url) && !$0.title.hasPrefix("apollo-review")
+            }, id: \.id) { att in
+                fileCard(att)
             }
+
+            // "Ver review" — reopen the full review (markup) from the comment.
+            if let reviewURL { reviewLinkCard(reviewURL) }
         }
     }
 
     // MARK: - Structured attachment card
 
+    /// "Ver review" card — reopens the full review (markup included) from the
+    /// JSON URL carried in the comment's hidden marker.
+    private func reviewLinkCard(_ url: URL) -> some View {
+        Button { ReviewPresenter.shared.presentSaved(jsonURL: url) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "play.rectangle.fill").font(.system(size: 11))
+                Text("Ver review").font(Editorial.sans(12, .semibold))
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.up.right").font(.system(size: 10))
+                    .foregroundStyle(Editorial.inkMute)
+            }
+            .foregroundStyle(Editorial.accent)
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 4).fill(Editorial.accentSoft))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .help("Abrir o review completo, com as marcações")
+    }
+
     /// Card variant used when ClickUp gave us full metadata
     /// (filename, size, extension) on a comment attachment —
     /// we don't have to derive anything from the URL path.
-    private func structuredCard(_ att: CUTask.Attachment) -> some View {
+    private func fileCard(_ att: CUTask.Attachment) -> some View {
         let url = URL(string: att.url) ?? URL(fileURLWithPath: "/")
         let kind = Self.kind(for: url)
         let info = meta(for: url, kind: kind)
@@ -141,6 +218,32 @@ struct CommentBodyView: View, Equatable {
                 }
 
                 Spacer(minLength: 0)
+
+                if ReviewLink.isReviewable(ext), let tid = reviewTaskId, let aid = reviewActorId {
+                    Button {
+                        ReviewPresenter.shared.present(
+                            ReviewLink.params(attachment: att, taskId: tid, listId: reviewListId,
+                                              uploaderId: att.uploaderId,
+                                              actorId: aid, actorName: reviewActorName,
+                                              commentId: reviewCommentId))
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "play.rectangle.fill")
+                                .font(.system(size: 9, weight: .semibold))
+                            Text("REVIEW")
+                                .font(Editorial.sans(9.5, .bold))
+                                .tracking(0.4)
+                        }
+                        .foregroundStyle(Editorial.page)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(Editorial.accent))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Abrir no Apollo Review")
+                }
 
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 11, weight: .regular))

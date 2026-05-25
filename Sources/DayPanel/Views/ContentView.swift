@@ -1,8 +1,10 @@
+import ReviewKit
 import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var updateService: UpdateService
+    @ObservedObject private var reviewPresenter = ReviewPresenter.shared
 
     @State private var showSettings    = false
     @State private var showNewEvent    = false
@@ -657,6 +659,31 @@ struct ContentView: View {
         .onChange(of: appState.googleAuth.isConnected)         { _, _ in maybeShowOnboarding() }
         .onChange(of: showOnboarding) { _, isShown in
             if !isShown { onboardingDismissedThisSession = true }
+        }
+        // Embedded review workflow: REVIEW on an attachment opens the shared
+        // ReviewKit engine in-app; on submit Apollo posts the summary to ClickUp.
+        .sheet(item: $reviewPresenter.request) { req in
+            ReviewView(
+                params: req.params,
+                savedJSON: req.savedJSON,
+                onClose: { reviewPresenter.request = nil },
+                onSubmit: { result in
+                    if let tid = result.taskId {
+                        let mentions = [result.uploaderId].compactMap { $0 }
+                        Task {
+                            await appState.postReviewComment(
+                                taskId: tid,
+                                commentId: result.commentId,
+                                attachmentId: result.attachmentId,
+                                text: result.summaryText,
+                                mentionMemberIds: mentions,
+                                reviewJSON: result.json)
+                        }
+                    }
+                    reviewPresenter.request = nil
+                }
+            )
+            .frame(minWidth: 1040, minHeight: 660)
         }
     }
 

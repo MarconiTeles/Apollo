@@ -4,6 +4,7 @@ import Combine
 import Sparkle
 import UserNotifications
 import CoreSpotlight
+import ReviewKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -135,6 +136,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // taps deep-link into the matching task / event popup.
         UNUserNotificationCenter.current().delegate = self
 
+        // Receive `daypanel://` URL opens (the standalone review app's
+        // review-done callback). The scheme is declared in Info.plist.
+        registerURLHandler()
+
         // Install the standard macOS main menu so text-editing
         // shortcuts (Cmd+C / V / X / A / Z / Shift-Cmd+Z, etc.)
         // route to the focused TextField. SwiftUI's TextField
@@ -245,6 +250,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         appState.openTask(id: taskId)
         return true
+    }
+
+    // MARK: - Custom URL scheme (daypanel://)
+
+    /// Installs the Apple Event handler that delivers `daypanel://…` URL opens.
+    /// The scheme is declared in Info.plist; Google OAuth uses a localhost
+    /// listener instead, so the only consumer here is the standalone review
+    /// app's `daypanel://review-done` callback.
+    private func registerURLHandler() {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:replyEvent:)),
+            forEventClass: AEEventClass(0x4755524C), // 'GURL' = kInternetEventClass
+            andEventID:    AEEventID(0x4755524C)     // 'GURL' = kAEGetURL
+        )
+    }
+
+    @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor,
+                                         replyEvent: NSAppleEventDescriptor) {
+        guard let str = event
+                .paramDescriptor(forKeyword: AEKeyword(0x2D2D2D2D)) // '----' = keyDirectObject
+                .flatMap({ $0.stringValue }),
+              let url = URL(string: str)
+        else { return }
+        handleDeepLink(url)
+    }
+
+    private func handleDeepLink(_ url: URL) {
+        guard url.scheme == "daypanel" else { return }
+        switch url.host {
+        case "review-done": handleReviewDone(url)
+        default: break
+        }
+    }
+
+    /// The standalone review app finished a review and handed the result back:
+    /// unpack the embedded payload and post the summary comment to ClickUp
+    /// (Apollo is the side that's logged in). Mirrors the embedded sheet's
+    /// `onSubmit` path so both workflows produce identical comments.
+    private func handleReviewDone(_ url: URL) {
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        func q(_ name: String) -> String? { items.first { $0.name == name }?.value }
+
+        var data: Data?
+        if let packed = q("data") {
+            data = ReviewHandoff.decode(packed)          // inline payload (sandbox-safe)
+        } else if let path = q("file") {
+            data = try? Data(contentsOf: URL(fileURLWithPath: path)) // legacy / non-sandbox
+        }
+        guard let data,
+              let r = ReviewResult.fromSavedJSON(data),
+              let taskId = r.taskId
+        else { return }
+
+        // Bring Apollo (and the task) forward, then post — the existing
+        // reviewPostTick auto-refresh updates the open comments section.
+        if !appState.menuBarMode {
+            window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        appState.openTask(id: taskId)
+
+        Task {
+            await appState.postReviewComment(
+                taskId: taskId,
+                commentId: r.commentId,
+                attachmentId: r.attachmentId,
+                text: r.summaryText,
+                mentionMemberIds: r.uploaderId.map { [$0] } ?? [],
+                reviewJSON: r.json
+            )
+        }
     }
 
     // MARK: - Main menu

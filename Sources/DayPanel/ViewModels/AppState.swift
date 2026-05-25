@@ -3275,6 +3275,98 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Posts a review summary back to ClickUp (embedded review workflow).
+    /// Replies to the attachment's comment when known (threaded), else a
+    /// top-level task comment. @mentions the given members (the uploader) so
+    /// ClickUp notifies them.
+    /// Bumped after a review is posted so the open comments section auto-reloads
+    /// (the review is posted outside the section's own composer, so it wouldn't
+    /// refresh on its own). `reviewPostTaskId` scopes it to the right task.
+    @Published var reviewPostTick = 0
+    var reviewPostTaskId: String?
+
+    /// Legacy hidden marker prefixing the review-JSON URL (older comments).
+    /// Still parsed for back-compat; new comments use the visible link below.
+    static let reviewMarker = "⟦apollo-review⟧"
+
+    /// Hosted web viewer base URL (NO trailing slash). Set this ONCE, in code,
+    /// after deploying `apollo-review/` as a static site (Vercel/Netlify/GitHub
+    /// Pages). When empty, the comment links straight to the raw JSON — Apollo
+    /// still reopens it natively, but ClickUp-web users only get a download.
+    static let reviewViewerBase = "https://marconiteles.github.io/apollo-review"
+
+    /// Visible label that prefixes the review link in a comment. Apollo strips
+    /// this line and renders a native "Ver review" button; ClickUp web/mobile
+    /// users get the clickable link (to the hosted viewer when configured).
+    static let reviewLinkLabel = "▶ Ver review: "
+
+    /// Build the link that goes in the comment: the hosted viewer (carrying the
+    /// JSON URL in `?d=`) when configured, else the raw JSON URL.
+    static func reviewLink(jsonURL: String) -> String {
+        guard !reviewViewerBase.isEmpty else { return jsonURL }
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~") // RFC 3986 unreserved
+        let enc = jsonURL.addingPercentEncoding(withAllowedCharacters: allowed) ?? jsonURL
+        return "\(reviewViewerBase)/?d=\(enc)"
+    }
+
+    func postReviewComment(taskId: String, commentId: String?, attachmentId: String,
+                           text: String, mentionMemberIds: [Int],
+                           reviewJSON: Data = Data()) async {
+        let members = mentionMemberIds.compactMap { id in
+            availableMembers.first { $0.id == id }
+        }
+        // `@username` text is visual; the reliable notification is `assignee`.
+        let prefix = members.map { "@\($0.username)" }.joined(separator: " ")
+        let assignee = mentionMemberIds.first
+
+        // 1. Upload the full review JSON to the task first → get its URL. We
+        //    embed that URL as a hidden marker in the comment text (ClickUp does
+        //    NOT return comment-anchored attachments to us, so a task upload +
+        //    text marker is the reliable way to link "Ver review" to the comment).
+        var reviewURL: String?
+        if !reviewJSON.isEmpty {
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("apollo-review-\(attachmentId).json")
+            try? reviewJSON.write(to: tmp)
+            reviewURL = (try? await cuSvc.uploadAttachment(taskId: taskId, fileURL: tmp))?.absoluteString
+        }
+
+        // 2. Build the comment text: @mention prefix + summary + visible link.
+        var full = prefix.isEmpty ? text : "\(prefix)\n\(text)"
+        if let reviewURL {
+            full += "\n\n\(Self.reviewLinkLabel)\(Self.reviewLink(jsonURL: reviewURL))"
+        }
+        full = full.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !full.isEmpty else { return }
+
+        // 3. Thread under the video's comment when there is one.
+        var target = commentId
+        if target?.isEmpty ?? true {
+            if let comments = try? await cuSvc.getTaskComments(taskId: taskId) {
+                target = comments.first { c in
+                    c.attachments.contains { $0.id == attachmentId }
+                }?.id
+            }
+        }
+
+        do {
+            if let target, !target.isEmpty {
+                _ = try await cuSvc.addCommentReply(commentId: target, text: full, assignee: assignee)
+            } else {
+                _ = try await cuSvc.addTaskComment(taskId: taskId, text: full,
+                                                   mentionedMembers: [], assignee: assignee)
+            }
+        } catch {
+            Log.error("postReviewComment: \(error)")
+        }
+        // Auto-reload the open comments section — no manual refresh.
+        await MainActor.run {
+            reviewPostTaskId = taskId
+            reviewPostTick &+= 1
+        }
+    }
+
     func postComment(on task: CUTask,
                      text: String,
                      mentionedMemberIds: [Int] = []) async -> CUComment? {

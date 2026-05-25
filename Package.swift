@@ -25,12 +25,15 @@ let package = Package(
         // logs that it can't reach a feed and tells the user
         // there are no updates.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
+        // Shared review engine (embedded review workflow).
+        .package(path: "../apollo-review-swift"),
     ],
     targets: [
         .executableTarget(
             name: "DayPanel",
             dependencies: [
                 .product(name: "Sparkle", package: "Sparkle"),
+                .product(name: "ReviewKit", package: "apollo-review-swift"),
             ],
             path: "Sources/DayPanel",
             exclude: ["Resources/Info.plist"]

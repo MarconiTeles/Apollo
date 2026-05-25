@@ -237,6 +237,10 @@ struct TaskCommentsSection: View, Equatable {
         merged.reserveCapacity(augmentedComments.count + sortedEvents.count)
         merged.append(contentsOf: augmentedComments.map(TimelineEntry.comment))
         for e in sortedEvents where !consumedEventIds.contains(e.id) {
+            // Hide the review-JSON upload event — it's surfaced as the
+            // "Ver review" button on the review comment, not as a file row.
+            if case .attachmentAdded(let att) = e.kind,
+               att.title.hasPrefix("apollo-review") { continue }
             merged.append(.event(e))
         }
         return merged.sorted { $0.date < $1.date }
@@ -331,6 +335,13 @@ struct TaskCommentsSection: View, Equatable {
                 Task { await refresh() }
             }
         }
+        // Auto-reload when a review was just posted to THIS task (no manual
+        // refresh) — so the review comment + its "Ver review" appear at once.
+        .onChange(of: appState.reviewPostTick) { _, _ in
+            if appState.reviewPostTaskId == task.id {
+                Task { await refresh() }
+            }
+        }
     }
 
     // MARK: - Header
@@ -389,7 +400,10 @@ struct TaskCommentsSection: View, Equatable {
                 } else {
                     CommentBodyView(text: c.text,
                                     attachments: c.attachments,
-                                    mentionUsernames: appState.availableMembers.map(\.username))
+                                    mentionUsernames: appState.availableMembers.map(\.username),
+                                    reviewTaskId: task.id, reviewListId: task.listId,
+                                    reviewActorId: reviewActorId, reviewActorName: reviewActorName,
+                                    reviewCommentId: c.id)
                         .equatable()
                 }
 
@@ -583,7 +597,10 @@ struct TaskCommentsSection: View, Equatable {
                 }
                 CommentBodyView(text: r.text,
                                 attachments: r.attachments,
-                                mentionUsernames: appState.availableMembers.map(\.username))
+                                mentionUsernames: appState.availableMembers.map(\.username),
+                                reviewTaskId: task.id, reviewListId: task.listId,
+                                reviewActorId: reviewActorId, reviewActorName: reviewActorName,
+                                reviewCommentId: r.id)
                     .equatable()
             }
         }
@@ -1381,6 +1398,13 @@ struct TaskCommentsSection: View, Equatable {
     /// but lives inside this section to avoid coupling the two
     /// view files (and to keep the click target sized for the
     /// tighter timeline row).
+    /// Connected ClickUp user, for the REVIEW deep link's actor.
+    private var reviewActorId: Int? { appState.clickUpAuthService.userId }
+    private var reviewActorName: String {
+        let id = appState.clickUpAuthService.userId
+        return appState.availableMembers.first { $0.id == id }?.username ?? "Revisor"
+    }
+
     private func attachmentEventCard(_ att: CUTask.Attachment) -> some View {
         let url = URL(string: att.url) ?? URL(fileURLWithPath: "/")
         // Muted file-type accent — coherent with the global
@@ -1416,6 +1440,32 @@ struct TaskCommentsSection: View, Equatable {
                     }
                 }
                 Spacer(minLength: 0)
+
+                if ReviewLink.isReviewable(att.ext), let aid = reviewActorId {
+                    Button {
+                        ReviewPresenter.shared.present(
+                            ReviewLink.params(attachment: att, taskId: task.id, listId: task.listId,
+                                              uploaderId: att.uploaderId,
+                                              actorId: aid, actorName: reviewActorName))
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "play.rectangle.fill")
+                                .font(.system(size: 9, weight: .semibold))
+                            Text("REVIEW")
+                                .font(Editorial.sans(9.5, .bold))
+                                .tracking(0.4)
+                        }
+                        .foregroundStyle(Editorial.page)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(Editorial.accent))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Abrir no Apollo Review")
+                }
+
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 11, weight: .regular))
                     .foregroundStyle(Editorial.inkMute)

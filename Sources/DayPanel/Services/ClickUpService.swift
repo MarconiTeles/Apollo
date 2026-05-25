@@ -976,16 +976,19 @@ final class ClickUpService {
     }
 
     @discardableResult
-    func addCommentReply(commentId: String, text: String) async throws -> CUComment? {
+    func addCommentReply(commentId: String, text: String,
+                         assignee: Int? = nil) async throws -> CUComment? {
         guard let token else { throw CUError.notConfigured }
+        // The reply endpoint only documents `comment_text` (+ assignee /
+        // notify_all) — the structured `comment` segment array is NOT accepted
+        // here, so we use plain text. `assignee` notifies the target user.
+        var body: [String: Any] = ["comment_text": text, "notify_all": false]
+        if let assignee { body["assignee"] = assignee }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))/reply")!)
         req.httpMethod = "POST"
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "comment_text": text,
-            "notify_all":   false,
-        ])
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, _) = try await URLSession.shared.data(for: req)
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let cid = json["id"] as? String {
