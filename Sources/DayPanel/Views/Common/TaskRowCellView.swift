@@ -1998,14 +1998,20 @@ final class StatusPillView: NSView {
             return
         }
         label.sizeToFit()
-        // Editorial mark: dot(7) + gap(7) + label + gap + chevron.
+        // Editorial mark: dot(7) + gap(4.2) + label + gap + chevron.
+        // Gap reduced 40% (was 7) so the caps-tracked label sits closer
+        // to the dot — the previous space made them read as separate.
         let dot: CGFloat = 7
         let chev: CGFloat = 7
         let chevSlot: CGFloat = isReadOnly ? 0 : (5 + chev)
-        let w = dot + 7 + label.frame.width + chevSlot
+        let w = dot + Self.dotGap + label.frame.width + chevSlot
         let h = max(label.frame.height, dot)
         frame = NSRect(x: frame.origin.x, y: frame.origin.y, width: w, height: h)
     }
+
+    /// Gap between the status dot and the uppercase label.
+    /// 4.2pt = 7pt − 40%.
+    private static let dotGap: CGFloat = 4.2
 
     func configure(label text: String, hex: String) {
         self.hex = hex
@@ -2044,9 +2050,15 @@ final class StatusPillView: NSView {
 
         label.sizeToFit()
         let labelSize = label.frame.size
+        // Align the OPTICAL centre of the caps-only text (descender is
+        // empty for uppercase) with the dot centre. Without this, the
+        // full bounding box centred on h/2 left the visible letters
+        // sitting noticeably above the dot.
+        let font = label.font ?? NSFont.systemFont(ofSize: 10.5, weight: .semibold)
+        let capCentreOffset = abs(font.descender) + font.capHeight / 2
         label.frame = NSRect(
-            x: dot + 7,
-            y: (h - labelSize.height) / 2,
+            x: dot + Self.dotGap,
+            y: h / 2 - capCentreOffset,
             width:  labelSize.width,
             height: labelSize.height
         )
