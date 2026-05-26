@@ -5,18 +5,18 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.7.4</title>
-      <pubDate>Mon, 25 May 2026 19:38:14 +0000</pubDate>
-      <sparkle:version>61</sparkle:version>
-      <sparkle:shortVersionString>1.7.4</sparkle:shortVersionString>
+      <title>Apollo 1.7.6</title>
+      <pubDate>Tue, 26 May 2026 18:56:46 +0000</pubDate>
+      <sparkle:version>63</sparkle:version>
+      <sparkle:shortVersionString>1.7.6</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Correção no campo de comentários.
+      <description><![CDATA[Ajuste visual na lista de tarefas.
 
-• Apertar Enter no campo de comentário de uma tarefa agora quebra a linha normalmente (antes selecionava o texto). Cmd+Enter envia o comentário.]]></description>
+• O label do status (TO DO, DOING, REVIEW…) agora está alinhado verticalmente ao centro da bolinha colorida ao lado, e o espaço entre eles ficou mais justo.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.4/Apollo-1.7.4.zip"
-        sparkle:edSignature="cUDZJcOlj0zf0SK+ScAnW/j725HvmbnK2y61jONkGPI75fO+4bPexCYTTPHoSLTRHoF3i3HQg1t2hwgLAm8/BQ=="
-        length="39667310"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.6/Apollo-1.7.6.zip"
+        sparkle:edSignature="bo1pR+5oB7VQPgMg/Uu3VoOs1JW6R0UZbqWceAyVQZb0jy4+EReoLcFxFbLJeilcGIxpHOrs3yvrbOuQaZ0dCA=="
+        length="39718837"
         type="application/octet-stream" />
     </item>
   </channel>
