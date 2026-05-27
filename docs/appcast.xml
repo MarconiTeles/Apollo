@@ -5,18 +5,15 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.7.6</title>
-      <pubDate>Tue, 26 May 2026 18:56:46 +0000</pubDate>
-      <sparkle:version>63</sparkle:version>
-      <sparkle:shortVersionString>1.7.6</sparkle:shortVersionString>
+      <title>Apollo 1.7.7</title>
+      <pubDate>Wed, 27 May 2026 04:07:35 +0000</pubDate>
+      <sparkle:version>64</sparkle:version>
+      <sparkle:shortVersionString>1.7.7</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Ajuste visual na lista de tarefas.
-
-• O label do status (TO DO, DOING, REVIEW…) agora está alinhado verticalmente ao centro da bolinha colorida ao lado, e o espaço entre eles ficou mais justo.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.6/Apollo-1.7.6.zip"
-        sparkle:edSignature="bo1pR+5oB7VQPgMg/Uu3VoOs1JW6R0UZbqWceAyVQZb0jy4+EReoLcFxFbLJeilcGIxpHOrs3yvrbOuQaZ0dCA=="
-        length="39718837"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.7/Apollo-1.7.7.zip"
+        sparkle:edSignature="oyZ/oE2tvpjtS2WU3nNwNytH4WEmYcqnvKP20FqI+OHm5gtghT2fpic8p4VBpxbDQ5O2CcKjBdWg2QgfvPnkBA=="
+        length="39900720"
         type="application/octet-stream" />
     </item>
   </channel>
