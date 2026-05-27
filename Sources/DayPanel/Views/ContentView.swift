@@ -669,6 +669,10 @@ struct ContentView: View {
             ReviewView(
                 params: req.params,
                 savedJSON: req.savedJSON,
+                // "Ver review" (saved JSON) opens view-only — the
+                // review was already submitted from this or another
+                // device; this is just for re-reading the markup.
+                readOnly: req.savedJSON != nil,
                 onClose: { reviewPresenter.request = nil },
                 onSubmit: { result in
                     if let tid = result.taskId {
@@ -1616,3 +1620,23 @@ private struct IntelligenceEdgeGlow: View {
             .blur(radius: blurRadius)
     }
 }
+
+#if DEBUG
+// Live Canvas of the whole dashboard (toolbar + timeline + tasks),
+// populated with mock data. Switch the canvas between light/dark with
+// the two previews below.
+#Preview("Dashboard — claro") {
+    ContentView()
+        .environmentObject(AppState.preview)
+        .environmentObject(UpdateService())
+        .frame(width: 1180, height: 760)
+}
+
+#Preview("Dashboard — escuro") {
+    ContentView()
+        .environmentObject(AppState.preview)
+        .environmentObject(UpdateService())
+        .frame(width: 1180, height: 760)
+        .preferredColorScheme(.dark)
+}
+#endif
