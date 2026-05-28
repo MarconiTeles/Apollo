@@ -13,19 +13,21 @@ struct NotificationsCenterView: View {
         RoundedRectangle(cornerRadius: 6, style: .continuous)
     }
 
-    /// Cap the scrollable list relative to the window so the popup never
-    /// pushes off-screen on small windows.
+    /// Cap the scrollable list relative to the window so the
+    /// panel never pushes off-screen on small windows. Side-
+    /// panel mode (current) uses almost the full window height
+    /// — the wrapper in ContentView reserves the toolbar band
+    /// at the top and a small bottom margin; here we just
+    /// subtract the chrome (header + footer + dividers) so the
+    /// scroll region exactly fits the rest.
     private var maxScrollHeight: CGFloat {
         let h = windowSize.height
         guard h > 0 else { return 380 }
-        // Two caps. The 70% taste cap is what we WANT, the safe-area
-        // cap is what we MUST respect — otherwise the centered popup
-        // would intrude on the macOS toolbar (~52pt) at the top of the
-        // window. Whichever is smaller wins.
+        // ~62pt toolbar reserve + 24pt bottom = 86pt outer
+        // wrapper. Internal chrome (header + footer + borders)
+        // ≈ 110pt. The rest is the scrollable list.
         let chrome: CGFloat = 110
-        let preferred = max(220, h * 0.70 - chrome)
-        let safeMax   = max(0,   h - 128 - chrome)   // 64pt top + 64pt bottom
-        return min(preferred, safeMax)
+        return max(220, h - 86 - chrome)
     }
 
     var body: some View {
@@ -88,8 +90,14 @@ struct NotificationsCenterView: View {
             }
             }
         }
-        .frame(width: 360)
-        .fixedSize(horizontal: false, vertical: true)
+        // Tall side-panel layout (was a compact dropdown). Width
+        // bumped from 360 → 440 for breathing room and the
+        // vertical sizing flips to fill the available height —
+        // the wrapper in ContentView pads top/bottom so the
+        // panel hangs from below the toolbar to near the window
+        // bottom, matching the prototype's right-side rail.
+        .frame(width: 440)
+        .frame(maxHeight: .infinity)
         // Editorial card (prototype `PNotifs` / `PPopup`).
         .background(Editorial.popup, in: shape)
         .clipShape(shape)

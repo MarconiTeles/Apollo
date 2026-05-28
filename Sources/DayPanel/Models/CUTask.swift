@@ -84,6 +84,39 @@ struct CUTask: Identifiable, Codable, Equatable {
     /// payloads decodable.
     var checklists: [Checklist] = []
 
+    /// Lists the task belongs to ("Tasks in Multiple Lists"). The
+    /// task's HOME list is `listId` / `listName`; this array carries
+    /// every additional list the task was added to via ClickUp's
+    /// `POST /list/{lid}/task/{tid}` endpoint. Populated from the
+    /// `locations` field in the API payload when present — older
+    /// cached payloads decode with an empty array, matching the
+    /// "no extra lists" case. Always sorted alphabetically by name
+    /// for predictable display.
+    var locations: [TaskLocation] = []
+
+    /// Convenience union of the home list + every entry in
+    /// `locations`, deduped by id. Drives the LISTAS chips in the
+    /// task detail view.
+    var allListMemberships: [TaskLocation] {
+        var seen: Set<String> = []
+        var out: [TaskLocation] = []
+        let home = TaskLocation(id: listId, name: listName)
+        if !home.id.isEmpty {
+            seen.insert(home.id)
+            out.append(home)
+        }
+        for loc in locations where !seen.contains(loc.id) {
+            seen.insert(loc.id)
+            out.append(loc)
+        }
+        return out
+    }
+
+    struct TaskLocation: Codable, Hashable, Identifiable {
+        let id: String
+        let name: String
+    }
+
     /// ClickUp custom fields on the task. Like checklists, only
     /// the single-task GET payload carries usable `value`s — the
     /// list endpoint returns the field definitions but typically

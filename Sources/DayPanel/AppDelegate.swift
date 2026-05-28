@@ -114,7 +114,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// section enough room to render without truncation while
     /// still being well below the natural launch size, so users
     /// can still pull the window in for split-screen workflows.
-    static let windowMinFrameSize = NSSize(width: 880, height: 680)
+    // Bumped by 220pt (sidebar width) when the Editorial+ sidebar
+    // landed — at the old 880 minimum the right-side toolbar pills
+    // (Apollo IA · bell · gear · Concluir) got clipped past the
+    // window's right edge. 1100pt = 880 chrome floor + 220 sidebar.
+    static let windowMinFrameSize = NSSize(width: 1100, height: 680)
 
     let appState = AppState()
 
@@ -694,10 +698,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the title bar — without this the title-bar area still
         // reads as a distinct band even with isOpaque=false.
         w.titlebarSeparatorStyle       = .none
-        // Opaque flat background — matches the cream paper
-        // canvas, no `.behindWindow` material, no transparency.
-        w.backgroundColor              = .windowBackgroundColor
-        w.isOpaque                     = true
+        // Translucent window so the Editorial+ sidebar's Liquid
+        // Glass pane can pull vibrancy from whatever sits behind
+        // the window. The chrome (toolbar + body) still paints
+        // `Editorial.paper` over its own region in ContentView —
+        // only the sidebar column actually shows through.
+        w.backgroundColor              = .clear
+        w.isOpaque                     = false
 
         // Performance hints — keep CoreAnimation in async-display mode and
         // let ProMotion screens drive the window at their full refresh

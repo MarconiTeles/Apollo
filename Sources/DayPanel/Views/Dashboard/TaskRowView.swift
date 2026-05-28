@@ -623,7 +623,7 @@ struct TaskRowView: View, Equatable {
                 // have received if the slot had grown to 80pt, but
                 // applied via padding instead of slot growth so
                 // the row card's outer dimensions stay invariant.
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 1.44) {
                     // Title slides RIGHT on DONE hover via
                     // `.offset(x:)` — visual-only shift, doesn't
                     // affect layout sizing. 66pt clears the DONE
@@ -820,7 +820,7 @@ struct TaskRowView: View, Equatable {
                 .textFieldStyle(.plain)
                 .focused($titleFocused)
                 .focusEffectDisabled()
-                .font(Editorial.serif(17))
+                .font(Editorial.sans(15, .medium))
                 .foregroundStyle(Editorial.ink)
                 .lineLimit(1)
                 .onAppear {
@@ -833,7 +833,7 @@ struct TaskRowView: View, Equatable {
                 }
         } else {
             Text(task.title)
-                .font(Editorial.serif(17))
+                .font(Editorial.sans(15, .medium))
                 .strikethrough(task.isCompleted, color: Editorial.inkMute)
                 .foregroundStyle(task.isCompleted ? Editorial.inkMute : Editorial.ink)
                 .lineLimit(1)

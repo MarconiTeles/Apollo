@@ -57,7 +57,7 @@ enum Editorial {
     //    apps share the same dark tone. Surfaces step up in
     //    luminance for elevation; the warm-white ink + cinnabar
     //    accent keep the editorial character on top.
-    static let paper    = Color(nsColor: .editorial(light: "#FAF7F0", dark: "#1F1F1E"))  // outer canvas (= Claude bg)
+    static let paper    = Color(nsColor: .editorial(light: "#F8F6F3", dark: "#1F1F1E"))  // outer canvas (= Claude bg)
     static let page     = Color(nsColor: .editorial(light: "#FFFFFF", dark: "#2A2A29"))  // primary surface
     static let card     = Color(nsColor: .editorial(light: "#FCFAF5", dark: "#242423"))  // secondary surface
     static let ink      = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6"))  // body type

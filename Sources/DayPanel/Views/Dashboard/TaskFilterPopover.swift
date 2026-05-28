@@ -6,6 +6,14 @@ import SwiftUI
 /// horizontal-bar UI in the dashboard — this popover handles the
 /// other four dimensions.
 struct TaskFilterPopover: View {
+    /// Where the filter UI is being rendered. Drives whether the
+    /// popover chrome (header, footer, background, shadow) is
+    /// painted — the embedded variant is for surfaces like the
+    /// sidebar's FILTROS section that already provide their own
+    /// container.
+    enum Mode { case popover, embedded }
+    var mode: Mode = .popover
+
     @EnvironmentObject var appState: AppState
     @Environment(\.windowSize) private var windowSize
     /// X position of the notch tip in the popover's local coordinate
@@ -87,32 +95,24 @@ struct TaskFilterPopover: View {
     }
 
     var body: some View {
+        switch mode {
+        case .popover:  popoverBody
+        case .embedded: embeddedBody
+        }
+    }
+
+    /// The original popover layout — header + scrollable
+    /// sections + footer + popover chrome (background / border /
+    /// shadow). Used by the toolbar "Filtros" button.
+    private var popoverBody: some View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(Editorial.rule).frame(height: 1)
 
             ScrollablePopupContent(maxHeight: scrollMaxHeight) {
-                VStack(alignment: .leading, spacing: 18) {
-                    dueSection
-                    if !availablePriorities.isEmpty {
-                        prioritySection
-                    }
-                    if !appState.availableMembers.isEmpty {
-                        assigneeSection
-                    }
-                    if !availableTagNames.isEmpty {
-                        tagsSection
-                    }
-                    if !availableCreators.isEmpty {
-                        creatorSection
-                    }
-                    createdSection
-                    if hasClosedDates {
-                        closedSection
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                sectionsStack
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
             }
 
             Rectangle().fill(Editorial.rule).frame(height: 1)
@@ -128,6 +128,39 @@ struct TaskFilterPopover: View {
         .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
         .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
         .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+    }
+
+    /// Chrome-less variant for embedding inside another
+    /// container (e.g. the sidebar's FILTROS section). Skips
+    /// the header/footer/popover background — the host owns
+    /// the container, and any clear action is wired by the
+    /// embedding view if it wants one.
+    private var embeddedBody: some View {
+        sectionsStack
+    }
+
+    /// Shared filter sections — the same content rendered in
+    /// both popover and embedded modes so toggling a chip in
+    /// one surface mutates the SAME `appState.taskFilters`
+    /// (single source of truth).
+    ///
+    /// All 7 sections render UNCONDITIONALLY now — the previous
+    /// "hide if empty" gates were dropping Prioridade / Etiquetas
+    /// / Criado por / Data de encerramento from the sidebar when
+    /// the active list happened to have no priorities/tags/etc.
+    /// loaded. Each section's body already handles its own empty
+    /// state (e.g. "Digite para buscar entre N pessoas") so the
+    /// UI stays predictable.
+    private var sectionsStack: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            dueSection
+            prioritySection
+            assigneeSection
+            tagsSection
+            creatorSection
+            createdSection
+            closedSection
+        }
     }
 
     // MARK: - Footer (prototype: Limpar · Aplicar)
@@ -487,14 +520,56 @@ struct TaskFilterPopover: View {
 
     // MARK: - Section container
 
+    /// Per-section expand state. Key = section title (the Folio
+    /// label). Default: empty set → every section starts
+    /// COLLAPSED (per user request: keep the FILTROS strip tidy
+    /// by default, expand on demand). Same `@State` for both
+    /// `.popover` and `.embedded` modes.
+    @State private var expandedSections: Set<String> = []
+
     private func sectionContainer<Content: View>(
         title: String,
         systemImage _: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Folio(title)
-            content()
+        let expanded = expandedSections.contains(title)
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.spring(duration: 0.26, bounce: 0.18)) {
+                    if expanded {
+                        expandedSections.remove(title)
+                    } else {
+                        expandedSections.insert(title)
+                    }
+                }
+            } label: {
+                HStack(alignment: .center, spacing: 8) {
+                    // Mirror the SidebarNavRow row labels
+                    // (Hoje, Tarefas, Quadro, …) — sans 13.5
+                    // medium ink, NOT the caps Folio used for
+                    // section TITLES. Filter categories live
+                    // at the same hierarchy as those rows.
+                    Text(title)
+                        .font(Editorial.sans(13.5, .medium))
+                        .foregroundStyle(Editorial.ink)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Editorial.inkFaint)
+                        .rotationEffect(.degrees(expanded ? 0 : -90))
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+
+            if expanded {
+                content()
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 6)
+            }
         }
     }
 

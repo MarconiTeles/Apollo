@@ -19,13 +19,14 @@ struct TaskCollectionView: NSViewRepresentable {
     ///   • 80pt — original pre-tighten value
     ///   • 68pt — 80 × 0.85, set when the user wanted 15% shorter
     ///   • 78pt — 68 × 1.15, restored 15% taller
-    ///   • 70pt — 78 × 0.9, current (10% shorter).
+    ///   • 70pt — 78 × 0.9, then user-trim (10% shorter).
+    ///   • 49pt — 70 × 0.7, current (-30% per redesign request).
     /// Internal `TaskRowContentView` constants were adjusted
-    /// alongside this trim so the math
-    /// `10 + 20 + 8 + 22 + 10 = 70` fits exactly (verticalPad
-    /// 14 → 10). Subtask rows (depth > 0) stay at 40pt via the
-    /// per-row override in `sizeForItemAt` below.
-    var rowHeight: CGFloat = 70
+    /// alongside this trim: verticalPad 10 → 1, titleMetaGap
+    /// 8 → 4.8 (-40%). Math: `1 + 20 + 4.8 + 22 + 1 = 48.8 ≤ 49`.
+    /// Subtask rows (depth > 0) stay at 40pt via the per-row
+    /// override in `sizeForItemAt` below.
+    var rowHeight: CGFloat = 49
     var topContentInset: CGFloat = 0
     /// Fires when the user clicks the row's content area
     /// (anywhere except the status pill). The closure receives

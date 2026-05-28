@@ -39,6 +39,10 @@ struct ContentView: View {
     /// connections from scratch.
     @State private var onboardingDismissedThisSession = false
 
+    // ── Editorial+ sidebar (Stage 1, isolated to the left)
+    @State private var sidebarRoute:   SidebarRoute = .today
+    @State private var sidebarListFilter: String? = nil
+
     /// Welcome splash. Plays the full cinematic sequence on
     /// EVERY app open — the splash is a deliberate part of the
     /// brand identity, so we always show it instead of the
@@ -95,10 +99,44 @@ struct ContentView: View {
     var body: some View {
         GeometryReader { windowGeo in
             ZStack(alignment: .topTrailing) {
-                // Editorial canvas — warm cream paper behind
-                // everything, replacing the system window
-                // background. The whole redesign sits on this.
-                Editorial.paper.ignoresSafeArea()
+                // Editorial canvas was painted full-window here
+                // before — with the Editorial+ sidebar's Liquid
+                // Glass pane we want the window genuinely
+                // translucent under the sidebar column, so the
+                // paper fill is moved down into the chrome side
+                // (see the ZStack wrapping `Group` below) and
+                // the sidebar gets `Color.clear` as its surface.
+                Color.clear.ignoresSafeArea()
+
+                // ── Paper backstop ──────────────────────────────
+                // OUTERMOST paper layer, painted full-window edge-
+                // to-edge (right of the 220pt sidebar column) so
+                // it covers the macOS title-bar zone too. Lives
+                // here — NOT nested inside the chrome ZStack —
+                // because nested `.ignoresSafeArea` doesn't always
+                // overflow when the parent ZStack's bounds are
+                // already pinned by its own siblings. As a direct
+                // child of the outermost ZStack with its own
+                // `.ignoresSafeArea()`, the rectangle paints from
+                // window y=0 down (covering the transparent title
+                // bar) and prevents the desktop wallpaper from
+                // bleeding through as a coloured aurora.
+                Rectangle()
+                    .fill(Editorial.paper)
+                    .padding(.leading, 220)
+                    .ignoresSafeArea()
+
+                // Editorial+ redesign: the sidebar floats on TOP of
+                // the chrome (ZStack overlay) instead of sharing an
+                // HStack column with it. This lets the dashboard /
+                // board content extend EDGE-TO-EDGE and pass behind
+                // the Liquid Glass pane — through the translucent
+                // material the user sees the page's actual content
+                // (cards, paper, toolbar) instead of just the
+                // desktop. The toolbar's pill cluster carries a
+                // leading inset equal to the sidebar's column width
+                // so the trailing buttons aren't hidden under it.
+                ZStack(alignment: .topLeading) {
 
                 // Layers 1–4 below are the "dashboard" — everything
                 // sitting under the popup z-stack. We wrap them in
@@ -111,6 +149,12 @@ struct ContentView: View {
                 // this gate, scrolling/hovering rows behind an open
                 // popup re-fires every row's hover halo and shadow
                 // boost — visible noise + wasted GPU.
+                ZStack(alignment: .top) {
+                    // (Paper canvas now lives as a sibling of the
+                    //  outer `Color.clear.ignoresSafeArea()` so it
+                    //  covers the title-bar zone — see "Paper
+                    //  backstop" comment above. Nothing painted
+                    //  here on purpose.)
                 Group {
                     // 1. Main content — extends to TRUE top of
                     // window (y=0). The previous `safeAreaInset`
@@ -134,44 +178,62 @@ struct ContentView: View {
                     //    toolbar pills. Provides the soft
                     //    blur over the dashboard scrolling
                     //    behind, while the pills stay sharp
-                    //    on top.
-                    // Top fade over the events list halved
-                    // (120 → 60) per request — the soft shadow
-                    // reaches half as far down the timeline.
-                    FrostedStrip(barHeight: 52, fadeExtent: 60)
+                    //    on top. Hidden on .board AND .tasks
+                    //    (those surfaces carry their own
+                    //    headers and don't want a blur band
+                    //    cutting across their top).
+                    if sidebarRoute != .board && sidebarRoute != .tasks && sidebarRoute != .today {
+                        FrostedStrip(barHeight: 52, fadeExtent: 60)
+                            .padding(.leading, 220)
+                    }
 
                     // 3. Task filter bar — above the strip so
                     //    the filter pills don't get blurred.
                     //    Anchored to the SAME split `mainContent`
                     //    uses so the category bar is confined to
                     //    the task column and never bleeds over
-                    //    the timeline.
-                    GeometryReader { geo in
-                        let total     = max(1, geo.size.width)
-                        let timelineW = (total - 1) * (1.0 / 2.05)
-                        // `.top` alignment is critical: the
-                        // flexible Color.clear spacer makes the
-                        // HStack full-height, so without it the
-                        // bar would be vertically centred (mid-
-                        // list) instead of pinned under the
-                        // toolbar at the top of the task column.
-                        HStack(alignment: .top, spacing: 0) {
-                            // Spacer over the timeline column + the
-                            // 1pt centre rule — keeps the filter
-                            // bar off the events side.
-                            Color.clear
-                                .frame(width: timelineW + 1)
-                                .allowsHitTesting(false)
-                            VStack(spacing: 0) {
+                    //    the timeline. Suppressed on:
+                    //      .board → the board has its own column
+                    //               headers (clash with legacy
+                    //               status pills)
+                    //      .tasks → MyTasksView groups by status
+                    //               itself + carries its own
+                    //               crumb header
+                    if sidebarRoute != .board && sidebarRoute != .tasks && sidebarRoute != .today {
+                        GeometryReader { geo in
+                            let total     = max(1, geo.size.width)
+                            let timelineW = (total - 1) * (1.0 / 2.05)
+                            // `.top` alignment is critical: the
+                            // flexible Color.clear spacer makes the
+                            // HStack full-height, so without it the
+                            // bar would be vertically centred (mid-
+                            // list) instead of pinned under the
+                            // toolbar at the top of the task column.
+                            HStack(alignment: .top, spacing: 0) {
+                                // Spacer over the timeline column + the
+                                // 1pt centre rule — keeps the filter
+                                // bar off the events side.
                                 Color.clear
-                                    .frame(height: 52)
+                                    .frame(width: timelineW + 1)
                                     .allowsHitTesting(false)
-                                TaskFilterBar()
-                                Spacer(minLength: 0)
+                                VStack(spacing: 0) {
+                                    Color.clear
+                                        .frame(height: 52)
+                                        .allowsHitTesting(false)
+                                    TaskFilterBar()
+                                    Spacer(minLength: 0)
+                                }
+                                .frame(maxWidth: .infinity)
                             }
-                            .frame(maxWidth: .infinity)
+                            .frame(maxHeight: .infinity, alignment: .top)
                         }
-                        .frame(maxHeight: .infinity, alignment: .top)
+                        // Match `dashboardSplit`'s 220pt leading
+                        // inset so the GeometryReader sees the same
+                        // rect the timeline+task split occupies —
+                        // otherwise the filter bar's timelineW math
+                        // (based on the full window) drifts and the
+                        // pills land over the timeline column.
+                        .padding(.leading, 220)
                     }
 
                     // 4. Toolbar — TOPMOST layer; pills stay
@@ -183,6 +245,16 @@ struct ContentView: View {
                     //    centres the traffic-light buttons
                     //    on the same Y as our pills.
                     toolbar
+                        // Inset the toolbar's pill cluster by the
+                        // sidebar's column width so "+ Evento" /
+                        // "Hoje" / list picker etc. aren't hidden
+                        // under the floating Liquid Glass pane.
+                        // The WindowDragArea below spans the FULL
+                        // toolbar width so the title-bar region
+                        // over the sidebar still drags the window
+                        // (and the macOS traffic lights stay
+                        // clickable via the sidebar's 44pt inset).
+                        .padding(.leading, 220)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .frame(height: 52, alignment: .center)
                         // Make the toolbar band drag the window.
@@ -203,6 +275,42 @@ struct ContentView: View {
                         .background(WindowDragArea())
                 }
                 .allowsHitTesting(!anyPopupOpen)
+
+                    // 5. Global sync indicator — a 2pt accent
+                    //    stripe at the very top edge that lights
+                    //    up whenever ANY async sync is in flight
+                    //    (driven by `appState.activeSyncCount`).
+                    //    Universal: any call wrapped in
+                    //    `appState.tracked { … }` or that bumps
+                    //    the counter directly surfaces here for
+                    //    free. Sits ABOVE everything else, so
+                    //    it's visible even over the toolbar.
+                    VStack(spacing: 0) {
+                        EditorialSyncBar()
+                            .environmentObject(appState)
+                        Spacer(minLength: 0)
+                    }
+                    .allowsHitTesting(false)
+                }  // close inner ZStack(alignment: .top) — chrome
+
+                    // Sidebar overlay — fixed 220pt column at the
+                    // leading edge of the ZStack. Underneath the
+                    // Liquid Glass material it pulls vibrancy from
+                    // whatever paints behind in the chrome ZStack
+                    // (Editorial.paper + toolbar + the active main
+                    // view), so content visibly flows under it.
+                    EditorialSidebar(
+                        active: $sidebarRoute,
+                        listFilter: $sidebarListFilter,
+                        onOpenPalette: {
+                            NSApp.sendAction(Selector(("toggleCommandPalette:")),
+                                             to: nil, from: nil)
+                        },
+                        onOpenSettings: { showSettings = true }
+                    )
+                    .environmentObject(appState)
+                    .allowsHitTesting(!anyPopupOpen)
+                }  // close outer ZStack — chrome | sidebar overlay
 
                 // 5. Event detail overlay — scales up from the tapped pill
                 //    with a spring-bounce. Explicit `.zIndex(1000)` so
@@ -260,6 +368,25 @@ struct ContentView: View {
                     SettingsView(onClose: { showSettings = false })
                         .environmentObject(appState)
                 }
+                // List picker — full modal (same chrome as
+                // Settings/Onboarding). Replaces the compact
+                // anchored dropdown that lived under the
+                // "Listas / Video ⌄" pill. `listPickerToken`
+                // bumps when the sheet flips closed so the
+                // toolbar pill re-reads the new list name from
+                // Keychain (not observable on its own).
+                FloatingModal(
+                    isPresented: $showListPicker,
+                    origin:      listPickerOrigin,
+                    windowSize:  windowGeo.size,
+                    fromBottom:  true
+                ) {
+                    CUListPickerSheet(onClose: {
+                        listPickerToken &+= 1
+                        showListPicker = false
+                    })
+                        .environmentObject(appState)
+                }
                 // Global "transform event into task" overlay. Driven
                 // by `appState.pendingConversion` so any surface
                 // (event detail header, timeline right-click) can
@@ -288,22 +415,17 @@ struct ContentView: View {
                 // Sits ABOVE the EventDetail (which uses zIndex 1000)
                 // so the convert sheet always wins focus.
                 .zIndex(2000)
-                // ClickUp list picker — same sheet Settings/Onboarding
-                // use, surfaced from the toolbar pill so the user
-                // can switch lists in one click without opening
-                // Settings. The wrapper binding bumps
-                // `listPickerToken` whenever the sheet flips
-                // closed, forcing the toolbar pill to re-read the
-                // new list name from Keychain (which isn't
-                // observable on its own).
-                // List picker — anchored DROPDOWN under the
-                // "Listas" toolbar pill (was a centered modal).
-                Group {
-                    if showListPicker {
-                        listAnchoredOverlay(windowSize: windowGeo.size)
-                    }
-                }
-                .zIndex(1100)
+                // ClickUp list picker — restored to the FULL modal
+                // sheet the Settings/Onboarding flows use (was an
+                // anchored dropdown). Per user request: clicking
+                // the toolbar's "Listas / Video ⌄" should bring
+                // back the legacy selector, not a compact pop.
+                // The wrapper bumps `listPickerToken` when the
+                // sheet flips closed so the toolbar pill re-reads
+                // the new list name from Keychain (not observable
+                // on its own).
+                EmptyView()
+                    .zIndex(1100)
                 FloatingModal(
                     isPresented: $showOnboarding,
                     windowSize:  windowGeo.size,
@@ -591,14 +713,14 @@ struct ContentView: View {
         // helps the design — without paying the system-wide tax
         // of a window-wide blur.
         .background(
-            // The Editorial canvas. `Editorial.paper` is a dynamic
-            // token (cream in light, warm-black in dark) that
-            // resolves off the app's pinned appearance — NOT the
-            // raw system `.windowBackgroundColor`, so the backdrop
-            // always matches the chosen Editorial theme rather than
-            // jumping to the system grey/black behind the timeline
-            // fade.
-            Editorial.paper
+            // Editorial.paper used to paint the whole window here
+            // — but the Editorial+ sidebar wants its column truly
+            // transparent so the floating Liquid Glass pane can
+            // pull from the desktop. The chrome side now owns its
+            // own paper fill (ContentView body, inside the HStack);
+            // this root background is just Color.clear so the
+            // sidebar column stays see-through.
+            Color.clear
                 .ignoresSafeArea()
         )
         // Push the toolbar up into the macOS title bar (alongside traffic lights)
@@ -804,46 +926,39 @@ struct ContentView: View {
                 // `if showNotifs` parent removes the view
                 // synchronously before the transition runs,
                 // making the popup vanish without animation.
-                withAnimation(.spring(duration: 0.45, bounce: 0.32)) {
+                withAnimation(.spring(duration: 0.55, bounce: 0.13)) {
                     showNotifs = false
                 }
             }
             .transition(.opacity)
 
-        // Translate the captured click point into a UnitPoint
-        // (0…1 across the window). With windowSize zero on the very
-        // first layout pass, fall back to the bell's centre so the
-        // popup never animates out of (0,0).
-        let cursorAnchor = UnitPoint(
-            x: windowSize.width  > 0 ? notifsOpenPoint.x / windowSize.width  : 1.0,
-            y: windowSize.height > 0 ? notifsOpenPoint.y / windowSize.height : 0.05
-        )
-
-        // The popup itself, anchored under the bell. Padding has to be
-        // applied *before* the infinity-alignment frame: when it goes
-        // after, SwiftUI grows the already-infinite frame instead of
-        // offsetting the content within it, which leaves the popup
-        // floating in the middle of the window instead of under the
-        // bell. With the padding inside, the popup's natural size gets
-        // padded first and then the frame stretches the padded view
-        // to the window's bounds with top-trailing alignment, so the
-        // popup's right edge lands exactly at `notifsOrigin.maxX`.
+        // Side-panel layout — hangs from below the toolbar to
+        // near the window bottom, pinned to the trailing edge
+        // with a small visual gutter. The wrapper provides the
+        // top reserve (toolbar band) + outer margins; the
+        // panel itself fills the remaining vertical space.
         NotificationsCenterView(onClose: {
-            withAnimation(.spring(duration: 0.45, bounce: 0.32)) {
+            withAnimation(.spring(duration: 0.55, bounce: 0.13)) {
                 showNotifs = false
             }
         })
             .environmentObject(appState)
-            .padding(.top,      max(notifsOrigin.maxY + 8, 60))
-            .padding(.trailing, max(windowSize.width - notifsOrigin.maxX, 8))
+            .padding(.top,      62)   // clear toolbar
+            .padding(.trailing, 16)
+            .padding(.bottom,   24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            // Slide IN from the right with a spring bounce at
+            // the end (per design intent — replaces the
+            // cursor-anchored scale that read as "popping out"
+            // from the bell). Out animation mirrors the slide
+            // back to the trailing edge.
             .transition(.asymmetric(
-                insertion: .scale(scale: 0.05, anchor: cursorAnchor)
+                insertion: .move(edge: .trailing)
                     .combined(with: .opacity),
-                removal:   .scale(scale: 0.05, anchor: cursorAnchor)
+                removal:   .move(edge: .trailing)
                     .combined(with: .opacity)
             ))
-            .animation(.spring(duration: 0.45, bounce: 0.32), value: showNotifs)
+            .animation(.spring(duration: 0.55, bounce: 0.13), value: showNotifs)
     }
 
     private func collapseBellPill() {
@@ -1116,6 +1231,10 @@ struct ContentView: View {
         // hairline rule along the bottom IS the only divider.
         HStack(spacing: 26) {
 
+            // (Apollo brand mark removed — leading slot is now
+            //  empty so "+ Evento" sits right at the toolbar's
+            //  leading edge.)
+
             // + Evento
             Button { showNewEvent = true } label: {
                 Text("+ Evento")
@@ -1146,37 +1265,25 @@ struct ContentView: View {
 
             Spacer(minLength: 0)
 
-            // Filtros — accent-tinted while ≥1 dimension is active
-            if appState.clickUpAuthService.isConnected {
-                filtersButton
-            }
+            // (Filtros button removed from the toolbar — filters
+            //  now live in the sidebar's FILTROS section,
+            //  collapsibles per category. No need to surface a
+            //  second entry point in the top bar.)
 
-            // Buscar ⌘K — opens the existing Spotlight-style palette
-            // (same responder action ⌘K triggers from the menu).
+            // Buscar — opens the command palette. Stripped to a
+            // plain text link to match the prototype (no glyph,
+            // no ⌘K kbd badge). The ⌘K shortcut still works via
+            // the responder chain.
             Button {
                 NSApp.sendAction(Selector(("toggleCommandPalette:")), to: nil, from: nil)
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 14, weight: .regular))
-                    Text("Buscar")
-                    KbdTB(text: "⌘K")
-                }
+                Text("Buscar")
             }
             .buttonStyle(TBButtonStyle())
             .focusEffectDisabled()
             .help("Buscar (⌘K)")
 
-            // + Tarefa
-            Button { showNewTask = true } label: {
-                Text("+ Tarefa")
-            }
-            .buttonStyle(TBButtonStyle())
-            .focusEffectDisabled()
-            .help("Nova tarefa")
-            .captureFrame($newTaskOrigin)
-
-            // ✦ Apollo — cinnabar mark + word (prototype AIMark)
+            // ✦ Apollo IA — cinnabar mark + word (prototype AIMark)
             Button {
                 let rect = MouseOriginCapture.currentClickRectInMainWindow()
                 if rect != .zero {
@@ -1189,7 +1296,7 @@ struct ContentView: View {
             } label: {
                 HStack(spacing: 5) {
                     AIMark(size: 14)
-                    Text("Apollo")
+                    Text("Apollo IA")
                 }
             }
             .buttonStyle(TBButtonStyle(accent: true))
@@ -1217,7 +1324,7 @@ struct ContentView: View {
                 notifsOpenPoint = rect == .zero
                     ? CGPoint(x: notifsOrigin.midX, y: notifsOrigin.midY)
                     : CGPoint(x: rect.midX, y: rect.midY)
-                withAnimation(.spring(duration: 0.45, bounce: 0.32)) {
+                withAnimation(.spring(duration: 0.55, bounce: 0.13)) {
                     showNotifs.toggle()
                 }
             } label: {
@@ -1257,12 +1364,46 @@ struct ContentView: View {
             .buttonStyle(TBIconButtonStyle())
             .focusEffectDisabled()
             .captureFrame($settingsOrigin)
+
+            // Vertical separator — divides the icon cluster (bell
+            // + gear) from the primary CTA on the right, matching
+            // the prototype's visual rhythm.
+            Rectangle()
+                .fill(Editorial.rule)
+                .frame(width: 1, height: 22)
+                .padding(.horizontal, -8)
+
+            // + Nova tarefa — primary CTA. Cinnabar pill instead
+            // of the text-link "+ Tarefa" the leading cluster
+            // used to carry (now removed); this is the prototype's
+            // emphasised "new task" affordance.
+            Button { showNewTask = true } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .bold))
+                    Text("Nova tarefa")
+                        .font(Editorial.sans(13.5, .semibold))
+                }
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule().fill(Editorial.accent)
+                )
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .help("Nova tarefa")
+            .captureFrame($newTaskOrigin)
         }
-        // Leading clears the native macOS traffic lights with
-        // 10px breathing room after them (was 93 → 103).
-        // Trailing kept tight (12) so the gear sits near the
-        // window edge.
-        .padding(.leading, 103)
+        // Leading kept tight (14pt) so the Apollo brand mark sits
+        // right next to the sidebar's trailing edge. The 220pt
+        // sidebar-clear inset is applied OUTSIDE this HStack
+        // (see `.padding(.leading, 220)` on the toolbar instance
+        // in `body`), so we don't need the legacy 103pt traffic-
+        // light gap here — the sidebar already covers that zone
+        // with its own 44pt traffic-light inset.
+        .padding(.leading, 14)
         .padding(.trailing, 12)
         // Invisible ⌘R sync trigger. Lives in a zero-impact
         // BACKGROUND (not as an HStack child) — as a sibling it
@@ -1286,25 +1427,132 @@ struct ContentView: View {
     // MARK: - Main content
 
     private var mainContent: some View {
-        // EditorialMainV2: a clean proportional split —
-        // `gridTemplateColumns: '1fr 1.05fr'` (timeline | tasks)
-        // with a single hairline rule between. No resizable
-        // handle, no edge-fade masks (those were Liquid-Glass
-        // affordances); the redesign is a fixed two-column
-        // spread that scales with the window.
+        // EditorialMainV2 dashboard / Editorial+ board router. The
+        // sidebar's `sidebarRoute` selects which surface fills the
+        // chrome's main rect:
+        //   .board → kanban (EditorialBoardView)
+        //   anything else → the legacy split (timeline | tasks)
+        //
+        // Both surfaces start with a 220pt leading inset so their
+        // FIRST column / card lines up where it did in the
+        // pre-overlay HStack era (right of the sidebar). Content
+        // that scrolls past that inset slides UNDER the glass and
+        // shows through the translucent material — i.e. the
+        // sidebar reveals content as you scroll past it, but
+        // nothing renders behind-the-glass at rest.
+        Group {
+            switch sidebarRoute {
+            case .board:
+                EditorialBoardView()
+                    .environmentObject(appState)
+                    // Leading inset → first column lines up where
+                    // the legacy dashboard split started (right of
+                    // the sidebar's column). Top inset → board
+                    // header (crumb + tagline) sits BELOW the
+                    // toolbar pills instead of colliding at y=0.
+                    // (The legacy dashboard's scroll views carry
+                    // their own 52pt topContentInset internally;
+                    // the board renders a plain VStack so we have
+                    // to add the inset here.)
+                    .padding(.top, 52)
+                    .padding(.leading, 220)
+            case .tasks:
+                EditorialMyTasksView()
+                    .environmentObject(appState)
+                    .padding(.top, 52)
+                    .padding(.leading, 220)
+            case .today:
+                editorialHomeView
+            default:
+                dashboardSplit
+            }
+        }
+    }
+
+    /// Editorial+ Home — port of the prototype's top band
+    /// (folio + serif "Home" title + date+stats row + next-event
+    /// card + AGENDA/TAREFAS section labels) stacked above the
+    /// legacy timeline | tasks split. The header lives in its
+    /// own scroll-free band so the dashboard below keeps its
+    /// independent scrolling.
+    private var editorialHomeView: some View {
+        VStack(spacing: 0) {
+            EditorialHomeHeader()
+                .environmentObject(appState)
+                .padding(.top, 52)        // clear the toolbar pills
+                .padding(.leading, 220)   // clear the glass sidebar
+            // Home-specific split: TimelineView on the left
+            // (forward-only window), EditorialHomeTasksColumn on
+            // the right — grouped-by-status with collapsibles,
+            // matching the MyTasks page's organisation. Replaces
+            // the flat `TaskListView` on this route.
+            homeDashboardSplit
+        }
+    }
+
+    @ViewBuilder
+    private var homeDashboardSplit: some View {
         GeometryReader { geo in
             let total     = max(1, geo.size.width)
             let timelineW = (total - 1) * (1.0 / 2.05)
             HStack(spacing: 0) {
-                TimelineView()
+                TimelineView(forwardOnly: true)
                     .frame(width: timelineW)
                 Rectangle()
                     .fill(Editorial.rule)
                     .frame(width: 1)
-                TaskListView()
+                EditorialHomeTasksColumn()
+                    .environmentObject(appState)
                     .frame(maxWidth: .infinity)
             }
         }
+        .padding(.leading, 220)
+    }
+
+    /// The original two-column dashboard (timeline + task list).
+    /// Extracted so `mainContent` can switch between this and the
+    /// kanban without indenting the split layout under another
+    /// branch. Carries a `220pt` leading inset because the sidebar
+    /// now overlays the chrome — without the inset the timeline's
+    /// event titles would slide BEHIND the Liquid Glass pane and
+    /// the leading half of each title would be occluded.
+    private var dashboardSplit: some View {
+        dashboardSplitBody(skipsLegacyHeaderInsets: false)
+    }
+
+    /// Same split, but the embedded scroll views drop their
+    /// legacy 52pt toolbar reserve + filter-bar reserve. Used
+    /// by the `.today` route where `EditorialHomeHeader` already
+    /// occupies that band above — without this the task column
+    /// shows a huge empty gap between the inline status pills
+    /// and the first row.
+    private var dashboardSplitInsetless: some View {
+        dashboardSplitBody(skipsLegacyHeaderInsets: true)
+    }
+
+    /// EditorialMainV2: a clean proportional split —
+    /// `gridTemplateColumns: '1fr 1.05fr'` (timeline | tasks)
+    /// with a single hairline rule between.
+    @ViewBuilder
+    private func dashboardSplitBody(skipsLegacyHeaderInsets: Bool) -> some View {
+        GeometryReader { geo in
+            let total     = max(1, geo.size.width)
+            let timelineW = (total - 1) * (1.0 / 2.05)
+            HStack(spacing: 0) {
+                // Home/Hoje route drops past days from the
+                // agenda — the user only cares about today
+                // forward; the legacy ±30 window stays for
+                // other surfaces.
+                TimelineView(forwardOnly: skipsLegacyHeaderInsets)
+                    .frame(width: timelineW)
+                Rectangle()
+                    .fill(Editorial.rule)
+                    .frame(width: 1)
+                TaskListView(skipsLegacyHeaderInsets: skipsLegacyHeaderInsets)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.leading, 220)
     }
 
 }
@@ -1466,20 +1714,27 @@ struct FrostedStrip: View {
     /// two scrolling regions look related.
     var fadeExtent: CGFloat = 120
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
-        // 3-stop linear gradient using the window's bg
-        // colour. The TOOLBAR REGION (top ~barHeight of the
-        // strip) stays fully opaque so content scrolling
-        // up disappears completely under the pills, then
-        // the lower section softly fades to clear so the
-        // body's first row reads continuously.
-        // Single GPU rasterisation, no per-frame backdrop
-        // sampling.
-        // Editorial: the chrome is paper, not a frosted/glass
-        // blur. Solid cream over the toolbar band, then a short
-        // soft fade so content scrolling up dissolves into the
-        // paper instead of hard-clipping under a hairline.
-        let bg = Editorial.paper
+        // 3-stop linear gradient using the window's bg colour.
+        // The TOOLBAR REGION (top ~barHeight of the strip) stays
+        // fully opaque so content scrolling up disappears
+        // completely under the pills, then the lower section
+        // softly fades to clear so the body's first row reads
+        // continuously.
+        //
+        // Color choice is RESOLVED HERE per render so it stays
+        // accurate on Light↔Dark switches. `Editorial.paper` is
+        // dynamic, but the previous version baked it into a
+        // `.drawingGroup()` raster — the texture cached the
+        // cream and stayed cream in dark mode. Reading
+        // `colorScheme` directly + dropping `.drawingGroup()`
+        // costs a hair more per frame but always matches the
+        // active appearance.
+        let bg: Color = colorScheme == .dark
+            ? Color(hex: "#1F1F1E")   // matches Editorial.paper dark
+            : Color(hex: "#F8F6F3")   // matches Editorial.paper light
         let total = barHeight + fadeExtent
         let solidStop = barHeight / total
         LinearGradient(
@@ -1493,7 +1748,6 @@ struct FrostedStrip: View {
         )
         .frame(height: total)
         .allowsHitTesting(false)
-        .drawingGroup()
     }
 }
 

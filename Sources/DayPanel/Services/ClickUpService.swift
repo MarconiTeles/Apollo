@@ -18,33 +18,77 @@ final class ClickUpService {
 
     // MARK: - Tasks
 
-    func listTasks() async throws -> [CUTask] {
-        guard let token, let listId else { throw CUError.notConfigured }
+    /// Convenience wrapper that uses the keychain-pinned active
+    /// listId. Preserves all existing call sites that assume
+    /// "the current list".
+    func listTasks(maxPages: Int = 10) async throws -> [CUTask] {
+        guard let listId else { throw CUError.notConfigured }
+        return try await listTasks(listId: listId, maxPages: maxPages)
+    }
 
+    /// Single-page fetch for a specific list — exposed so callers
+    /// can STREAM tasks into the UI as each page lands, rather
+    /// than waiting for the full paginated set. Returns up to
+    /// 100 tasks (ClickUp's page cap); caller knows it's the
+    /// last page when the response has <100 entries.
+    func listTasksPage(listId: String, page: Int) async throws -> [CUTask] {
+        guard let token else { throw CUError.notConfigured }
         var comps = URLComponents(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))/task")!
         comps.queryItems = [
             URLQueryItem(name: "include_closed", value: "true"),
-            // `subtasks=true` makes ClickUp include child tasks in
-            // the response (each with its `parent` field set to
-            // the parent task's id). The app filters them out of
-            // the top-level list view and only surfaces them
-            // under the parent's detail popup.
             URLQueryItem(name: "subtasks",       value: "true"),
-            // `markdown_description` opt-in: ClickUp's plain
-            // `description` / `text_content` fields silently drop
-            // inline file references (Google Drive embeds,
-            // pasted-as-link attachments). The markdown version
-            // includes them as `[label](url)` so the renderer can
-            // surface them. parseTasks falls back to the plain
-            // field when markdown_description isn't returned.
             URLQueryItem(name: "include_markdown_description", value: "true"),
+            URLQueryItem(name: "page",           value: String(page)),
         ]
-
         var req = URLRequest(url: comps.url!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-
         let (data, _) = try await URLSession.shared.data(for: req)
         return parseTasks(data)
+    }
+
+    /// Paginated fetch for a SPECIFIC list — the variant used by
+    /// the per-list prefetch cache in AppState so we can warm any
+    /// list without flipping the keychain `clickupListId`.
+    func listTasks(listId: String, maxPages: Int = 10) async throws -> [CUTask] {
+        guard let token else { throw CUError.notConfigured }
+
+        // ClickUp's `/list/{listId}/task` endpoint pages at 100
+        // tasks per response. Without walking the pages, lists
+        // bigger than 100 silently truncate — Listas / Copy with
+        // ~100 tasks was hitting exactly this and dropping tasks
+        // that lived on page 2. Now we loop until a page comes
+        // back short of 100 (last page) or `maxPages` is reached.
+        // 10 pages = 1000 tasks is generous; the cap just bounds
+        // a pathological list size.
+        var all: [CUTask] = []
+        for page in 0..<maxPages {
+            var comps = URLComponents(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))/task")!
+            comps.queryItems = [
+                URLQueryItem(name: "include_closed", value: "true"),
+                // `subtasks=true` makes ClickUp include child tasks in
+                // the response (each with its `parent` field set to
+                // the parent task's id). The app filters them out of
+                // the top-level list view and only surfaces them
+                // under the parent's detail popup.
+                URLQueryItem(name: "subtasks",       value: "true"),
+                // `markdown_description` opt-in: ClickUp's plain
+                // `description` / `text_content` fields silently drop
+                // inline file references (Google Drive embeds,
+                // pasted-as-link attachments). The markdown version
+                // includes them as `[label](url)` so the renderer can
+                // surface them. parseTasks falls back to the plain
+                // field when markdown_description isn't returned.
+                URLQueryItem(name: "include_markdown_description", value: "true"),
+                URLQueryItem(name: "page",           value: String(page)),
+            ]
+            var req = URLRequest(url: comps.url!)
+            req.setValue(token, forHTTPHeaderField: "Authorization")
+            let (data, _) = try await URLSession.shared.data(for: req)
+            let pageTasks = parseTasks(data)
+            all += pageTasks
+            if pageTasks.count < 100 { break }      // last page
+        }
+        return all
     }
 
     /// Cross-list "My Work": every task in the workspace
@@ -59,6 +103,30 @@ final class ClickUpService {
     /// when a page comes back short (last page). 500 is way
     /// past any realistic "assigned to me right now" set; the
     /// cap just bounds a pathological workspace.
+    /// Single-page variant of `listMyTasks` — exposed so callers
+    /// can STREAM the assigned-to-me set into the UI as each
+    /// page arrives. Same shape as `listTasksPage` but hits
+    /// the cross-list team endpoint with `assignees[]` filter.
+    func listMyTasksPage(workspaceId: String,
+                         userId: Int,
+                         page: Int) async throws -> [CUTask] {
+        guard let token else { throw CUError.notConfigured }
+        var comps = URLComponents(string:
+            "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/task")!
+        comps.queryItems = [
+            URLQueryItem(name: "assignees[]",   value: String(userId)),
+            URLQueryItem(name: "include_closed", value: "true"),
+            URLQueryItem(name: "subtasks",       value: "true"),
+            URLQueryItem(name: "include_markdown_description", value: "true"),
+            URLQueryItem(name: "page",           value: String(page)),
+            URLQueryItem(name: "order_by",       value: "updated"),
+        ]
+        var req = URLRequest(url: comps.url!)
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        let (data, _) = try await URLSession.shared.data(for: req)
+        return parseTasks(data)
+    }
+
     func listMyTasks(workspaceId: String,
                      userId: Int,
                      maxPages: Int = 5) async throws -> [CUTask] {
@@ -248,18 +316,43 @@ final class ClickUpService {
         try await updateTask(id: id, fields: ["archived": true])
     }
 
-    /// Moves a task to a different list within the same
-    /// workspace. ClickUp's `Move task` endpoint preserves
-    /// the task id (the url stays the same) and migrates
-    /// status / priority / assignees as long as the target
-    /// list has matching values; otherwise they reset to
-    /// the new list's defaults.
+    /// NOTE: despite its name, this hits ClickUp's
+    /// **"Add Task To List"** endpoint (`POST /list/{lid}/task/{tid}`),
+    /// which ADDS the task to an additional list — it doesn't move.
+    /// New callers should prefer the explicit `addTaskToList` /
+    /// `removeTaskFromList` methods below.
     func moveTask(id: String, toListId: String) async throws {
+        try await addTaskToList(taskId: id, listId: toListId)
+    }
+
+    /// Adds an existing task to an additional list — implements
+    /// the multi-list ("Tasks in Multiple Lists") feature. Requires
+    /// the workspace to have that ClickApp enabled; otherwise the
+    /// API returns 400.
+    func addTaskToList(taskId: String, listId: String) async throws {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(
-            string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(toListId))/task/\(Self.cuPathSafe(id))"
+            string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))/task/\(Self.cuPathSafe(taskId))"
         )!)
         req.httpMethod = "POST"
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        let (_, response) = try await URLSession.shared.data(for: req)
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            throw CUError.parse
+        }
+    }
+
+    /// Removes a task from an additional list. The HOME list
+    /// cannot be removed via this endpoint — ClickUp returns an
+    /// error. Callers should always keep the home list in the
+    /// desired set when diffing.
+    func removeTaskFromList(taskId: String, listId: String) async throws {
+        guard let token else { throw CUError.notConfigured }
+        var req = URLRequest(url: URL(
+            string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))/task/\(Self.cuPathSafe(taskId))"
+        )!)
+        req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
         let (_, response) = try await URLSession.shared.data(for: req)
         if let http = response as? HTTPURLResponse,
@@ -1649,6 +1742,21 @@ final class ClickUpService {
                     return other
                 }
 
+            // Multi-list memberships ("Tasks in Multiple Lists").
+            // ClickUp returns a `locations` array on tasks that
+            // belong to more than one list. Each entry carries
+            // `{id, name, access?}`. Excludes the home list — we
+            // surface that one through `listId`/`listName` and
+            // dedupe at the model layer via `allListMemberships`.
+            let locations: [CUTask.TaskLocation] = (item["locations"] as? [[String: Any]] ?? [])
+                .compactMap { loc in
+                    guard let lid = loc["id"] as? String,
+                          let lname = loc["name"] as? String
+                    else { return nil }
+                    if lid == listId { return nil }   // skip home list
+                    return CUTask.TaskLocation(id: lid, name: lname)
+                }
+
             return CUTask(
                 id:                id,
                 title:             name,
@@ -1674,6 +1782,7 @@ final class ClickUpService {
                 topLevelParentId:  topLevelParentId,
                 attachments:       attachments,
                 checklists:        checklists,
+                locations:         locations,
                 customFields:      customFields,
                 dependencies:      dependencies,
                 linkedTaskIds:     linkedTaskIds

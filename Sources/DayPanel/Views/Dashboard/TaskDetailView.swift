@@ -106,6 +106,15 @@ struct TaskDetailView: View, Equatable {
     @State private var assigneeSearchOpen: Bool = false
     @FocusState private var assigneeSearchFocused: Bool
 
+    /// LISTAS picker (multi-list / "Tasks in Multiple Lists").
+    /// Same UX as the assignee picker just above: chips for current
+    /// memberships, an "Adicionar/Editar" button that reveals an
+    /// inline search + filtered candidate list. Tapping a row
+    /// toggles the task's membership in that list.
+    @State private var listsQuery: String = ""
+    @State private var listsSearchOpen: Bool = false
+    @FocusState private var listsSearchFocused: Bool
+
     /// Base-name keys of attachment version groups the user has
     /// expanded to see older revisions. Collapsed by default —
     /// only the newest version of each `…v01/v02/v03` set shows
@@ -776,17 +785,7 @@ struct TaskDetailView: View, Equatable {
                                      ? Editorial.inkMute : Editorial.ink)
             }
 
-            kvCell("Subtarefas") {
-                let kids = appState.subtasks(of: task.id)
-                if kids.isEmpty {
-                    Text("—").font(Editorial.sans(12))
-                        .foregroundStyle(Editorial.inkMute)
-                } else {
-                    Text("\(kids.filter(\.isCompleted).count) de \(kids.count) concluídas")
-                        .font(Editorial.sans(12))
-                        .foregroundStyle(Editorial.ink)
-                }
-            }
+            kvCell("Listas") { listsCellContent }
 
             kvCell("Criado por") {
                 if let who = task.creator?.username
@@ -2190,6 +2189,223 @@ struct TaskDetailView: View, Equatable {
         .frame(width: 18, height: 18)
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // MARK: LISTAS picker (multi-list)
+    // ────────────────────────────────────────────────────────────────
+
+    /// Filtered list of pickable lists. Already-membered lists rise
+    /// to the top so tapping the same row toggles add ↔ remove —
+    /// same pattern as `filteredAssigneeCandidates`.
+    private var filteredListCandidates: [CUList] {
+        let q = listsQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        let memberIds = Set(task.allListMemberships.map(\.id))
+        let pool = appState.availableLists
+        let filtered = q.isEmpty
+            ? pool
+            : pool.filter { $0.name.lowercased().contains(q) }
+        return filtered.sorted { lhs, rhs in
+            let l = memberIds.contains(lhs.id) ? 0 : 1
+            let r = memberIds.contains(rhs.id) ? 0 : 1
+            if l != r { return l < r }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    /// Contents of the LISTAS kvCell — chips for current
+    /// memberships + an "Adicionar/Editar" trigger that reveals
+    /// the inline picker. Wired to AppState.updateTaskLists when
+    /// the user toggles a row.
+    private var listsCellContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            let memberships = task.allListMemberships
+            HStack(spacing: 6) {
+                if !memberships.isEmpty {
+                    listChip(memberships[0], isHome: true)
+                    ForEach(memberships.dropFirst(), id: \.id) { loc in
+                        listChip(loc, isHome: false)
+                    }
+                } else {
+                    Text("—").font(Editorial.sans(12))
+                        .foregroundStyle(Editorial.inkMute)
+                }
+                if !listsSearchOpen {
+                    Button {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                            listsSearchOpen = true
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            listsSearchFocused = true
+                        }
+                    } label: {
+                        Text(memberships.isEmpty ? "Adicionar" : "Editar")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                }
+            }
+            if listsSearchOpen {
+                listsSearchBar
+            }
+        }
+    }
+
+    /// One LISTAS chip. The HOME list (the task's `listId`) wears
+    /// a `★` so the user knows that one can't be removed via this
+    /// picker — only via a true "move" operation. Other lists are
+    /// removable on tap from the dropdown.
+    private func listChip(_ loc: CUTask.TaskLocation, isHome: Bool) -> some View {
+        HStack(spacing: 4) {
+            if isHome {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Editorial.accent)
+            } else {
+                Circle()
+                    .fill(Editorial.inkFaint)
+                    .frame(width: 5, height: 5)
+            }
+            Text(loc.name)
+                .font(Editorial.sans(11, .medium))
+                .foregroundStyle(isHome ? Editorial.ink : Editorial.inkSoft)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(isHome ? Editorial.accent.opacity(0.08) : Editorial.ink.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(isHome ? Editorial.accent.opacity(0.30) : Editorial.rule.opacity(0.6),
+                              lineWidth: 1)
+        )
+    }
+
+    /// Inline search bar + suggestions list. Mirrors
+    /// `assigneeSearchBar`'s chrome so the two pickers feel like
+    /// one family.
+    @ViewBuilder
+    private var listsSearchBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                TextField("Buscar lista…", text: $listsQuery)
+                    .textFieldStyle(.plain)
+                    .font(.caption)
+                    .focused($listsSearchFocused)
+                if !listsQuery.isEmpty {
+                    Button {
+                        listsQuery = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                }
+                Button {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                        listsSearchOpen = false
+                        listsQuery = ""
+                    }
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help("Fechar busca")
+            }
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .background(Color.primary.opacity(0.06),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+            )
+
+            if appState.availableLists.isEmpty {
+                Text("Nenhuma lista disponível — fixe listas na sidebar primeiro.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 4).padding(.vertical, 4)
+            } else {
+                let candidates = filteredListCandidates
+                if candidates.isEmpty {
+                    Text("Nenhuma lista encontrada")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 4).padding(.vertical, 4)
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(candidates.prefix(8), id: \.id) { l in
+                            listsCandidateRow(l)
+                            if l.id != candidates.prefix(8).last?.id {
+                                Rectangle()
+                                    .fill(.separator.opacity(0.3))
+                                    .frame(height: 0.5)
+                            }
+                        }
+                    }
+                    .background(Color.primary.opacity(0.04),
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+                    )
+                }
+            }
+        }
+    }
+
+    /// One row in the lists picker dropdown — tapping toggles the
+    /// list's membership on the task. The HOME list is shown but
+    /// not togglable (you'd need to MOVE the task to swap homes).
+    private func listsCandidateRow(_ l: CUList) -> some View {
+        let isMember = task.allListMemberships.contains(where: { $0.id == l.id })
+        let isHome   = (l.id == task.listId)
+        return Button {
+            guard !isHome else { return }
+            var ids = Set(task.allListMemberships.map(\.id))
+            if isMember { ids.remove(l.id) } else { ids.insert(l.id) }
+            Task { await appState.updateTaskLists(task, to: ids) }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isMember
+                      ? (isHome ? "star.fill" : "checkmark.circle.fill")
+                      : "circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(
+                        isHome ? AnyShapeStyle(Editorial.accent) :
+                        isMember ? AnyShapeStyle(Color.blue) :
+                                   AnyShapeStyle(HierarchicalShapeStyle.tertiary)
+                    )
+                Text(l.name)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if isHome {
+                    Text("home")
+                        .font(.system(size: 9, weight: .semibold))
+                        .tracking(0.6)
+                        .foregroundStyle(Editorial.inkMute)
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .help(isHome ? "Lista atual da tarefa (use MOVER para mudar)" :
+              isMember ? "Remover desta lista" : "Adicionar a esta lista")
+    }
+
     private func tagPill(_ tag: CUTask.Tag) -> some View {
         // Editorial chip: the tag keeps its own ClickUp hue but
         // densified/desaturated (`editorialMuted`) so it sits
@@ -2385,8 +2601,7 @@ struct SubtaskRow: View, Equatable {
                 checkboxButton
 
                 Text(task.title)
-                    .font(Editorial.serif(15))
-                    .tracking(-0.1)
+                    .font(Editorial.sans(13, .medium))
                     .strikethrough(task.isCompleted, color: Editorial.inkMute)
                     .foregroundStyle(task.isCompleted ? Editorial.inkSoft : Editorial.ink)
                     .lineLimit(1)
@@ -2421,12 +2636,12 @@ struct SubtaskRow: View, Equatable {
             // right gutter to match the parent rows' inner inset.
             .padding(.leading, leadingIndent)
             .padding(.trailing, 14)
-            // 3% accent wash — matches the parent task list so
-            // subtasks share the same colour-by-category language.
-            // Applies in BOTH contexts where SubtaskRow renders:
-            // the dashboard's expanded inline list and the task
-            // detail popup's subtask list.
-            .background(Color(statusHex: task.statusDisplayHex).opacity(0.03))
+            // Subtask row background — flat (no per-category
+            // accent wash). The colour-by-status cue lives in the
+            // status dot/pill itself; the row stays paper-clean
+            // for parity with parent rows (which had their tint
+            // layer disabled earlier per the same request).
+            .background(Color.clear)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()

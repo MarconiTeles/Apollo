@@ -19,6 +19,19 @@ final class AppState: ObservableObject {
     @Published var tasks:             [CUTask]        = [] {
         didSet { rebuildTaskIndex() }
     }
+    /// Per-list memory cache so switching to a previously-visited
+    /// list snaps in INSTANTLY from memory while a background
+    /// refresh re-fetches silently. Mirrors ClickUp's web app
+    /// behavior. Keyed by ClickUp list id; written by `syncList`,
+    /// `sync()` (active list), and `prefetchPinnedLists`. Bounded
+    /// implicitly by the pinned-list count + lists the user has
+    /// actually visited this session — a handful of entries in
+    /// practice, nothing to evict.
+    @Published private(set) var tasksByListId: [String: [CUTask]] = [:]
+    /// Timestamp per list of the last prefetch attempt, used to
+    /// throttle the pinned-list warm-up so back-to-back syncs
+    /// don't hammer the API.
+    private var listPrefetchedAt: [String: Date] = [:]
     /// Events grouped by `startOfDay(startDate)` for the timeline.
     @Published private(set) var eventsByDay: [Date: [CalendarEvent]] = [:]
 
@@ -205,6 +218,28 @@ final class AppState: ObservableObject {
     }
     @Published var availableMembers:  [CUMember]      = []
     @Published var availableTags:     [CUTask.Tag]    = []
+
+    /// Lists currently selectable in the task-detail "LISTAS"
+    /// picker — union of the user's pinned lists (`PinnedLists`,
+    /// the same set the sidebar's LISTAS column shows) AND every
+    /// distinct list reached by an already-loaded task. Computed
+    /// so it stays in sync as `tasks` mutates; UserDefaults-backed
+    /// `PinnedLists` is read fresh on each access (cheap — single
+    /// JSON decode). Sorted alphabetically by name.
+    var availableLists: [CUList] {
+        var seen: [String: String] = [:]
+        for e in PinnedLists.load() {
+            if !e.id.isEmpty { seen[e.id] = e.name }
+        }
+        for t in tasks {
+            if !t.listId.isEmpty && seen[t.listId] == nil {
+                seen[t.listId] = t.listName.isEmpty ? "Lista" : t.listName
+            }
+        }
+        return seen
+            .map { CUList(id: $0.key, name: $0.value) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
     @Published var selectedTaskStatus: String?        = nil   // active status filter (nil = all)
     @Published var taskFilters:        TaskFilters    = TaskFilters()  // priority/assignee/tags/due
 
@@ -303,6 +338,36 @@ final class AppState: ObservableObject {
         detailSubtaskStack.removeAll()
     }
     @Published var syncStatus:        SyncStatus      = .idle
+
+    /// Universal in-flight counter — incremented when ANY async
+    /// sync operation starts, decremented when it finishes. Drives
+    /// the global `EditorialSyncBar` indicator + per-view
+    /// loading/empty distinctions. Refcounted (not boolean) so
+    /// concurrent operations (e.g. main sync + a status update)
+    /// keep the indicator visible until the LAST one finishes.
+    @Published private(set) var activeSyncCount: Int = 0
+    var isSyncing: Bool { activeSyncCount > 0 }
+
+    @MainActor private func incSync() { activeSyncCount += 1 }
+    @MainActor private func decSync() { activeSyncCount = max(0, activeSyncCount - 1) }
+
+    /// Wraps an async operation so its activity is reflected in
+    /// `activeSyncCount`. Use this on every entry point that
+    /// should surface progress (long fetches, mutations the user
+    /// initiated). Errors propagate as-is — the counter is
+    /// always cleaned up via defer.
+    func tracked<T>(_ work: () async throws -> T) async rethrows -> T {
+        await MainActor.run { incSync() }
+        defer { Task { @MainActor in self.decSync() } }
+        return try await work()
+    }
+    /// Non-throwing variant — same idea, for fire-and-forget
+    /// async closures.
+    func tracked<T>(_ work: () async -> T) async -> T {
+        await MainActor.run { incSync() }
+        defer { Task { @MainActor in self.decSync() } }
+        return await work()
+    }
     @Published var isOnline:          Bool            = true
     @Published var selectedDate:      Date            = Date()
     @Published var showMockData:      Bool            = false
@@ -1450,11 +1515,19 @@ final class AppState: ObservableObject {
                 .store(in: &cancellables)
         }
 
-        if let cached = cache.load(), !cached.events.isEmpty || !cached.tasks.isEmpty {
+        if let cached = cache.load(), !cached.events.isEmpty || !cached.tasks.isEmpty
+                                    || !cached.assignedToMeTasks.isEmpty {
             await MainActor.run {
                 events     = cached.events
                 tasks      = cached.tasks
                 syncStatus = .success(cached.lastSyncedAt)
+                // Restore "atribuídas a mim" from disk so the
+                // Tarefas view paints instantly on cold start
+                // (background refresh streams fresh data on top).
+                if !cached.assignedToMeTasks.isEmpty {
+                    assignedToMeTasks         = cached.assignedToMeTasks
+                    assignedToMeDidFirstLoad  = true
+                }
             }
         } else {
             await MainActor.run {
@@ -1695,9 +1768,92 @@ final class AppState: ObservableObject {
         return ws.id
     }
 
+    /// Cross-workspace "assigned to me" cache. Lives at AppState
+    /// scope so it persists across `EditorialMyTasksView`
+    /// re-mounts (switching to dashboard and back) — instant
+    /// snap-in on revisit, just like the per-list `tasksByListId`
+    /// cache. Populated by `syncAssignedToMeAcrossWorkspace`
+    /// (streaming) so the first page appears in ~500ms instead
+    /// of waiting for the full paginated set.
+    @Published private(set) var assignedToMeTasks: [CUTask] = []
+    /// Latch — flipped true the first time
+    /// `syncAssignedToMeAcrossWorkspace` finishes a fetch
+    /// attempt. Lets views distinguish "first sync in flight"
+    /// from "synced and got nothing".
+    @Published private(set) var assignedToMeDidFirstLoad: Bool = false
+
+    /// Streaming sync of the cross-workspace assigned-to-me set.
+    /// Fetches `listMyTasksPage` one page at a time and writes
+    /// each accumulated snapshot into `assignedToMeTasks` so the
+    /// view paints rows as they arrive. Cap 5 pages = 500
+    /// tasks. Wrapped in `tracked` so the global
+    /// `EditorialSyncBar` lights up for the duration.
+    func syncAssignedToMeAcrossWorkspace() async {
+        await MainActor.run { incSync() }
+        defer {
+            Task { @MainActor in
+                self.assignedToMeDidFirstLoad = true
+                self.decSync()
+                // Persist whatever we have (even partial pages)
+                // so a cold start tomorrow paints instantly.
+                // Cheap: writes through `CacheManager.save` which
+                // serialises a few hundred CUTasks at most.
+                self.persistAssignedToMeCache()
+            }
+        }
+        guard let uid = clickUpAuthService.userId,
+              let wsId = await resolveWorkspaceId()
+        else { return }
+        var accumulated: [CUTask] = []
+        for page in 0..<5 {
+            do {
+                let pageTasks = try await cuSvc.listMyTasksPage(
+                    workspaceId: wsId, userId: uid, page: page
+                )
+                accumulated += pageTasks
+                let snapshot = accumulated
+                await MainActor.run { assignedToMeTasks = snapshot }
+                if pageTasks.count < 100 { break }    // last page
+            } catch {
+                Log.error("syncAssignedToMe page=\(page): \(error)")
+                break
+            }
+        }
+    }
+
+    /// Snapshot the current `assignedToMeTasks` into the on-disk
+    /// AppCache without touching the other cache fields — so a
+    /// fresh assigned-to-me load doesn't wipe events/tasks
+    /// caches when the main sync hasn't run yet.
+    @MainActor
+    private func persistAssignedToMeCache() {
+        let existing = cache.load() ?? .empty
+        var next = existing
+        next.assignedToMeTasks = assignedToMeTasks
+        cache.save(next)
+    }
+
+    /// Kept for backward compat — non-streaming, one-shot
+    /// version. Prefer `syncAssignedToMeAcrossWorkspace` for
+    /// any UI surface so the user sees progressive results.
+    func fetchAssignedToMeAcrossWorkspace() async -> [CUTask]? {
+        guard let uid = clickUpAuthService.userId,
+              let wsId = await resolveWorkspaceId()
+        else { return nil }
+        return await tracked {
+            try? await self.cuSvc.listMyTasks(workspaceId: wsId, userId: uid)
+        }
+    }
+
     // MARK: - Sync
 
     func sync() async {
+        // Counter ref so the global EditorialSyncBar lights up
+        // for the full duration of the sync (calendar + ClickUp
+        // + members + tags). Decremented at every exit path.
+        await MainActor.run { incSync() }
+        defer { Task { @MainActor in self.decSync() } }
+
         let online = await MainActor.run { isOnline }
         guard online else { await MainActor.run { syncStatus = .offline }; return }
 
@@ -1764,12 +1920,34 @@ final class AppState: ObservableObject {
                     availableStatuses = s
                     availableMembers  = m
                     availableTags     = tg
+                    // Warm the per-list cache with the active
+                    // list's freshly-fetched tasks so a switch
+                    // away → back is instant.
+                    if mode != .myWork,
+                       let active = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId),
+                       !active.isEmpty {
+                        tasksByListId[active] = t
+                    }
+                }
+                // Pre-fetch pinned-list tasks in the background
+                // (capped concurrency, throttled per id) so the
+                // user's pinned switches are instant after the
+                // first sync of the session.
+                prefetchPinnedLists()
+                // Background prefetch of "atribuídas a mim" so
+                // the Tarefas view is already populated by the
+                // time the user clicks it (rather than waiting
+                // for an on-mount fetch). Cheap one-shot call;
+                // streaming pages already update incrementally.
+                Task.detached(priority: .background) { [weak self] in
+                    await self?.syncAssignedToMeAcrossWorkspace()
                 }
             } catch { hadError = true; Log.error("ClickUp: \(error)") }
         }
 
         let now = Date()
-        cache.save(AppCache(events: fetched, tasks: fetchedTasks, lastSyncedAt: now))
+        cache.save(AppCache(events: fetched, tasks: fetchedTasks, lastSyncedAt: now,
+                            assignedToMeTasks: assignedToMeTasks))
 
         // Diff against the snapshot from the previous sync — surfaces
         // changes that came from elsewhere (a teammate moved a task, an
@@ -2428,6 +2606,54 @@ final class AppState: ObservableObject {
             })
     }
 
+    /// Sync the task's list memberships ("Tasks in Multiple Lists")
+    /// to exactly `newIds`. The HOME list (`task.listId`) is
+    /// always kept — ClickUp doesn't allow removing the home list
+    /// via the additional-list endpoint, and "removing from home"
+    /// is semantically a MOVE (different operation). Diffs the
+    /// current `allListMemberships` set, fires add/remove API
+    /// calls in parallel batches, and updates the local task's
+    /// `locations` array optimistically so the chips redraw
+    /// without waiting for the next sync.
+    func updateTaskLists(_ task: CUTask, to newIds: Set<String>) async {
+        let homeId = task.listId
+        // Always include the home list so it's never removed.
+        var desired = newIds
+        if !homeId.isEmpty { desired.insert(homeId) }
+        let current = Set(task.allListMemberships.map(\.id))
+        let toAdd = Array(desired.subtracting(current))
+        // Never remove the home list, even if the caller dropped it.
+        let toRem = Array(current.subtracting(desired).filter { $0 != homeId })
+        guard !toAdd.isEmpty || !toRem.isEmpty else { return }
+
+        // Build the optimistic `locations` array (non-home only).
+        let nameById: [String: String] = Dictionary(
+            uniqueKeysWithValues: availableLists.map { ($0.id, $0.name) }
+        )
+        let nextLocations: [CUTask.TaskLocation] = desired
+            .subtracting([homeId])
+            .map { id in
+                CUTask.TaskLocation(
+                    id: id,
+                    name: nameById[id]
+                        ?? task.locations.first(where: { $0.id == id })?.name
+                        ?? "Lista"
+                )
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        await patchTask(task, field: "listas",
+            apply: { t in t.locations = nextLocations },
+            remote: {
+                for id in toAdd {
+                    try await self.cuSvc.addTaskToList(taskId: task.id, listId: id)
+                }
+                for id in toRem {
+                    try await self.cuSvc.removeTaskFromList(taskId: task.id, listId: id)
+                }
+            })
+    }
+
     func updateTaskTags(_ task: CUTask, to newNames: Set<String>) async {
         let oldNames = Set(task.tags.map(\.name))
         let toAdd = newNames.subtracting(oldNames)
@@ -2847,6 +3073,132 @@ final class AppState: ObservableObject {
     // MARK: - UI control surface (agent-driven)
 
     /// Switches the active ClickUp list by name. Looks up the
+    /// Switch the dashboard's active ClickUp list by id+name —
+    /// used by callers that already know the list (e.g. the
+    /// sidebar's "Listas / Fixadas" rows), bypassing the
+    /// workspace-tree round-trip `switchList(named:)` does.
+    /// Mirrors `SettingsView.pickById`: persists to keychain,
+    /// flips to `.activeList` mode, and re-syncs.
+    ///
+    /// PERF: shows cached tasks for the target list IMMEDIATELY
+    /// if we've ever loaded it (per-list memory cache populated
+    /// by previous syncs + the pinned-list prefetch below), then
+    /// fires a background refresh that silently replaces the
+    /// rows if the API returns different data. Matches the
+    /// "click → instant" feel of ClickUp's own web app.
+    @MainActor
+    func activateList(id: String, name: String) {
+        KeychainHelper.save(id,   for: KeychainHelper.Keys.clickupListId)
+        KeychainHelper.save(name, for: KeychainHelper.Keys.clickupListName)
+        // Picking a specific list implies leaving the cross-
+        // list "Meu trabalho" view, otherwise the canvas
+        // wouldn't visibly change.
+        taskViewMode = .activeList
+
+        // ── Optimistic display from the per-list cache ──────────
+        // If we've fetched this list before, hand the cached
+        // array over instantly so the UI snaps to the new list
+        // without a network round-trip. The `tasks` didSet
+        // (`rebuildTaskIndex`) does the rest.
+        if let cached = tasksByListId[id] {
+            tasks = cached
+        }
+
+        // ── Background refresh ──────────────────────────────────
+        // Always refetch — the cache might be stale, and the
+        // user expects the SAME visual rhythm regardless of cache
+        // hit/miss. The refresh writes back to the cache + to
+        // `tasks` only if the user is still on this list when it
+        // returns (so a fast list-switching binge doesn't fight
+        // itself).
+        Task { await self.syncList(id: id) }
+    }
+
+    /// Targeted fetch for ONE list. Used by:
+    ///   • `activateList` background refresh (instant feel)
+    ///   • `prefetchPinnedLists` (warms the cache on app
+    ///     launch / after the main sync)
+    /// Writes the result into `tasksByListId[id]`, and into
+    /// `tasks` if `id` is still the active list when the fetch
+    /// completes. Errors are swallowed — this is a best-effort
+    /// background path; the main `sync()` is the source of
+    /// truth for surfacing errors.
+    func syncList(id: String) async {
+        await MainActor.run { incSync() }
+        defer { Task { @MainActor in self.decSync() } }
+
+        // STREAMING pagination: fetch one page at a time and
+        // update the UI between pages. Effect — the user sees
+        // the first 100 tasks land in ~500ms instead of waiting
+        // for the whole paginated set (which could be 1.5-3s
+        // on a busy list). Matches ClickUp web's progressive
+        // render. Cap at 10 pages = 1000 tasks (sane upper
+        // bound for any realistic list).
+        var accumulated: [CUTask] = []
+        for page in 0..<10 {
+            do {
+                let pageTasks = try await cuSvc.listTasksPage(listId: id, page: page)
+                accumulated += pageTasks
+                // Snapshot to avoid the inout-capture warning
+                // inside the MainActor block.
+                let snapshot = accumulated
+                await MainActor.run {
+                    tasksByListId[id] = snapshot
+                    // Only replace the visible list if the user
+                    // is still on this list. Prevents a slow
+                    // fetch for List A from overwriting tasks
+                    // the user is now reading from List B.
+                    let active = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId)
+                    if active == id { tasks = snapshot }
+                }
+                if pageTasks.count < 100 { break }   // last page
+            } catch {
+                Log.error("syncList(\(id)) page=\(page): \(error)")
+                break
+            }
+        }
+    }
+
+    /// Fire-and-forget warm-up of every pinned list's task
+    /// cache, in parallel (capped at 4 concurrent fetches to
+    /// stay friendly with ClickUp's rate limits). Triggered
+    /// after the main sync's task pull lands so the network
+    /// isn't already saturated. Switching to any pinned list
+    /// after this runs feels instant.
+    func prefetchPinnedLists() {
+        let pinned = PinnedLists.load().map(\.id)
+        guard !pinned.isEmpty else { return }
+        let activeId = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId)
+        // Skip the currently active list (already fresh from
+        // the main sync). Skip ids already cached & touched in
+        // the last 30 seconds to avoid hammering the API on
+        // back-to-back syncs.
+        let now = Date()
+        let stale: TimeInterval = 30
+        let toFetch = pinned.filter { id in
+            if id == activeId { return false }
+            if let last = listPrefetchedAt[id],
+               now.timeIntervalSince(last) < stale { return false }
+            return true
+        }
+        guard !toFetch.isEmpty else { return }
+
+        Task.detached(priority: .background) { [weak self] in
+            guard let self else { return }
+            await withTaskGroup(of: Void.self) { group in
+                var inFlight = 0
+                let cap = 4
+                for id in toFetch {
+                    if inFlight >= cap { await group.next(); inFlight -= 1 }
+                    group.addTask { await self.syncList(id: id) }
+                    inFlight += 1
+                    await MainActor.run { self.listPrefetchedAt[id] = Date() }
+                }
+                await group.waitForAll()
+            }
+        }
+    }
+
     /// matching list via the workspace tree, persists the new
     /// id+name to keychain, and re-runs sync. Loose match
     /// (case-insensitive contains) so the agent doesn't have

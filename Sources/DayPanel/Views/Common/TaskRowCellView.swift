@@ -637,11 +637,13 @@ final class TaskRowContentView: NSView {
     /// Tracks the parent cell height in `TaskCollectionView`:
     ///   • 14pt → original (cell 80pt)
     ///   • 9pt → tightened for the 68pt cell
-    ///   • 14pt → restored for the 78pt cell (current).
-    /// Total parent-cell vertical: 14 + 20 + 8 + 22 + 14 = 78pt
-    /// — fits exactly in the 78pt slot. Subtask rows render via
+    ///   • 14pt → restored for the 78pt cell
+    ///   • 10pt → 70pt cell
+    ///   • 1pt → 49pt cell (-30% redesign trim).
+    /// Total parent-cell vertical: 1 + 20 + 4.8 + 22 + 1 = 48.8pt
+    /// — fits inside the 49pt slot. Subtask rows render via
     /// `compactRow` and ignore this constant.
-    private let verticalPad: CGFloat = 10
+    private let verticalPad: CGFloat = 1
     /// Width of the checkbox icon slot. Bumped 14 → 16.1pt
     /// (+15%) per user request; the SF Symbol point size below
     /// scales to match.
@@ -653,8 +655,10 @@ final class TaskRowContentView: NSView {
     private let titleHeight: CGFloat = 20
     /// Vertical gap between title row and meta row. Tracks
     /// the parent-cell height: 8pt → 5pt for the 68pt cell,
-    /// 8pt restored for the 78pt cell (current).
-    private let titleMetaGap: CGFloat = 8
+    /// 8pt restored for the 78pt cell, then 4.8pt for the
+    /// 49pt redesign trim (-40%), then 2.88pt (-40% again),
+    /// then 1.44pt (halved again per user request).
+    private let titleMetaGap: CGFloat = 1.44
     /// Meta row height (status pill / assignee / date / priority).
     private let metaHeight: CGFloat = 22
     /// Leading nudge applied to BOTH the title and meta row
@@ -664,14 +668,28 @@ final class TaskRowContentView: NSView {
     /// edge.
     private let metaNudge: CGFloat = 0
     /// Fixed 168pt slot the status pill lives in inside SwiftUI
-    /// (`.frame(width: 168, alignment: .leading)`). The pill
-    /// itself is sized to content; the slot just reserves space
-    /// so the assignee always lands at a predictable X.
+    /// (`.frame(width: 168, alignment: .leading)`). Kept as a
+    /// SwiftUI-side reference but no longer used by the AppKit
+    /// layout — the assignee X now derives from the WIDEST
+    /// status pill across `appState.availableStatuses` (see
+    /// `widestStatusPillWidth`), so every row's assignee column
+    /// lines up exactly 20pt right of the widest possible pill.
     private let statusSlotWidth: CGFloat = 168
-    /// SwiftUI HStack(spacing: 4) between status slot and assignee.
+    /// (Legacy) SwiftUI HStack spacing between status and assignee.
     private let metaSpacing: CGFloat = 4
-    /// Static -30pt offset on the assignee text in SwiftUI.
+    /// (Legacy) Static offset on the SwiftUI assignee text.
     private let assigneeNudge: CGFloat = -30
+    /// Computed per bind: the pixel width of the WIDEST status
+    /// pill (dot + dotGap + uppercase label + chevron slot) over
+    /// `appState.availableStatuses`. The assignee label is then
+    /// pinned at `metaLeading + widestStatusPillWidth + 20pt`,
+    /// so it lines up consistently across rows regardless of
+    /// which individual status the current row carries. Falls
+    /// back to a SwiftUI-matching 134pt when no statuses are
+    /// available yet (e.g. first render before ClickUp loads).
+    private var widestStatusPillWidth: CGFloat = 134
+    /// Gap between the widest-pill column and the assignee.
+    private let assigneeGap: CGFloat = 20
     /// Priority flag fixed slot 14×14.
     private let prioritySlot: CGFloat = 14
 
@@ -703,6 +721,15 @@ final class TaskRowContentView: NSView {
             return NSFont(descriptor: d, size: s) ?? base
         }
         return base
+    }
+
+    /// Editorial sans NSFont — AppKit twin of `Editorial.sans`.
+    /// Same global type-scale as serif, but uses the default
+    /// system design (SF) instead of New York.
+    static func editorialSans(_ size: CGFloat,
+                              _ weight: NSFont.Weight = .regular) -> NSFont {
+        let s = size * Editorial.typeScale
+        return NSFont.systemFont(ofSize: s, weight: weight)
     }
 
     /// Italic New York — the prototype's `Caption` (serif italic
@@ -1158,7 +1185,34 @@ final class TaskRowContentView: NSView {
     /// slot — without this, hovering the DONE pill left
     /// the subtask pill stranded behind it.
     private func animateContentSlide(toRight: Bool) {
-        let dx: CGFloat = toRight ? 66 : 0
+        // Slide distance is computed so the TITLE's leading edge
+        // lands exactly `gapAfterPill` (15pt per user spec) to the
+        // RIGHT of the DONE pill's trailing edge — regardless of
+        // how wide the status word is ("DONE", "FAZENDO",
+        // "ACOMPANHAMENTO", "CANCELADO", …).
+        //
+        // Geometry (matches `layout()` below):
+        //   pillLeading   = checkX
+        //   pillTrailing  = checkX + donePill.width
+        //   titleLeading  = checkX + checkSize + titleGroupSpacing
+        //                 = checkX + 24.1pt
+        //
+        // We want: titleLeading + dx == pillTrailing + gapAfterPill.
+        // Solving for dx:
+        //   dx = donePill.width + gapAfterPill - (checkSize + titleGroupSpacing)
+        //      = donePill.width + 15 - 24.1
+        //      = donePill.width - 9.1
+        //
+        // `sizeToFitContent` is idempotent + safe to call here —
+        // guarantees the frame width reflects the current label
+        // even if hover fires before the next layout() pass.
+        donePill.sizeToFitContent()
+        let gapAfterPill: CGFloat = 15
+        let measured = max(donePill.frame.width, 0)
+        let naturalTitleOffset = checkSize + titleGroupSpacing
+        let dx: CGFloat = toRight
+            ? max(0, measured + gapAfterPill - naturalTitleOffset)
+            : 0
         let target = CATransform3DMakeTranslation(dx, 0, 0)
         let timing = CAMediaTimingFunction(controlPoints: 0.30, 1.4, 0.50, 1.0)
         let duration = 0.30
@@ -1450,18 +1504,14 @@ final class TaskRowContentView: NSView {
     // MARK: Appearance application
 
     /// Repaint the status wash sublayer for the current appearance.
-    /// Light mode keeps the raw muted status hue at 3%; dark mode
-    /// swaps in the pre-lightened `fillTint` at a slightly higher
-    /// opacity so the category colour stays readable over the
-    /// warm-black canvas instead of collapsing into murk.
+    /// Per user request the per-category tint is OFF — every row
+    /// reads as flat paper, with category encoded only by the
+    /// status dot/pill. We still keep the sublayer in the stack
+    /// so frame/layout code (bounds resize, etc.) keeps working;
+    /// it just renders transparent.
     private func repaintTint() {
-        let isDark =
-            effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let tint: Color = isDark
-            ? Color.fillTint(forBaseHex: cachedStatusHex, scheme: .dark)
-            : Color(hex: cachedStatusHex)
-        bodyTintLayer.backgroundColor = editorialCG(tint)
-        bodyTintLayer.opacity = isDark ? 0.02 : 0.03
+        bodyTintLayer.backgroundColor = NSColor.clear.cgColor
+        bodyTintLayer.opacity         = 0
     }
 
     private func applyAppearance() {
@@ -1489,7 +1539,7 @@ final class TaskRowContentView: NSView {
         let ink      = NSColor(Editorial.ink)
         let inkMute  = NSColor(Editorial.inkMute)
         let inkFaint = NSColor(Editorial.inkFaint)
-        let serif    = Self.editorialSerif(17)
+        let titleFont = Self.editorialSans(15, .medium)
 
         // Checkbox icon
         let checkSymbol = task.isCompleted ? "checkmark.circle.fill" : "circle"
@@ -1499,10 +1549,10 @@ final class TaskRowContentView: NSView {
             ? NSColor(Editorial.statusColor("complete"))
             : inkFaint
 
-        // Title — serif (New York); completed = struck + muted.
+        // Title — sans (SF); completed = struck + muted.
         if task.isCompleted {
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: serif,
+                .font: titleFont,
                 .foregroundColor: inkMute,
                 .strikethroughStyle: NSUnderlineStyle.single.rawValue,
                 .strikethroughColor: inkMute,
@@ -1511,7 +1561,7 @@ final class TaskRowContentView: NSView {
                 string: task.title, attributes: attrs
             )
         } else {
-            titleLabel.font        = serif
+            titleLabel.font        = titleFont
             titleLabel.stringValue = task.title
             titleLabel.textColor   = ink
         }
@@ -1521,6 +1571,26 @@ final class TaskRowContentView: NSView {
         // editorial mark instead of a filled capsule).
         statusPill.configure(label: task.status.capitalized,
                              hex:   cachedStatusHex)
+
+        // Compute the WIDEST possible status pill across the
+        // workflow's statuses, so the assignee X is stable
+        // across rows. Mirrors StatusPillView.sizeToFitContent's
+        // math: dot(7) + dotGap(4.2) + label + chevSlot(12|0).
+        if let appState {
+            let labelFont = NSFont.systemFont(ofSize: 10.5, weight: .semibold)
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: labelFont, .kern: 0.6
+            ]
+            var maxLabelW: CGFloat = 0
+            for s in appState.availableStatuses {
+                let w = (s.status.uppercased() as NSString)
+                    .size(withAttributes: attrs).width
+                if w > maxLabelW { maxLabelW = w }
+            }
+            let chevSlot: CGFloat = statusPill.isReadOnly ? 0 : 12
+            // 7 = dot, 4.2 = StatusPillView.dotGap
+            widestStatusPillWidth = 7 + 4.2 + ceil(maxLabelW) + chevSlot
+        }
 
         // Assignee — parsed first name (matches SwiftUI's
         // recomputeAssigneeFirstName)
@@ -1781,10 +1851,14 @@ final class TaskRowContentView: NSView {
             height: pillSize.height
         )
 
-        // Assignee — positioned at slot.trailing + spacing(4) + nudge(-30)
+        // Assignee — pinned 20pt to the right of the WIDEST
+        // status pill across `appState.availableStatuses` (see
+        // `widestStatusPillWidth`, computed in `applyAppearance`).
+        // Guarantees every row's assignee lines up regardless of
+        // which status the current row happens to display.
         assigneeLabel.sizeToFit()
         let assigneeSize = assigneeLabel.frame.size
-        let assigneeX = metaLeading + statusSlotWidth + metaSpacing + assigneeNudge
+        let assigneeX = metaLeading + widestStatusPillWidth + assigneeGap
         assigneeLabel.frame = NSRect(
             x: assigneeX,
             y: metaY + (metaHeight - assigneeSize.height) / 2,

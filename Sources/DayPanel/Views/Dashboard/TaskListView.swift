@@ -3,6 +3,14 @@ import SwiftUI
 struct TaskListView: View {
     @EnvironmentObject var appState: AppState
 
+    /// When true, the embedded scroll views skip the 52pt
+    /// toolbar reserve + the 52pt filter-bar reserve at the
+    /// top. Used by the Editorial+ Home view, which renders
+    /// its own crumb/title block + inline status pills above
+    /// the dashboard — so the legacy insets would stack on
+    /// top of those and leave a huge empty band.
+    var skipsLegacyHeaderInsets: Bool = false
+
     @State private var showCompleted = false
 
     // MARK: - Lazy-render caps
@@ -64,17 +72,21 @@ struct TaskListView: View {
     /// `.onChange` handlers below — the result is cached in
     /// `cachedFilteredTasks` so the body never re-runs this.
     private func computeFilteredTasks() -> [CUTask] {
-        // Status narrows first (uses full task list since user might
-        // explicitly want "completed + status=foo"), then multi-dim
-        // filters narrow further. When no status filter, default to
-        // pending (hide closed by default).
+        // Single universe for everything in the bar AND the
+        // list: non-completed tasks (parents + subtasks) in the
+        // active list. When the user picks a status, narrow to
+        // that status; otherwise show the whole universe so the
+        // TODOS pill's count matches the rows on screen.
+        let universe = appState.tasks.filter {
+            !$0.isCompleted && !$0.archived
+        }
         let base: [CUTask] = {
             if let s = selectedStatus {
                 return appState.sortByDeadlineThenPriority(
-                    appState.tasks.filter { $0.status == s }
+                    universe.filter { $0.status == s }
                 )
             }
-            return appState.pendingTasks
+            return appState.sortByDeadlineThenPriority(universe)
         }()
         let dimensioned = appState.taskFilters.isEmpty
             ? base
@@ -115,7 +127,20 @@ struct TaskListView: View {
         appState.clickUpAuthService.isConnected && !appState.availableStatuses.isEmpty
     }
 
-    private var filterBarHeight: CGFloat { hasFilters ? 52 : 0 }
+    private var filterBarHeight: CGFloat {
+        // Suppress the 52pt reserve when the host (e.g.
+        // EditorialHomeHeader) carries its own status pill row
+        // above — otherwise both layers would stack and bloat
+        // the top of the task column.
+        skipsLegacyHeaderInsets ? 0 : (hasFilters ? 52 : 0)
+    }
+
+    /// The legacy 52pt toolbar reserve baked into the AppKit
+    /// scroll views. Drops to 0 inside the home view (the home
+    /// header already occupies that band above the dashboard).
+    private var legacyTopBand: CGFloat {
+        skipsLegacyHeaderInsets ? 0 : 52
+    }
 
     var body: some View {
         rootBody
@@ -197,7 +222,7 @@ struct TaskListView: View {
                 let rows = appState.flattenForList(items)
                 TaskCollectionView(
                     items:           rows,
-                    topContentInset: 52 + filterBarHeight,
+                    topContentInset: legacyTopBand + filterBarHeight,
                     onTapTask:       { task, frame in
                         appState.detailTaskOrigin = frame
                         appState.detailTask       = task
@@ -212,14 +237,14 @@ struct TaskListView: View {
                 // line instead of bleeding up behind the bar.
                 .mask(alignment: .top) {
                     VStack(spacing: 0) {
-                        Color.clear.frame(height: 52 + filterBarHeight)
+                        Color.clear.frame(height: legacyTopBand + filterBarHeight)
                         Rectangle()
                     }
                 }
             } else {
                 NSCollectionListView(
                     items: items,
-                    topContentInset: 52 + filterBarHeight
+                    topContentInset: legacyTopBand + filterBarHeight
                 ) { task in
                     // Editorial: no status-tinted drop shadow —
                     // the row is a flat paper line with a hairline
@@ -232,7 +257,7 @@ struct TaskListView: View {
                 .ignoresSafeArea(.container, edges: .top)
                 .mask(alignment: .top) {
                     VStack(spacing: 0) {
-                        Color.clear.frame(height: 52 + filterBarHeight)
+                        Color.clear.frame(height: legacyTopBand + filterBarHeight)
                         Rectangle()
                     }
                 }
@@ -344,12 +369,27 @@ struct TaskListView: View {
     private var unfilteredView: some View {
         Group {
             if appState.pendingTasks.isEmpty && !appState.showMockData {
-                emptyState
+                // Skeletons ONLY when we genuinely haven't loaded
+                // any data yet — i.e. `appState.tasks` is empty
+                // AND a sync is in flight (cold start). If
+                // `tasks` has content but `pendingTasks` is empty
+                // (e.g. all top-level rows completed, or this
+                // list has only subtasks), the cache IS filled —
+                // showing skeletons there falsely implies "still
+                // loading" forever because background prefetches
+                // keep `isSyncing` true. Empty placeholder is
+                // the right answer in that case.
+                if appState.tasks.isEmpty && appState.isSyncing {
+                    EditorialSkeletonStack(count: 8)
+                } else {
+                    emptyState
+                }
             } else {
                 let visible = Array(appState.pendingTasks.prefix(pendingVisibleLimit))
-                ForEach(visible) { task in
+                ForEach(Array(visible.enumerated()), id: \.element.id) { (i, task) in
                     TaskRowView(task: task, appState: appState)
                         .equatable()
+                        .cascadeAppear(index: i)
                 }
                 if appState.pendingTasks.count > pendingVisibleLimit {
                     Color.clear
@@ -410,13 +450,25 @@ struct TaskListView: View {
     @ViewBuilder
     private var filteredView: some View {
         if filteredTasks.isEmpty {
-            placeholderState(icon: "tray", message: "Nenhuma tarefa neste status")
+            // Filtering is 100% client-side and instant. If the
+            // chain returns nothing, the answer is "filter
+            // excluded everything", NOT "still loading". Show
+            // skeletons only on the cold-start case where we
+            // have no source data yet at all — otherwise the
+            // user sees skeletons forever (background prefetches
+            // keep `isSyncing` true after first paint).
+            if appState.tasks.isEmpty && appState.isSyncing {
+                EditorialSkeletonStack(count: 6)
+            } else {
+                placeholderState(icon: "tray", message: "Nenhuma tarefa neste status")
+            }
         } else {
             let visible = Array(filteredTasks.prefix(filteredVisibleLimit))
-            ForEach(visible) { task in
+            ForEach(Array(visible.enumerated()), id: \.element.id) { (i, task) in
                 TaskRowView(task: task, appState: appState)
                     .equatable()
                     .opacity(task.isCompleted ? 0.55 : 1.0)
+                    .cascadeAppear(index: i)
             }
             if filteredTasks.count > filteredVisibleLimit {
                 // Same auto-load sentinel pattern as the
@@ -610,15 +662,13 @@ struct TaskFilterBar: View {
         // tasks of each X are there".
         filterPill(
             label:    "TODOS",
-            // Count the SAME base list the filter pipeline
-            // shows by default (pending top-level tasks),
-            // so all four dimension pills share a coherent
-            // counting universe. Counting over
-            // `appState.tasks` (full list incl. subtasks and
-            // completed) made the TODOS count drift apart
-            // from the per-dimension pill counts and from
-            // the actual rows on screen.
-            count:    appState.pendingTasks.count,
+            // Universe = every non-completed task (parents +
+            // subtasks). Has to match `statusPills` below AND
+            // the filter pipeline's base set — otherwise the
+            // user sees TODOS=5 next to RECORRENTES=86 and the
+            // bar reads as broken. Excludes completed tasks so
+            // the closed lane doesn't inflate the badge.
+            count:    boardUniverse.count,
             color:    Editorial.accent,
             isActive: !hasActiveSelection
         ) { clearSelection() }
@@ -626,6 +676,14 @@ struct TaskFilterBar: View {
         // Status-only bar — always render the status categories
         // (the dimension switcher was removed).
         statusPills
+    }
+
+    /// Single source of truth for the filter bar counts AND
+    /// the list's default render: every non-completed task in
+    /// the active list (parents + subtasks). Used by both
+    /// `TODOS` and the per-status pills so the universes match.
+    private var boardUniverse: [CUTask] {
+        appState.tasks.filter { !$0.isCompleted && !$0.archived }
     }
 
     // — Status —
@@ -644,7 +702,11 @@ struct TaskFilterBar: View {
     // top-level task list is typically <100 entries.
     @ViewBuilder
     private var statusPills: some View {
-        let counts = Dictionary(grouping: appState.tasks, by: \.status).mapValues(\.count)
+        // Same universe as TODOS (boardUniverse) — non-completed
+        // tasks, parents + subtasks. Aligning the groupBy source
+        // here is the fix for "TODOS=5, RECORRENTES=86" — both
+        // sides now count the same set.
+        let counts = Dictionary(grouping: boardUniverse, by: \.status).mapValues(\.count)
         ForEach(appState.availableStatuses) { s in
             filterPill(
                 label:    s.status.uppercased(),

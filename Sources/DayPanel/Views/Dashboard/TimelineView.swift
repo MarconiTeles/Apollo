@@ -9,11 +9,20 @@ import AppKit
 struct TimelineView: View {
     @EnvironmentObject var appState: AppState
 
-    /// 30 days back, 30 days forward.
+    /// When `true`, the timeline starts AT today and only goes
+    /// forward (today + 30 days). Used by the Home/Hoje route
+    /// where past days are noise. Default (false) preserves the
+    /// legacy ±30-day window so the rest of the dashboard stays
+    /// scrollable to recent past entries.
+    var forwardOnly: Bool = false
+
+    /// Visible date window. Past entries are dropped on the
+    /// forward-only variant.
     private var dates: [Date] {
         let cal   = Calendar.current
         let today = cal.startOfDay(for: Date())
-        return (-30...30).compactMap { cal.date(byAdding: .day, value: $0, to: today) }
+        let range = forwardOnly ? (0...30) : (-30...30)
+        return range.compactMap { cal.date(byAdding: .day, value: $0, to: today) }
     }
 
     /// Approx. height per day section — used by scroll-position math to
@@ -798,7 +807,13 @@ struct AgendaEventCard: View, Equatable {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .onHover { hovering in
+        // Scroll-aware hover — drops the halo on/off updates
+        // while a live NSScrollView scroll is in progress and
+        // force-resets `hover` the instant a scroll starts.
+        // The shared `ScrollStateObserver` already listens to
+        // every NSScrollView in the app via NotificationCenter,
+        // so the timeline gets covered automatically.
+        .scrollAwareOnHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { hover = hovering }
         }
         // Right-click context menu rendered via a native NSMenu
@@ -882,19 +897,21 @@ struct AgendaEventCard: View, Equatable {
             : SharedDateFormatters.shortTime24h.string(from: event.endDate)
     }
 
-    /// Serif title + inline italic "· local", as one wrapping
-    /// paragraph (matches the prototype's `<span> + <Caption>`).
+    /// Sans title + inline italic "· local", as one wrapping
+    /// paragraph. Serif on the home page reads as decorative
+    /// when there are dozens of rows; SF Pro keeps the dense
+    /// list legible.
     private var titleParagraph: Text {
         var t = Text(event.title)
-            .font(Editorial.serif(16))
+            .font(Editorial.sans(14, .semibold))
             .foregroundColor(Editorial.ink)
-            .tracking(-0.15)
+            .tracking(-0.1)
         if isDeclined {
             t = t.strikethrough(true, color: Editorial.inkMute)
         }
         if let loc = event.location, !loc.isEmpty {
             t = t + Text("  ·  \(loc)")
-                .font(Editorial.serif(12.5).italic())
+                .font(Editorial.sans(12))
                 .foregroundColor(Editorial.inkSoft)
         }
         return t
