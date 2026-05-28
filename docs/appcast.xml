@@ -5,15 +5,15 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.7.7</title>
-      <pubDate>Wed, 27 May 2026 04:07:35 +0000</pubDate>
-      <sparkle:version>64</sparkle:version>
-      <sparkle:shortVersionString>1.7.7</sparkle:shortVersionString>
+      <title>Apollo 1.7.9</title>
+      <pubDate>Thu, 28 May 2026 22:03:41 +0000</pubDate>
+      <sparkle:version>65</sparkle:version>
+      <sparkle:shortVersionString>1.7.9</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.7/Apollo-1.7.7.zip"
-        sparkle:edSignature="oyZ/oE2tvpjtS2WU3nNwNytH4WEmYcqnvKP20FqI+OHm5gtghT2fpic8p4VBpxbDQ5O2CcKjBdWg2QgfvPnkBA=="
-        length="39900720"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.9/Apollo-1.7.9.zip"
+        sparkle:edSignature="PpFMZlvtdJwoReWzjaS8Y4mgpFyjoKYyzY1s5gl4C2ZbhF+f+mv7yxStzaGxE2NofnWgHXypPZNiboq9W+HkCg=="
+        length="40667617"
         type="application/octet-stream" />
     </item>
   </channel>
