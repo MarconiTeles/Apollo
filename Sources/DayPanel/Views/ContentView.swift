@@ -453,10 +453,30 @@ struct ContentView: View {
                 FloatingModal(
                     isPresented: Binding(
                         get: { appState.detailTask != nil },
-                        set: { if !$0 { appState.detailTask = nil } }
+                        set: {
+                            // Just nil-out detailTask here. The
+                            // morph unwind lives in a single
+                            // .onChange(of:) observer further
+                            // down — that way BOTH dismiss paths
+                            // (backdrop tap → this setter; X
+                            // button → `appState.detailTask = nil`
+                            // directly, bypassing this setter)
+                            // hit the same unwind logic. The
+                            // observer-only approach was the fix
+                            // for "X close leaves a stuck proxy
+                            // overlay" — the X path never ran
+                            // this setter, so morphProgress
+                            // stayed at 1.
+                            if !$0 { appState.detailTask = nil }
+                        }
                     ),
                     origin:      appState.detailTaskOrigin,
-                    windowSize:  windowGeo.size
+                    windowSize:  windowGeo.size,
+                    // Quadro board sets `.scaleFromOrigin` so the
+                    // popup grows out of the clicked card; every
+                    // other surface keeps the default bottom slide.
+                    fromBottom:      appState.detailTaskOpenStyle == .bottomSlide,
+                    scaleFromOrigin: appState.detailTaskOpenStyle == .scaleFromOrigin
                 ) {
                     if let t = appState.detailTask {
                         // Read the live snapshot here — ContentView
@@ -500,6 +520,7 @@ struct ContentView: View {
                     }
                 }
                 .zIndex(1000)
+
                 // Subtask overlay popup — mounts ON TOP of the
                 // parent task popup when the user drills into a
                 // subtask from inside the parent. The parent
@@ -520,7 +541,8 @@ struct ContentView: View {
                     ),
                     origin:      .zero,
                     windowSize:  windowGeo.size,
-                    backdrop:    .none
+                    backdrop:    .none,
+                    fromBottom:  true
                 ) {
                     // Render the topmost subtask in the stack —
                     // i.e. whichever depth the user has drilled
@@ -591,11 +613,41 @@ struct ContentView: View {
                     // the rest of the Liquid Glass language.
                     Color.black.opacity(0.10)
                         .ignoresSafeArea()
+                        // Backdrop fades — sliding the dim
+                        // with the chat made the layer drag
+                        // visibly during dismiss; a clean
+                        // fade-to-clear reads much better.
                         .transition(.opacity)
                         .allowsHitTesting(false)
                         .zIndex(800)
 
+                    // Transition attached HERE (not on a child
+                    // inside aiChatCenteredOverlay) because the
+                    // `if showAIChat` branch is what SwiftUI
+                    // adds/removes — placing it on AIAgentChatView
+                    // never fired since the chat view itself
+                    // wasn't conditionally toggled inside its
+                    // parent ZStack, and SwiftUI fell back to
+                    // its default `.opacity` for the whole
+                    // overlay.
+                    //
+                    // Explicit Y-offset (not `.move(edge:)`)
+                    // because `.move` translates by the view's
+                    // own height — for a window-tall chat
+                    // column that left the top edge still on
+                    // screen mid-spring. Window-height travel
+                    // guarantees a clean slide-off.
                     aiChatCenteredOverlay(windowSize: windowGeo.size)
+                        .transition(.asymmetric(
+                            insertion: .modifier(
+                                active:   OffsetYModifier(y: max(windowGeo.size.height, 900)),
+                                identity: OffsetYModifier(y: 0)
+                            ),
+                            removal: .modifier(
+                                active:   OffsetYModifier(y: max(windowGeo.size.height, 900)),
+                                identity: OffsetYModifier(y: 0)
+                            )
+                        ))
                         .zIndex(900)
                 }
 
@@ -665,6 +717,22 @@ struct ContentView: View {
             }
             .coordinateSpace(name: "appWindow")
             .environment(\.windowSize, windowGeo.size)
+            // When the popup closes, defer-reset the openStyle
+            // back to default so the next surface that opens a
+            // task without setting its own style gets the
+            // settings-style bottom slide. Deferred so a dismiss
+            // animation in flight doesn't mid-frame swap to a
+            // different transition.
+            .onChange(of: appState.detailTask) { _, newValue in
+                if newValue == nil {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.40) {
+                        if appState.detailTask == nil {
+                            appState.detailTaskOpenStyle = .bottomSlide
+                            appState.detailTaskOrigin    = .zero
+                        }
+                    }
+                }
+            }
             // Cmd+Z handler — pops the most recent reversible
             // action off `AppState.undoStack` and runs its undo
             // closure. The button is invisible (zero frame +
@@ -856,16 +924,17 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    withAnimation(.spring(response: 0.52,
-                                          dampingFraction: 0.82)) {
+                    // Plain ease-in fall — sprung dismisses
+                    // asymptote at the bottom and the panel
+                    // never visibly clears the window edge.
+                    withAnimation(.easeIn(duration: 0.30)) {
                         showAIChat = false
                     }
                 }
                 .transition(.opacity)
 
             AIAgentChatView(onClose: {
-                withAnimation(.spring(response: 0.52,
-                                      dampingFraction: 0.82)) {
+                withAnimation(.easeIn(duration: 0.30)) {
                     showAIChat = false
                 }
             })
@@ -890,26 +959,12 @@ struct ContentView: View {
                 .padding(.top,        max(28, windowSize.height * 0.05))
                 .padding(.bottom,     max(28, windowSize.height * 0.05))
                 .padding(.horizontal, max(48, windowSize.width  * 0.07))
-                // Window entrance/exit: the panel grows out of
-                // the Apollo button (cursor anchor) but from a
-                // readable 0.90 — not a speck — drifting up into
-                // place with a soft blur clearing, and settles
-                // out the same way. Reads as an elegant
-                // "publication opening" rather than a UI pop.
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.90, anchor: cursorAnchor)
-                        .combined(with: .opacity)
-                        .combined(with: .offset(y: 14))
-                        .combined(with: .modifier(
-                            active:   BlurModifier(radius: 14),
-                            identity: BlurModifier(radius: 0))),
-                    removal: .scale(scale: 0.95, anchor: cursorAnchor)
-                        .combined(with: .opacity)
-                        .combined(with: .offset(y: 10))
-                        .combined(with: .modifier(
-                            active:   BlurModifier(radius: 10),
-                            identity: BlurModifier(radius: 0)))
-                ))
+                // (Transition lives on the outer
+                // aiChatCenteredOverlay() call site — placing
+                // it here is a no-op because AIAgentChatView is
+                // not conditionally toggled inside this ZStack;
+                // the parent `if showAIChat` is what SwiftUI
+                // adds/removes.)
         }
     }
 
@@ -1289,9 +1344,18 @@ struct ContentView: View {
                 if rect != .zero {
                     aiChatOpenPoint = CGPoint(x: rect.midX, y: rect.midY)
                 }
-                withAnimation(.spring(response: 0.52,
-                                      dampingFraction: 0.82)) {
-                    showAIChat.toggle()
+                // Bouncy spring on open (matches the rest of
+                // the Editorial overlays); clean ease on close
+                // so the panel never hangs at the bottom edge.
+                if showAIChat {
+                    withAnimation(.easeIn(duration: 0.30)) {
+                        showAIChat = false
+                    }
+                } else {
+                    withAnimation(.spring(response: 0.34,
+                                          dampingFraction: 0.86)) {
+                        showAIChat = true
+                    }
                 }
             } label: {
                 HStack(spacing: 5) {
@@ -1303,8 +1367,9 @@ struct ContentView: View {
             .focusEffectDisabled()
             .help("Apollo IA")
             .onChange(of: appState.aiAgent.dismissChatRequest) { _, _ in
-                withAnimation(.spring(response: 0.45,
-                                      dampingFraction: 0.85)) {
+                // Plain ease-in fall — matches the rest of
+                // the Editorial overlays.
+                withAnimation(.easeIn(duration: 0.30)) {
                     showAIChat = false
                 }
             }

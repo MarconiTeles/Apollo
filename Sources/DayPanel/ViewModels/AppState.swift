@@ -287,6 +287,19 @@ final class AppState: ObservableObject {
     /// the event overlay so the popup scales out of the button.
     @Published var detailTask:         CUTask?       = nil
     @Published var detailTaskOrigin:   CGRect        = .zero
+
+    /// Which open/close animation the task-detail popup uses for its
+    /// next presentation. Set by the originating view BEFORE assigning
+    /// `detailTask`. Defaults to `.bottomSlide` so any call site that
+    /// doesn't opt in keeps the existing settings-style slide.
+    /// `.scaleFromOrigin` is used by the Quadro (kanban) board — the
+    /// popup scales out of the clicked card with no opacity fade.
+    enum DetailTaskOpenStyle { case bottomSlide, scaleFromOrigin }
+    @Published var detailTaskOpenStyle: DetailTaskOpenStyle = .bottomSlide
+
+    // (Quadro morph state removed — Quadro taps now use the
+    // standard scale-from-origin transition handled entirely by
+    // FloatingModal. No proxy, no per-frame morph controller.)
     /// Subtask popup that mounts ON TOP of `detailTask` when
     /// the user drills into a subtask from inside an already-
     /// open parent task popup. The parent stays rendered
@@ -1923,10 +1936,42 @@ final class AppState: ObservableObject {
                     // Warm the per-list cache with the active
                     // list's freshly-fetched tasks so a switch
                     // away → back is instant.
+                    //
+                    // PENDING-WRITE GUARD: same merge rule as
+                    // the `tasks` write below (line ~1980). If
+                    // we wrote `t` raw, switching away from the
+                    // list and back during the lock window would
+                    // surface ClickUp's stale pre-write snapshot
+                    // and snap the card back to its old status.
                     if mode != .myWork,
                        let active = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId),
                        !active.isEmpty {
-                        tasksByListId[active] = t
+                        let pendingNow = pendingTaskMutations
+                        if pendingNow.isEmpty {
+                            tasksByListId[active] = t
+                        } else {
+                            // Reuse whichever local copy we have
+                            // (the visible `tasks` is freshest;
+                            // the cached list is a reasonable
+                            // fallback) so the optimistic state
+                            // is preserved on the locked ids.
+                            let localPool: [CUTask] =
+                                !tasks.isEmpty ? tasks : (tasksByListId[active] ?? [])
+                            // `uniquingKeysWith:` so duplicate task
+                            // ids (Tasks-in-Multiple-Lists) don't
+                            // trap — see comment at line ~2026.
+                            let localById = Dictionary(
+                                localPool.map { ($0.id, $0) },
+                                uniquingKeysWith: { _, new in new }
+                            )
+                            tasksByListId[active] = t.map { fresh in
+                                if pendingNow.contains(fresh.id),
+                                   let local = localById[fresh.id] {
+                                    return local
+                                }
+                                return fresh
+                            }
+                        }
                     }
                 }
                 // Pre-fetch pinned-list tasks in the background
@@ -1977,9 +2022,30 @@ final class AppState: ObservableObject {
             // way an actual remote attachment-removal still
             // propagates (next hydration re-fetches the per-
             // task and gets the real empty list).
-            let oldById = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
+            // `uniquingKeysWith:` (not `uniqueKeysWithValues:`) so
+            // duplicates don't trap. Tasks-in-Multiple-Lists can
+            // surface the same task.id more than once in `tasks`
+            // (one entry per list membership), and `init(unique…)`
+            // hard-fatal-traps on duplicates — observed crash
+            // signature `_NativeDictionary.merge` on this exact
+            // call after a sync that pulled a multi-list task.
+            // Last-wins matches the snapshot init a few lines down.
+            let oldById = Dictionary(
+                tasks.map { ($0.id, $0) },
+                uniquingKeysWith: { _, new in new }
+            )
+            let pendingNow = pendingTaskMutations
             tasks = fetchedTasks.map { fresh in
                 guard let existing = oldById[fresh.id] else { return fresh }
+                // PENDING-WRITE GUARD: if a user-initiated
+                // mutation for this task is still in flight to
+                // ClickUp, the server may be returning its
+                // pre-write read snapshot. Preserve the local
+                // (optimistically-updated) row entirely so a
+                // drag-drop on the board doesn't snap back.
+                // Cleared automatically once `updateTaskStatus`
+                // (or sibling) defers its `endPendingMutation`.
+                if pendingNow.contains(fresh.id) { return existing }
                 var merged = fresh
                 if merged.attachments.isEmpty && !existing.attachments.isEmpty {
                     merged.attachments = existing.attachments
@@ -2416,6 +2482,64 @@ final class AppState: ObservableObject {
         previousTaskSnapshots?[taskId] = TaskSnapshot(updated)
     }
 
+    /// Task ids with an in-flight (or recently-completed) write
+    /// to ClickUp. Sync paths that wholesale-replace `tasks`
+    /// from a server fetch consult this set and PRESERVE the
+    /// local (optimistically-mutated) copy for any id here.
+    ///
+    /// Why TTL'd: ClickUp's write→read pipeline is eventually
+    /// consistent. The PUT can succeed (200 OK) and a GET
+    /// /list/{id}/task fired ~500ms later can STILL return the
+    /// pre-write snapshot (a few seconds of read-replica lag is
+    /// typical). If we cleared the lock at PUT success, the next
+    /// sync inside that lag window would overwrite the local
+    /// optimistic state — exactly the "card snaps back on the
+    /// board" bug the user kept hitting.
+    ///
+    /// The lock is therefore kept for `pendingMutationTTL`
+    /// seconds AFTER the PUT returns, even on success. The
+    /// short pause is invisible to the user (everything reads
+    /// from the optimistic local copy during that window) and
+    /// gives ClickUp's read side time to settle.
+    @MainActor private(set) var pendingTaskMutations: Set<String> = []
+
+    /// How long after a successful mutation we keep the
+    /// pending-write guard active. ClickUp's write→read pipeline
+    /// can lag noticeably under load — empirically the previous
+    /// 6 s window was being beaten by reads that returned the
+    /// pre-write snapshot, causing the "card snaps back" bug on
+    /// the Quadro after a drag-drop. 15 s is the new floor; it's
+    /// invisible (everything reads from the optimistic local
+    /// state in the meantime) and gives the read side enough
+    /// runway to converge even on a busy workspace.
+    private let pendingMutationTTL: TimeInterval = 15
+
+    @MainActor
+    private func beginPendingMutation(_ taskId: String) {
+        pendingTaskMutations.insert(taskId)
+    }
+
+    /// Schedule lock release after `pendingMutationTTL` seconds
+    /// (not immediately) so a sync firing in the gap between
+    /// PUT-success and read-replica-catchup doesn't snap the
+    /// task back to its pre-write state.
+    @MainActor
+    private func endPendingMutationDeferred(_ taskId: String) {
+        let id = taskId
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds:
+                UInt64(self.pendingMutationTTL * 1_000_000_000))
+            self.pendingTaskMutations.remove(id)
+        }
+    }
+
+    /// Immediate release — used on rollback so a permanently-
+    /// failed update doesn't pin the stale optimistic state.
+    @MainActor
+    private func endPendingMutationNow(_ taskId: String) {
+        pendingTaskMutations.remove(taskId)
+    }
+
     // MARK: - Task operations
 
     // MARK: - Inline task editing
@@ -2670,11 +2794,21 @@ final class AppState: ObservableObject {
             })
     }
 
-    func updateTaskStatus(_ task: CUTask, to status: CUStatus) async {
+    /// - Parameter silent: When `true`, suppresses the success
+    ///   toast on the local user's own change — used by the
+    ///   Quadro drag-drop where the card already MOVED visually
+    ///   between columns, so the toast was redundant noise. The
+    ///   diff-based "outro user mudou…" notification is on a
+    ///   different path (`diffAndNotifyRemoteChanges`) and is
+    ///   NOT affected; teammates' status flips still notify.
+    ///   Default `false` preserves the original behaviour for
+    ///   list-view inline edits and the TaskDetail status menu.
+    func updateTaskStatus(_ task: CUTask, to status: CUStatus, silent: Bool = false) async {
         // Optimistic state lands immediately — the UI shouldn't
         // wait for the server even when we're online.
         let original = task
         await MainActor.run {
+            beginPendingMutation(task.id)
             if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
                 tasks[idx].status      = status.status
                 tasks[idx].statusColor = status.color
@@ -2692,23 +2826,39 @@ final class AppState: ObservableObject {
                 .updateTaskStatus(taskId: task.id, status: status.status),
                 originatingFromOfflineState: true
             )
+            // Offline notifications stay on even in silent mode —
+            // the user MUST know a change is queued and won't hit
+            // the server until connectivity returns; otherwise it
+            // looks like the drop succeeded.
             notifyTask(.info,
                        title:    task.title,
                        subtitle: "Status na fila offline",
                        message:  "\(original.status.uppercased()) → \(status.status.uppercased()) sincroniza quando a internet voltar.",
                        taskId:   task.id)
+            // Hold the lock through the eventual-consistency
+            // window — when network returns, the queue drain
+            // will re-fire the PUT and the next sync needs the
+            // lock still active to avoid snap-back.
+            await MainActor.run { endPendingMutationDeferred(task.id) }
             return
         }
 
         do {
             try await cuSvc.updateTaskStatus(id: task.id, to: status.status)
             await MainActor.run { bumpTaskSnapshot(for: task.id) }
-            notifyTask(.success,
-                       title:    task.title,
-                       subtitle: "Status atualizado",
-                       message:  "\(original.status.uppercased()) → \(status.status.uppercased())"
-                                 + ((1...4).contains(task.priority) ? " · \(task.priorityLabel)" : ""),
-                       taskId:   task.id)
+            if !silent {
+                notifyTask(.success,
+                           title:    task.title,
+                           subtitle: "Status atualizado",
+                           message:  "\(original.status.uppercased()) → \(status.status.uppercased())"
+                                     + ((1...4).contains(task.priority) ? " · \(task.priorityLabel)" : ""),
+                           taskId:   task.id)
+            }
+            // TTL'd release — see `endPendingMutationDeferred`'s
+            // header. Covers ClickUp's read-replica lag so a
+            // sync firing right after the PUT doesn't snap the
+            // task back to its pre-write state.
+            await MainActor.run { endPendingMutationDeferred(task.id) }
         } catch let api as APIError where api.isTransient {
             // Transient — keep the optimistic state and queue.
             await OfflineQueue.shared.enqueue(
@@ -2719,15 +2869,32 @@ final class AppState: ObservableObject {
                        subtitle: api.userFacingTitle,
                        message:  api.userFacingMessage,
                        taskId:   task.id)
+            // Keep the lock through the TTL — when the queued
+            // retry fires, the same protection applies.
+            await MainActor.run { endPendingMutationDeferred(task.id) }
         } catch {
             Log.error("updateTaskStatus: \(error)")
-            // Permanent — roll back the optimistic state.
+            // Permanent — roll back the optimistic state +
+            // release the lock IMMEDIATELY so the next sync
+            // can pull the canonical server state. Without
+            // an immediate release the rolled-back row would
+            // stay locked for the TTL window even though
+            // there's nothing to protect.
+            //
+            // DIAGNOSTIC: log every rollback so we can tell at
+            // a glance whether the "card snaps back" the user
+            // sees is being driven by THIS path (a real server
+            // rejection) or by a sync overwriting a still-
+            // locked optimistic row (a lock-leak bug).
+            Log.error("updateTaskStatus ROLLBACK id=\(task.id) " +
+                      "\(original.status) → \(status.status) reason=\(error)")
             await MainActor.run {
                 if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
                     tasks[idx].status      = original.status
                     tasks[idx].statusColor = original.statusColor
                     tasks[idx].isCompleted = original.isCompleted
                 }
+                endPendingMutationNow(task.id)
             }
             let title = (error as? APIError)?.userFacingTitle ?? "Falha ao mudar status"
             let msg   = (error as? APIError)?.userFacingMessage ?? original.notificationDetails
@@ -3143,13 +3310,46 @@ final class AppState: ObservableObject {
                 // inside the MainActor block.
                 let snapshot = accumulated
                 await MainActor.run {
-                    tasksByListId[id] = snapshot
+                    // PENDING-WRITE GUARD: for any task with an
+                    // in-flight user mutation, keep the local
+                    // (optimistically-mutated) row from `tasks`
+                    // / `tasksByListId[id]` instead of the fresh
+                    // server snapshot — the server's read can
+                    // still be the pre-write state during the
+                    // round-trip window. Without this, dragging
+                    // a card on the board mid-prefetch reverts.
+                    let pendingNow = pendingTaskMutations
+                    let merged: [CUTask]
+                    if pendingNow.isEmpty {
+                        merged = snapshot
+                    } else {
+                        // Local source = the visible `tasks` if
+                        // this is the active list, else whatever
+                        // is in the per-list cache.
+                        let active = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId)
+                        let localPool: [CUTask] =
+                            (active == id) ? tasks : (tasksByListId[id] ?? [])
+                        // `uniquingKeysWith:` so multi-list task
+                        // duplicates don't trap.
+                        let localById = Dictionary(
+                            localPool.map { ($0.id, $0) },
+                            uniquingKeysWith: { _, new in new }
+                        )
+                        merged = snapshot.map { fresh in
+                            if pendingNow.contains(fresh.id),
+                               let local = localById[fresh.id] {
+                                return local
+                            }
+                            return fresh
+                        }
+                    }
+                    tasksByListId[id] = merged
                     // Only replace the visible list if the user
                     // is still on this list. Prevents a slow
                     // fetch for List A from overwriting tasks
                     // the user is now reading from List B.
                     let active = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId)
-                    if active == id { tasks = snapshot }
+                    if active == id { tasks = merged }
                 }
                 if pageTasks.count < 100 { break }   // last page
             } catch {

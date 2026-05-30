@@ -30,6 +30,13 @@ struct FloatingModal<Content: View>: View {
     /// footer entrance. Takes precedence over `paper` / `genie`
     /// when set.
     var fromBottom: Bool = false
+    /// When true, the panel scales OUT OF (and back into) the
+    /// `origin` rectangle with NO opacity fade — the popup grows
+    /// from the clicked spot to full size and shrinks back into
+    /// it on dismiss. Used by the Quadro board so the popup
+    /// reads as the clicked card unfurling. Takes precedence
+    /// over `fromBottom` / `paper` / `genie`.
+    var scaleFromOrigin: Bool = false
     @ViewBuilder let content: () -> Content
 
     /// Genie timing — a fast, non-bouncy curve that accelerates
@@ -59,16 +66,35 @@ struct FloatingModal<Content: View>: View {
         .spring(response: 0.40, dampingFraction: 0.92)
     }
 
-    /// Slide-up-from-bottom timing — a calm spring with a very
-    /// light bounce at the top of the rise so the sheet "lands".
+    /// Slide-up-from-bottom timing — a calm spring with a hint
+    /// of bounce at the top of the rise so the sheet "lands".
+    /// Brought back after a brief ease-out experiment: the
+    /// bounceless ease read as flat / cheap. Open and close
+    /// durations are now in the same ~0.30 s ballpark; the
+    /// spring is just under-damped enough to settle with a
+    /// soft micro-bounce.
     private var bottomAnim: Animation {
-        .spring(response: 0.48, dampingFraction: 0.82)
+        .spring(response: 0.34, dampingFraction: 0.86)
     }
 
-    /// Dismiss for `fromBottom`: a faster, fully damped fall
-    /// back down — no flex, no bounce.
+    /// Dismiss for `fromBottom`: a smooth ease-in fall back down.
+    /// Sprung dismisses asymptote near the end of the curve so
+    /// the popup never visibly clears the window edge; a plain
+    /// ease keeps the motion at full velocity through the bottom.
     private var bottomDismissAnim: Animation {
-        .spring(response: 0.38, dampingFraction: 0.95)
+        .easeIn(duration: 0.30)
+    }
+
+    /// Scale-from-origin (Quadro morph) timing — symmetric
+    /// spring for In and Out so the popup unfurls out of the
+    /// card and folds back into it with matching cadence.
+    /// Damping 0.86 keeps the bounce subtle (half of the
+    /// previous 0.72) so the morph reads as crisp, not springy.
+    private var scaleAnim: Animation {
+        .spring(response: 0.34, dampingFraction: 0.86)
+    }
+    private var scaleDismissAnim: Animation {
+        .spring(response: 0.34, dampingFraction: 0.96)
     }
 
     /// Pixel delta from the centre of the window (popup's resting place)
@@ -95,6 +121,11 @@ struct FloatingModal<Content: View>: View {
                 if case .none = backdrop {
                     Color.black.opacity(0.001)
                         .ignoresSafeArea()
+                        // Backdrop fades — letting it slide
+                        // down with the popup made the dim
+                        // layer drag visibly across the
+                        // dashboard during dismiss, which read
+                        // worse than a clean fade-to-clear.
                         .transition(.opacity)
                         .onTapGesture { dismiss() }
                         // Empty `.onHover` registers an NSTrackingArea
@@ -108,21 +139,30 @@ struct FloatingModal<Content: View>: View {
                 } else {
                     backdropView
                         .ignoresSafeArea()
-                        .transition(.opacity)
+                        .transition(.opacity)   // see comment above
                         .onTapGesture { dismiss() }
-                        .onHover { _ in }   // see comment above
+                        .onHover { _ in }
                 }
 
                 content()
                     .transition(popupTransition)
             }
         }
-        .animation(fromBottom
-                    ? (isPresented ? bottomAnim : bottomDismissAnim)
-                    : (paper
-                        ? (isPresented ? paperAnim : paperDismissAnim)
-                        : (genie ? genieAnim
-                                 : .spring(duration: 0.45, bounce: 0.30))),
+        .animation(scaleFromOrigin
+                    ? (isPresented ? scaleAnim : scaleDismissAnim)
+                    : (fromBottom
+                        ? (isPresented ? bottomAnim : bottomDismissAnim)
+                        : (paper
+                            ? (isPresented ? paperAnim : paperDismissAnim)
+                            : (genie ? genieAnim
+                                     // Default scale popup — bouncy
+                                     // spring on open (same beat as
+                                     // bottomAnim) and a clean ease
+                                     // on dismiss so the popup never
+                                     // hangs near zero scale.
+                                     : (isPresented
+                                         ? .spring(response: 0.34, dampingFraction: 0.86)
+                                         : .easeIn(duration: 0.30))))),
                    value: isPresented)
     }
 
@@ -152,13 +192,42 @@ struct FloatingModal<Content: View>: View {
     /// Combined scale + translate so the popup appears to fly out of the
     /// button position and grow into place.
     private var popupTransition: AnyTransition {
-        if fromBottom {
-            // Slide up from the bottom edge of the window (and
-            // slide back down on dismiss), with a quick opacity
-            // fade so the sheet doesn't pop in at the boundary.
+        if scaleFromOrigin {
+            // Standard scale-from-click-point transition with
+            // opacity fade. Popup grows out of the clicked
+            // BoardCard's centre (origin rect) from a small
+            // scale to full size, and reverses on dismiss.
+            // No "morph" — just the original scale animation.
+            let active   = PopupTransform(scale: 0.05,
+                                          offset: offsetDelta,
+                                          opacity: 0)
+            let identity = PopupTransform(scale: 1.0,
+                                          offset: .zero,
+                                          opacity: 1)
             return .asymmetric(
-                insertion: .move(edge: .bottom).combined(with: .opacity),
-                removal:   .move(edge: .bottom).combined(with: .opacity)
+                insertion: .modifier(active: active, identity: identity),
+                removal:   .modifier(active: active, identity: identity)
+            )
+        }
+        if fromBottom {
+            // Explicit Y-offset transition. `.move(edge: .bottom)`
+            // translates the view by its OWN height, which for a
+            // centred popup leaves the top edge still on-screen
+            // at the end of the spring (the math is correct, the
+            // optics aren't — looks like the sheet "stuck"
+            // halfway). Using the window height as the travel
+            // distance guarantees the sheet clears the visible
+            // area in one straight motion, no opacity fade.
+            let travel = max(windowSize.height, 900)
+            return .asymmetric(
+                insertion: .modifier(
+                    active:   OffsetYModifier(y:  travel),
+                    identity: OffsetYModifier(y:  0)
+                ),
+                removal: .modifier(
+                    active:   OffsetYModifier(y:  travel),
+                    identity: OffsetYModifier(y:  0)
+                )
             )
         }
         if paper {
@@ -196,11 +265,17 @@ struct FloatingModal<Content: View>: View {
     }
 
     private func dismiss() {
-        withAnimation(fromBottom
-                        ? bottomDismissAnim
-                        : (paper ? paperDismissAnim
-                                 : (genie ? genieAnim
-                                          : .spring(duration: 0.40, bounce: 0.20)))) {
+        withAnimation(scaleFromOrigin
+                        ? scaleDismissAnim
+                        : (fromBottom
+                            ? bottomDismissAnim
+                            : (paper ? paperDismissAnim
+                                     : (genie ? genieAnim
+                                              // Default scale dismiss
+                                              // is a clean ease so the
+                                              // popup never hangs near
+                                              // zero scale.
+                                              : .easeIn(duration: 0.30))))) {
             isPresented = false
         }
     }
@@ -385,6 +460,27 @@ private struct GenieEffect: GeometryEffect {
         return ProjectionTransform(m)
     }
 }
+
+/// Animatable Y-offset modifier — used by the `fromBottom`
+/// transition to translate the popup by the full window height
+/// instead of `.move(edge:)`'s view-height default. Conforming
+/// to `Animatable` lets the spring/ease driver interpolate the
+/// `y` value smoothly each frame.
+struct OffsetYModifier: ViewModifier, Animatable {
+    var y: CGFloat
+
+    var animatableData: CGFloat {
+        get { y }
+        set { y = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.offset(y: y)
+    }
+}
+
+// (MorphFromRectModifier removed — Quadro now uses the standard
+// scale-from-origin transition via PopupTransform.)
 
 /// Modifier shared by `FloatingModal` and `EventDetailOverlay` to interpolate
 /// between the "tiny + offset to click point" and "full-size + centred" states.

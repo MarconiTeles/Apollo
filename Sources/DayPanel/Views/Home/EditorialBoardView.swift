@@ -120,24 +120,39 @@ struct EditorialBoardView: View {
         .frame(maxHeight: .infinity)
     }
 
-    /// Hide the implicit "closed" statuses (`done`/`closed`) — boards
-    /// only need the open lanes. If the workspace has no statuses yet
-    /// (first-load before sync), fall back to a sane PT-BR default so
-    /// the board doesn't render empty.
+    /// Render EVERY workspace status as a column, including the
+    /// implicit `done` / `closed` lanes (Concluído, Cancelado).
+    /// Earlier these were filtered out with `!$0.isClosed` —
+    /// matched the convention of some kanban apps but bit the
+    /// user here: ClickUp's own board view shows the closed
+    /// columns and they expected the same. If the workspace
+    /// hasn't sync'd yet, fall back to a sane PT-BR default set
+    /// so the board still has columns to render.
     private var visibleStatuses: [CUStatus] {
-        let open = appState.availableStatuses.filter { !$0.isClosed }
-        if !open.isEmpty { return open }
+        if !appState.availableStatuses.isEmpty {
+            return appState.availableStatuses
+        }
         return [
             CUStatus(status: "to do",     color: "#54577E", type: "open"),
             CUStatus(status: "doing",     color: "#B0612E", type: "custom"),
             CUStatus(status: "review",    color: "#7A6597", type: "custom"),
             CUStatus(status: "liberado",  color: "#9A7B1F", type: "custom"),
+            CUStatus(status: "concluído", color: "#1F7A3A", type: "done"),
+            CUStatus(status: "cancelado", color: "#C7321B", type: "closed"),
         ]
     }
 
     // ────────────────────────────────────────────────────────────────────
     // MARK: Column
     // ────────────────────────────────────────────────────────────────────
+
+    /// True when the board is in a cold-start state: no source
+    /// tasks loaded yet AND a sync is in flight. Drives the
+    /// skeleton placeholders. Once data lands, an empty column
+    /// renders nothing (matches TaskListView / MyTasks gating).
+    private var isColdLoading: Bool {
+        appState.tasks.isEmpty && appState.isSyncing
+    }
 
     private func column(for status: CUStatus) -> some View {
         let cards = boardTasks.filter { $0.status.lowercased() == status.status.lowercased() }
@@ -155,24 +170,20 @@ struct EditorialBoardView: View {
             // without pushing siblings out of view.
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 12) {
+                    if cards.isEmpty && isColdLoading {
+                        // Cold-start placeholders — 3 skeleton
+                        // cards per column give the user a
+                        // sense of "stuff is loading", not
+                        // "the board is empty". Replaced by
+                        // real BoardCard rows as soon as tasks
+                        // come in.
+                        ForEach(0..<3, id: \.self) { i in
+                            EditorialSkeletonCard()
+                                .cascadeAppear(index: i)
+                        }
+                    }
                     ForEach(cards, id: \.id) { task in
-                        BoardCard(task: task)
-                            .onDrag {
-                                // Carry the task id as plain text so any
-                                // column's .onDrop can fetch it back via
-                                // loadObject.
-                                NSItemProvider(object: task.id as NSString)
-                            } preview: {
-                                BoardCard(task: task)
-                                    .frame(width: 260)
-                                    .shadow(color: .black.opacity(0.22), radius: 14, y: 8)
-                            }
-                            .onTapGesture {
-                                // Open the existing detail popup. Mirrors the
-                                // list-view click path so the same UX surfaces.
-                                appState.detailTaskOrigin = .zero
-                                appState.detailTask       = task
-                            }
+                        BoardCardRow(task: task, appState: appState)
                     }
                     addCardPlaceholder(for: status)
                         .padding(.top, 4)
@@ -284,7 +295,7 @@ struct EditorialBoardView: View {
 /// status-dot + breadcrumb caps + optional priority chip,
 /// title (sans medium),
 /// avatar + first-name (left) + relative date (right, cinnabar if overdue).
-private struct BoardCard: View {
+struct BoardCard: View {
     let task: CUTask
     @EnvironmentObject var appState: AppState
 
@@ -458,6 +469,71 @@ private struct PriorityChip: View {
 }
 
 // ────────────────────────────────────────────────────────────────────────
+// MARK: - Board card row (with frame capture for the morph)
+// ────────────────────────────────────────────────────────────────────────
+
+/// Wraps a `BoardCard` with frame tracking in the "appWindow"
+/// coordinate space so the TaskDetail popup can morph OUT OF
+/// (and back INTO) the card's actual rect — not the cursor
+/// position. `MouseOriginCapture` returns a 2×2 rect at the
+/// cursor, which makes the popup pop out of a pixel-sized
+/// point rather than the card's footprint. This row owns its
+/// own @State for the captured frame and re-publishes it via
+/// `captureFrame` on every layout pass.
+private struct BoardCardRow: View {
+    let task: CUTask
+    let appState: AppState
+
+    @State private var cardFrame: CGRect = .zero
+
+    var body: some View {
+        BoardCard(task: task)
+            .captureFrame($cardFrame)
+            .onDrag {
+                NSItemProvider(object: task.id as NSString)
+            } preview: {
+                BoardCard(task: task)
+                    .frame(width: 260)
+                    .shadow(color: .black.opacity(0.22), radius: 14, y: 8)
+            }
+            .onTapGesture {
+                // Same transition as every other surface — the
+                // settings-style bottom slide (`.bottomSlide` is
+                // the default openStyle, so just leave it
+                // alone). Origin still captured in case any
+                // future code path needs it.
+                let rect = cardFrame != .zero
+                    ? cardFrame
+                    : MouseOriginCapture.currentClickRectInMainWindow()
+                appState.detailTaskOrigin = rect
+                appState.detailTask       = task
+            }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// MARK: - Shared popup-size helper
+// ────────────────────────────────────────────────────────────────────────
+
+/// Mirrors `TaskDetailSheet.computeSize(for:)` — kept in sync by
+/// hand so the BoardCard morph and the popup's
+/// `MorphFromRectModifier` agree on the SAME target rect at
+/// progress = 1. If TaskDetailSheet's formula changes this
+/// helper must change with it.
+func taskDetailNaturalSize(for window: CGSize) -> CGSize {
+    let topReserved:  CGFloat = 64
+    let sideReserved: CGFloat = 16
+    let safeMaxH = max(280, window.height - 2 * topReserved)
+    let safeMaxW = max(520, window.width  - 2 * sideReserved)
+    let preferredH = min(1200, max(560, window.height * 0.90))
+    let preferredW = min(1200, max(720, window.width  * 0.85))
+    return CGSize(
+        width:  min(preferredW, safeMaxW),
+        height: min(preferredH, safeMaxH)
+    )
+}
+
+// ────────────────────────────────────────────────────────────────────────
 // MARK: - Drop delegate
 // ────────────────────────────────────────────────────────────────────────
 
@@ -496,7 +572,13 @@ private struct BoardDropDelegate: DropDelegate {
                     dragOverStatus = nil
                     return
                 }
-                await appState.updateTaskStatus(task, to: targetStatus)
+                // Silent on the board: the card already moved
+                // visually between columns on drop, so the
+                // toast confirming "Status atualizado" was
+                // redundant. Remote (teammate) status changes
+                // still notify via the sync-diff path, which
+                // this flag does NOT suppress.
+                await appState.updateTaskStatus(task, to: targetStatus, silent: true)
                 dragOverStatus = nil
             }
         }
