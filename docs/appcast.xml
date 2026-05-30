@@ -5,15 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.7.9</title>
-      <pubDate>Thu, 28 May 2026 22:03:41 +0000</pubDate>
-      <sparkle:version>65</sparkle:version>
-      <sparkle:shortVersionString>1.7.9</sparkle:shortVersionString>
+      <title>Apollo 1.7.10</title>
+      <pubDate>Sat, 30 May 2026 01:09:44 +0000</pubDate>
+      <sparkle:version>66</sparkle:version>
+      <sparkle:shortVersionString>1.7.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Animações dos popups (Configurações, Tarefa, Evento, Apollo IA) unificadas. Drag-and-drop no Quadro mais robusto: tarefas não voltam mais ao status anterior. Skeleton no carregamento inicial das colunas do Quadro. Toast redundante no Quadro removido — alterações de status de outras pessoas continuam notificando normalmente.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.9/Apollo-1.7.9.zip"
-        sparkle:edSignature="PpFMZlvtdJwoReWzjaS8Y4mgpFyjoKYyzY1s5gl4C2ZbhF+f+mv7yxStzaGxE2NofnWgHXypPZNiboq9W+HkCg=="
-        length="40667617"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.10/Apollo-1.7.10.zip"
+        sparkle:edSignature="LwgkEdCimG59aLIJ1C9+AGb4bEg5+jxW46NiVRUqGEFlj8XyZko6fs65CIOlanCSR6pDmM8JmiehQnM/qBmNBg=="
+        length="40704302"
         type="application/octet-stream" />
     </item>
   </channel>
