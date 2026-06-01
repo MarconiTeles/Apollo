@@ -855,33 +855,54 @@ struct ContentView: View {
         }
         // Embedded review workflow: REVIEW on an attachment opens the shared
         // ReviewKit engine in-app; on submit Apollo posts the summary to ClickUp.
-        .sheet(item: $reviewPresenter.request) { req in
-            ReviewView(
-                params: req.params,
-                savedJSON: req.savedJSON,
-                // "Ver review" (saved JSON) opens view-only — the
-                // review was already submitted from this or another
-                // device; this is just for re-reading the markup.
-                readOnly: req.savedJSON != nil,
-                onClose: { reviewPresenter.request = nil },
-                onSubmit: { result in
-                    if let tid = result.taskId {
-                        let mentions = [result.uploaderId].compactMap { $0 }
-                        Task {
-                            await appState.postReviewComment(
-                                taskId: tid,
-                                commentId: result.commentId,
-                                attachmentId: result.attachmentId,
-                                text: result.summaryText,
-                                mentionMemberIds: mentions,
-                                reviewJSON: result.json)
-                        }
-                    }
-                    reviewPresenter.request = nil
-                }
-            )
-            .frame(minWidth: 1040, minHeight: 660)
+        // Extracted to a method so its closures don't bloat the `body`
+        // type-checker (keeps SwiftUI's inference within budget).
+        .sheet(item: $reviewPresenter.request) { req in reviewSheet(req) }
+    }
+
+    /// The embedded review sheet content. A fresh native review (opened from the
+    /// REVIEW button → params) reads & writes the SAME Cloudflare KV blob as the
+    /// web (the single live `?att=` link): `liveLoad` pulls existing comments on
+    /// open; `liveSave` autosaves on change; `onSubmit` does a final flush and
+    /// posts the ClickUp comment.
+    private func reviewSheet(_ req: ReviewRequest) -> some View {
+        let liveLoad: (() async -> Data?)? = req.params.map { p in
+            { await ReviewBackend.resolve(mediaUrl: p.mediaUrl, ext: p.ext,
+                                          title: p.mediaTitle, taskId: p.taskId,
+                                          listId: p.listId, uploaderId: p.uploaderId) }
         }
+        let liveSave: ((Data) -> Void)? = (req.params != nil)
+            ? { data in Task { await ReviewBackend.save(payloadData: data) } }
+            : nil
+        let onSubmit: (ReviewResult) -> Void = { result in
+            // Final flush to KV (covers edits within the autosave debounce).
+            Task { await ReviewBackend.save(payloadData: result.json) }
+            if let tid = result.taskId {
+                let mentions = [result.uploaderId].compactMap { $0 }
+                Task {
+                    await appState.postReviewComment(
+                        taskId: tid,
+                        commentId: result.commentId,
+                        attachmentId: result.attachmentId,
+                        text: result.summaryText,
+                        mentionMemberIds: mentions,
+                        reviewJSON: result.json)
+                }
+            }
+            reviewPresenter.request = nil
+        }
+        return ReviewView(
+            params: req.params,
+            savedJSON: req.savedJSON,
+            // "Ver review" (saved JSON) opens view-only — the review was
+            // already submitted; this is just for re-reading the markup.
+            readOnly: req.savedJSON != nil,
+            liveLoad: liveLoad,
+            liveSave: liveSave,
+            onClose: { reviewPresenter.request = nil },
+            onSubmit: onSubmit
+        )
+        .frame(minWidth: 1040, minHeight: 660)
     }
 
     /// Renders the Notifications Center as a top-trailing-anchored popup

@@ -3966,35 +3966,63 @@ final class AppState: ObservableObject {
     /// Visible label for the review link in the ClickUp comment (uppercase).
     static let reviewLinkText = "VER REVIEW"
 
-    /// Build the viewer link carrying the WHOLE review INLINE (`?z=<payload>`),
-    /// so the page needs no network fetch — the ClickUp attachment CDN doesn't
-    /// send CORS headers, so a `?d=<jsonURL>` fetch fails in the browser. The
-    /// payload rides as gzip+base64url (already URL-safe). nil when the viewer
-    /// base isn't configured or there's no review data.
+    /// Build the conclusion comment's review link. UNIFIED: this is the single
+    /// live `?att=` link (the same KV-backed review the native window just
+    /// edited) — NOT a `?z=` snapshot. Derived from the payload's media context
+    /// so it matches `reviewOpenLink` (same `att`). nil when unconfigured or the
+    /// payload has no media.
     static func reviewLink(reviewJSON: Data) -> String? {
-        guard !reviewViewerBase.isEmpty, !reviewJSON.isEmpty else { return nil }
-        return "\(reviewViewerBase)/?z=\(ReviewHandoff.encode(reviewJSON))"
+        guard !reviewViewerBase.isEmpty, !reviewJSON.isEmpty,
+              let o = try? JSONSerialization.jsonObject(with: reviewJSON) as? [String: Any],
+              let mediaUrl = o["mediaUrl"] as? String, !mediaUrl.isEmpty
+        else { return nil }
+        return reviewOpenLink(mediaUrl: mediaUrl,
+                              ext: o["ext"] as? String ?? "",
+                              title: o["mediaTitle"] as? String ?? "",
+                              taskId: o["taskId"] as? String ?? "",
+                              commentId: o["commentId"] as? String ?? "",
+                              uploaderId: o["uploaderId"] as? Int)
     }
 
     /// Visible label for the "open this file in the web review tool" link that
     /// rides on a reviewable file's comment (shown only in ClickUp).
     static let reviewOpenLinkText = "REVISAR"
 
-    /// Build a link that opens the hosted EDITOR on a RAW file (the "REVISAR"
-    /// entry point). Carries the ClickUp context (task/comment/uploader) so the
-    /// web editor's "Concluir" can post the review back through Apollo via the
-    /// daypanel://review-done callback — exactly like the native flow. nil when
+    /// Stable, deterministic id for a media URL (FNV-1a 64-bit → hex). Same file
+    /// URL → same id across reopens, with no randomized per-run seed (unlike
+    /// `Hasher`). Used as the review's KV key (`att=`) when there's no ClickUp
+    /// attachment id yet at link-build time.
+    static func stableId(_ s: String) -> String {
+        var h: UInt64 = 0xcbf29ce484222325
+        for b in s.utf8 { h = (h ^ UInt64(b)) &* 0x100000001b3 }
+        return String(h, radix: 16)
+    }
+
+    /// Build THE single live review link (the "REVISAR" entry point — and also
+    /// the "ver" link: same URL forever). It resolves to a Cloudflare KV blob
+    /// keyed by `att`, so the reviewer's markup + the executor's checkboxes all
+    /// live behind this one link, always up to date. Carries the ClickUp context
+    /// (task/comment/uploader) for the @mention + notification. nil when
     /// unconfigured.
     static func reviewOpenLink(mediaUrl: String, ext: String, title: String,
                                taskId: String, commentId: String,
-                               uploaderId: Int?, uploaderName: String? = nil) -> String? {
+                               uploaderId: Int?, uploaderName: String? = nil,
+                               attachmentId: String? = nil) -> String? {
         guard !reviewViewerBase.isEmpty, !mediaUrl.isEmpty else { return nil }
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~") // RFC 3986 unreserved
         func enc(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s }
-        var link = "\(reviewViewerBase)/?m=\(enc(mediaUrl))&x=\(enc(ext))&t=\(enc(title))"
+        // `att` is the review's stable identity (the KV key). Prefer the real
+        // ClickUp attachment id when known; otherwise derive a stable id from
+        // the media URL so the same file always maps to the same review.
+        let att = (attachmentId?.isEmpty == false) ? attachmentId! : stableId(mediaUrl)
+        var link = "\(reviewViewerBase)/?att=\(enc(att))&m=\(enc(mediaUrl))&x=\(enc(ext))&t=\(enc(title))"
         link += "&task=\(enc(taskId))&cmt=\(enc(commentId))"
-        if let uploaderId { link += "&up=\(uploaderId)" }
+        if let uploaderId {
+            // `up` = who to notify; `by` = the review's creator (same person —
+            // whoever posted the file and wants it reviewed).
+            link += "&up=\(uploaderId)&by=\(uploaderId)"
+        }
         // `un=` gives the web a fallback display name for the @mention chip; the
         // notification itself rides on `up=` (the user id). Web-only.
         if let uploaderName, !uploaderName.isEmpty { link += "&un=\(enc(uploaderName))" }
