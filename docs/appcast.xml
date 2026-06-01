@@ -5,6 +5,20 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 1.8.0</title>
+      <pubDate>Mon, 01 Jun 2026 16:59:18 +0000</pubDate>
+      <sparkle:version>68</sparkle:version>
+      <sparkle:shortVersionString>1.8.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>silent</sparkle:channel>
+      <description><![CDATA[Review com link único — cada arquivo agora tem um só link de revisão, que abre tanto no Apollo quanto no navegador e fica sempre atualizado. O revisor marca; quem executa resolve os itens com checkboxes — tudo no mesmo link, salvo automaticamente.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.0/Apollo-1.8.0.zip"
+        sparkle:edSignature="MkVEQnkGqGHnmkqbH7ZE9snxJBDtFV9LigX2hypMZpGknJ0B5wmAw4UU6h6Bz8HofpFe9zLBfw94qbKDLjY1Aw=="
+        length="40757058"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 1.7.10</title>
       <pubDate>Sat, 30 May 2026 01:09:44 +0000</pubDate>
       <sparkle:version>66</sparkle:version>
