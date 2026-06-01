@@ -280,7 +280,7 @@ rm -f "$ZIP_PATH"
 ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
 
 # ── Sign the ZIP with the EdDSA private key from Keychain ─────────────────
-echo "→ Signing $ZIP_NAME…"
+echo "→ Signing ${ZIP_NAME}…"
 SIGN_OUTPUT="$("$SIGN_UPDATE" "$ZIP_PATH")"
 # Output looks like: sparkle:edSignature="…" length="…"
 SIGNATURE_LINE="$SIGN_OUTPUT"
@@ -394,7 +394,7 @@ if [[ "${APOLLO_UPLOAD:-0}" = "1" ]]; then
     TITLE="Apollo $NEW_VERSION"
     NOTES_BODY="${NOTES:-Build $NEW_BUILD}"
 
-    echo "→ Creating GitHub Release $TAG on $GH_SLUG…"
+    echo "→ Creating GitHub Release $TAG on ${GH_SLUG}…"
     # `gh release create` will error if the tag already
     # exists. In that case, fall back to uploading assets
     # onto the existing release (useful for rebuilds that
