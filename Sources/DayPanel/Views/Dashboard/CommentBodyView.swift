@@ -192,8 +192,21 @@ struct CommentBodyView: View, Equatable {
                 fileCard(att)
             }
 
-            // "Ver review" — reopen the full review (markup) from the comment.
-            if let reviewSource { reviewLinkCard(reviewSource) }
+            // "Ver review" — reopen the full review from the comment. Suppressed
+            // when this comment already shows a reviewable file card (the file's
+            // own REVIEW button opens the same link) so we don't render two
+            // instances of the review link on a file-upload comment.
+            if let reviewSource, !hasReviewableAttachment { reviewLinkCard(reviewSource) }
+        }
+    }
+
+    /// True when this comment renders a file card whose attachment is
+    /// reviewable (so it already shows a native REVIEW button).
+    private var hasReviewableAttachment: Bool {
+        attachments.contains {
+            !inlineUrlSet.contains($0.url)
+                && !$0.title.hasPrefix("apollo-review")
+                && ReviewLink.isReviewable($0.ext)
         }
     }
 
