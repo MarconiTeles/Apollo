@@ -66,6 +66,34 @@ enum ReviewBackend {
         return await post("/session/save", body) != nil
     }
 
+    // ── Single ClickUp conclusion comment (delete+repost, not accumulate) ────
+    // The id of the one "Ver review" comment for this review, stored in the
+    // blob so any Apollo instance replaces the same comment instead of posting
+    // a new one each conclusion. `payloadData` is the ReviewPayload JSON.
+    static func clickupCommentId(payloadData: Data) async -> String? {
+        guard let obj = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+              let mediaUrl = obj["mediaUrl"] as? String, !mediaUrl.isEmpty else { return nil }
+        var body: [String: Any] = [
+            "attachmentId": att(forMediaUrl: mediaUrl),
+            "taskId": obj["taskId"] ?? "",
+            "mediaUrl": mediaUrl,
+            "mediaTitle": obj["mediaTitle"] ?? "",
+            "mediaKind": mediaKind(forExt: obj["ext"] as? String ?? ""),
+        ]
+        if let up = obj["uploaderId"] { body["uploaderId"] = up }
+        guard let data = await post("/session/resolve", body),
+              let r = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return r["clickupCommentId"] as? String
+    }
+    static func setClickupCommentId(payloadData: Data, id: String?) async {
+        guard let obj = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+              let mediaUrl = obj["mediaUrl"] as? String, !mediaUrl.isEmpty else { return }
+        var body: [String: Any] = ["reviewId": att(forMediaUrl: mediaUrl)]
+        if let id { body["clickupCommentId"] = id } else { body["clickupCommentId"] = NSNull() }
+        _ = await post("/session/save", body)
+    }
+
     // ── "Last seen" per review (drives the REVIEW button badge) ──────────────
     // Local-only state: the `updatedAt` this user last saw for each review.
     // A review whose remote `updatedAt` is newer than this got changed by

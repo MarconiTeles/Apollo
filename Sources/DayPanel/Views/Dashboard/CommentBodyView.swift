@@ -564,8 +564,13 @@ private struct ReviewButton: View {
 
     var body: some View {
         Button {
-            // Opening = "seen": clear the dot and remember this version.
+            // Opening = "seen": clear the dot, remember this version, and start
+            // watching it so future changes fire a notification.
             ReviewBackend.markSeen(forMediaUrl: attachment.url, updatedAt: remoteUpdatedAt)
+            ReviewWatcher.shared.register(
+                att: ReviewBackend.att(forMediaUrl: attachment.url),
+                mediaUrl: attachment.url, taskId: taskId, title: attachment.title,
+                tintHex: nil, currentUpdatedAt: remoteUpdatedAt)
             unseen = false
             ReviewPresenter.shared.present(
                 ReviewLink.params(attachment: attachment, taskId: taskId, listId: listId,

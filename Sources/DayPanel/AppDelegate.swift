@@ -165,6 +165,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // taps deep-link into the matching task / event popup.
         UNUserNotificationCenter.current().delegate = self
 
+        // Poll watched reviews and fire a notification when someone updates one
+        // (the active counterpart to the REVIEW button's dot).
+        ReviewWatcher.shared.start()
+
         // Receive `daypanel://` URL opens (the standalone review app's
         // review-done callback). The scheme is declared in Info.plist.
         registerURLHandler()

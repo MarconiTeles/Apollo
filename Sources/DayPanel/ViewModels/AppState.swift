@@ -4069,6 +4069,16 @@ final class AppState: ObservableObject {
             segments.append(["text": text])
         }
 
+        // 1b. Single conclusion comment: drop the PREVIOUS "Ver review" comment
+        //     for this review (if any) so the task doesn't accumulate them —
+        //     we re-post fresh below and store the new id. The link is the same
+        //     dynamic ?att=, so "consistency" = one comment, always current.
+        if !reviewJSON.isEmpty,
+           let prevCommentId = await ReviewBackend.clickupCommentId(payloadData: reviewJSON),
+           !prevCommentId.isEmpty {
+            try? await cuSvc.deleteTaskComment(commentId: prevCommentId)
+        }
+
         // 2. Thread under the video's comment when there is one.
         var target = commentId
         if target?.isEmpty ?? true {
@@ -4089,6 +4099,11 @@ final class AppState: ObservableObject {
             }
         } catch {
             Log.error("postReviewComment: \(error)")
+        }
+
+        // Remember this comment so the NEXT conclusion replaces it.
+        if !reviewJSON.isEmpty {
+            await ReviewBackend.setClickupCommentId(payloadData: reviewJSON, id: postedId)
         }
 
         // Build an OPTIMISTIC comment locally from the POST-response id + the
