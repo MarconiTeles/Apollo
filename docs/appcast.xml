@@ -5,6 +5,20 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 1.8.4</title>
+      <pubDate>Mon, 01 Jun 2026 21:55:38 +0000</pubDate>
+      <sparkle:version>72</sparkle:version>
+      <sparkle:shortVersionString>1.8.4</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>silent</sparkle:channel>
+      <description><![CDATA[Fotos de perfil do ClickUp nos avatares (iniciais como fallback) e avatares empilhados nos cards do quadro com vários responsáveis. Notificação de review atualizado agora aparece também no painel interno e, ao clicar, abre o review direto. Badge de atualização no botão REVIEW tanto no comentário quanto na aba Anexos. Correção: comentário de upload não mostra mais o link de review duplicado.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.4/Apollo-1.8.4.zip"
+        sparkle:edSignature="VEvmvu70v8UMnuNgzfi1lq3haWwFTiGsWjP1qZKeJSxlSKFQUt9hGToGIUK1/IztYE71qgeUU+colC09t7/bAQ=="
+        length="40885512"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 1.8.3</title>
       <pubDate>Mon, 01 Jun 2026 20:03:04 +0000</pubDate>
       <sparkle:version>71</sparkle:version>
