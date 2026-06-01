@@ -5,6 +5,20 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 1.8.1</title>
+      <pubDate>Mon, 01 Jun 2026 17:54:59 +0000</pubDate>
+      <sparkle:version>69</sparkle:version>
+      <sparkle:shortVersionString>1.8.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>silent</sparkle:channel>
+      <description><![CDATA[Review no Apollo com paridade total: checkboxes de resolução por comentário, badge no botão REVIEW quando alguém atualiza o link, e atualização automática do review aberto (sem precisar recarregar). Correção: reabrir o link de review não trava mais em 'Sem arquivo'. Hover dos cards com a cor do status.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.1/Apollo-1.8.1.zip"
+        sparkle:edSignature="2OcRWW14lrd8V2UqcRIqlvKn7QmHOidKs2/VsO5v7BZZee7P1yhQtfgdCfG6Bkih+csrwj3tJo2jJ13PTkPZDQ=="
+        length="40808820"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 1.8.0</title>
       <pubDate>Mon, 01 Jun 2026 16:59:18 +0000</pubDate>
       <sparkle:version>68</sparkle:version>
