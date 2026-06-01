@@ -30,6 +30,11 @@ final class ContactsService {
     /// selection.
     private var eventAttendees: [GuestSuggestion] = []
 
+    /// Live Google People API search (saved contacts + other contacts +
+    /// Workspace directory). Injected by AppState once GoogleAuthService is
+    /// available. nil → People API not wired (just EventKit + macOS Contacts).
+    var peopleSearch: ((String) async -> [GuestSuggestion])?
+
     /// Search results merged: first the items that match by name,
     /// then ones matching by email substring. De-duplicates by email
     /// address (case-insensitive), capped to 8 results.
@@ -57,14 +62,20 @@ final class ContactsService {
             }
         }
 
+        // Live Google People results (saved contacts + other contacts +
+        // directory). Run in parallel-ish with the local scoring above; merged
+        // AFTER the local matches so "frequently invited" (EventKit) still ranks
+        // first, then the broader Google sources fill in everyone else.
+        let people = await (peopleSearch?(q) ?? [])
+
         var seen: Set<String> = []
         var out:  [GuestSuggestion] = []
-        for s in byName + byEmailSW + byEmailC {
+        for s in byName + byEmailSW + byEmailC + people {
             let key = s.email.lowercased()
             if seen.contains(key) { continue }
             seen.insert(key)
             out.append(s)
-            if out.count >= 8 { break }
+            if out.count >= 10 { break }
         }
         return out
     }

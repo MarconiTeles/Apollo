@@ -37,7 +37,11 @@ struct NotificationsCenterView: View {
 
             VStack(spacing: 0) {
                 if appState.notifications.isEmpty {
+                    // Fill the remaining height so the header stays pinned to
+                    // the top (the outer maxHeight frame would otherwise centre
+                    // the short content, dropping the header to the middle).
                     emptyState
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                 ScrollablePopupContent(maxHeight: maxScrollHeight) {
                     // Flat editorial rows divided by hairlines

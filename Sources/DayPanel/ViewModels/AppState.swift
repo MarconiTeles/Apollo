@@ -695,6 +695,9 @@ final class AppState: ObservableObject {
     /// route through this service.
     let googleAuth         = GoogleAuthService()
     lazy var googleCalendar: GoogleCalendarService = GoogleCalendarService(auth: googleAuth)
+    /// Google People API search — powers the attendee autocomplete with the
+    /// same breadth as Google Calendar (contacts + other contacts + directory).
+    lazy var googlePeople: GooglePeopleService = GooglePeopleService(auth: googleAuth)
     /// In-app AI agent. Reads tasks/events from this AppState and
     /// answers user questions via the configured LLM provider.
     /// Backend (Gemini cloud / Ollama local) is read from
@@ -741,6 +744,13 @@ final class AppState: ObservableObject {
         let saved           = UserDefaults.standard.object(forKey: "dp_autoSyncInterval") as? Int
         autoSyncInterval    = saved ?? 5
         selectedCalendarIds = UserDefaults.standard.stringArray(forKey: "dp_selectedCalendarIds") ?? ["primary"]
+        // Wire the attendee autocomplete to Google People (saved contacts +
+        // other contacts + Workspace directory) so it matches Google Calendar's
+        // breadth instead of just past-event attendees + macOS Contacts.
+        ContactsService.shared.peopleSearch = { [weak self] q in
+            guard let self else { return [] }
+            return await self.googlePeople.search(query: q)
+        }
         // Restore the comment-seen ledger so a comment posted
         // during the time Apollo was closed doesn't fire a
         // duplicate notification on relaunch (the previous

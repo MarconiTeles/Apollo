@@ -199,7 +199,8 @@ struct EditorialMyTasksView: View {
     /// date ascending → no-date last → priority).
     private var groups: [(status: CUStatus, tasks: [CUTask])] {
         let byStatus = Dictionary(grouping: assignedToMe, by: { $0.status.lowercased() })
-        let visible = appState.availableStatuses.filter { !$0.isClosed }
+        // Reversed status order — REVIEW first … BACKLOG last (pipeline end-first).
+        let visible = appState.availableStatuses.filter { !$0.isClosed }.reversed()
         return visible.compactMap { s in
             let lc = s.status.lowercased()
             let ts = byStatus[lc] ?? []

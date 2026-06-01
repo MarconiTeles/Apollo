@@ -65,6 +65,23 @@ struct SharedCalendarSearchBar: View {
         return scored.map { $0.contact }
     }
 
+    /// Live Google People results (contacts + other contacts + directory),
+    /// fetched async on query change. Broadens the roster beyond people seen in
+    /// past events — same source the event attendee field uses.
+    @State private var peopleResults: [AppState.CalendarContact] = []
+
+    /// Local roster first (people you've actually shared calendars with),
+    /// then the broader People API hits. De-duped by email, capped.
+    private var mergedSuggestions: [AppState.CalendarContact] {
+        var seen = Set<String>()
+        var out: [AppState.CalendarContact] = []
+        for c in suggestions + peopleResults {
+            if seen.insert(c.email.lowercased()).inserted { out.append(c) }
+            if out.count >= 8 { break }
+        }
+        return out
+    }
+
     var body: some View {
         // Two stacked rows, both right-aligned within the
         // overlay container. The OUTER VStack uses
@@ -222,7 +239,7 @@ struct SharedCalendarSearchBar: View {
         // Net: overlay sits entirely above the bar's top edge.
         .overlay(alignment: .top) {
             Group {
-                if !suggestions.isEmpty {
+                if !mergedSuggestions.isEmpty {
                     suggestionsList
                         .transition(.asymmetric(
                             insertion: .opacity
@@ -243,9 +260,24 @@ struct SharedCalendarSearchBar: View {
             }
             .alignmentGuide(.top) { d in d.height + 6 }
             .animation(.spring(response: 0.34, dampingFraction: 0.82),
-                       value: suggestions.count)
+                       value: mergedSuggestions.count)
             .animation(.spring(response: 0.34, dampingFraction: 0.82),
                        value: query.isEmpty)
+        }
+        // Broaden the roster via the Google People API (contacts + directory),
+        // debounced, on every query change.
+        .task(id: query) {
+            let q = query.trimmingCharacters(in: .whitespaces)
+            guard q.count >= 2 else { peopleResults = []; return }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if Task.isCancelled { return }
+            let hits = await appState.googlePeople.search(query: q)
+            let already = Set(appState.sharedCalendars.map { $0.email.lowercased() })
+            peopleResults = hits.compactMap { s in
+                let email = s.email.lowercased()
+                guard !already.contains(email) else { return nil }
+                return AppState.CalendarContact(name: s.name ?? s.email, email: s.email)
+            }
         }
     }
 
@@ -271,7 +303,7 @@ struct SharedCalendarSearchBar: View {
     }
 
     private var suggestionsList: some View {
-        let items = suggestions
+        let items = mergedSuggestions
         return VStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { idx, contact in
                 ContactSuggestionRow(

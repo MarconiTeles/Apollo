@@ -90,9 +90,20 @@ final class GoogleAuthService: ObservableObject {
     /// to events on every calendar the user has access to —
     /// including the primary one Apollo lists from. Avoids
     /// the broader `calendar` scope (which also includes
-    /// calendar list / settings) that we don't actually need
-    /// and that would force every existing user to re-auth.
-    private let scope = "https://www.googleapis.com/auth/calendar.events"
+    /// calendar list / settings) that we don't actually need.
+    ///
+    /// The People API scopes power the attendee autocomplete the way Google
+    /// Calendar itself does — the user's saved contacts, "other contacts"
+    /// (emailed but not saved), and the Workspace directory (org members).
+    /// Without them the field falls back to past-event attendees + macOS
+    /// Contacts only, which is a strict subset. NOTE: adding scopes forces a
+    /// RE-CONSENT — existing tokens won't carry them until the user reconnects.
+    private let scope = [
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/contacts.other.readonly",
+        "https://www.googleapis.com/auth/directory.readonly",
+    ].joined(separator: " ")
 
     // MARK: - Init
 
