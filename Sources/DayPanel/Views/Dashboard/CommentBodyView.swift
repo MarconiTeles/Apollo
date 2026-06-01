@@ -64,6 +64,11 @@ struct CommentBodyView: View, Equatable {
                 var source: ReviewSource? = nil
                 for m in viewer {
                     let url = ns.substring(with: m.range(at: 1))
+                    // New single live link (`?att=`) → resolve from KV + media.
+                    if url.contains("att=") {
+                        source = .attLink(url); break
+                    }
+                    // Legacy snapshots.
                     if url.contains("?z=") || url.contains("?d=") {
                         source = reviewSource(fromLink: url); break
                     }
@@ -199,6 +204,14 @@ struct CommentBodyView: View, Equatable {
     private func reviewLinkCard(_ source: ReviewSource) -> some View {
         Button {
             switch source {
+            case .attLink(let link):
+                // Single live link: reopen like the REVIEW button — resolves
+                // from KV + loads the media (no more "Sem arquivo").
+                if let p = OpenReviewParams(attLink: link,
+                                            actorId: reviewActorId ?? 0,
+                                            actorName: reviewActorName) {
+                    ReviewPresenter.shared.present(p)
+                }
             case .data(let d): ReviewPresenter.shared.presentSaved(jsonData: d)
             case .url(let u):  ReviewPresenter.shared.presentSaved(jsonURL: u)
             }
@@ -264,29 +277,9 @@ struct CommentBodyView: View, Equatable {
                 Spacer(minLength: 0)
 
                 if ReviewLink.isReviewable(ext), let tid = reviewTaskId, let aid = reviewActorId {
-                    Button {
-                        ReviewPresenter.shared.present(
-                            ReviewLink.params(attachment: att, taskId: tid, listId: reviewListId,
-                                              uploaderId: att.uploaderId,
-                                              actorId: aid, actorName: reviewActorName,
-                                              commentId: reviewCommentId))
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "play.rectangle.fill")
-                                .font(.system(size: 9, weight: .semibold))
-                            Text("REVIEW")
-                                .font(Editorial.sans(9.5, .bold))
-                                .tracking(0.4)
-                        }
-                        .foregroundStyle(Editorial.page)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(Editorial.accent))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .focusEffectDisabled()
-                    .help("Abrir no Apollo Review")
+                    ReviewButton(attachment: att, taskId: tid, listId: reviewListId,
+                                 uploaderId: att.uploaderId, actorId: aid,
+                                 actorName: reviewActorName, commentId: reviewCommentId)
                 }
 
                 Image(systemName: "arrow.up.right")
@@ -548,6 +541,69 @@ struct CommentBodyView: View, Equatable {
                 return .init(icon: "doc.fill",
                              tint: Color(NSColor.tertiaryLabelColor),
                              label: "Arquivo")
+            }
+        }
+    }
+}
+
+/// The red "REVIEW" pill with an "unseen update" badge. While on-screen it
+/// polls the review's `updatedAt` (cheap /session/meta) and shows a dot when
+/// someone changed the review since this user last opened it — so updates
+/// surface without a manual refresh. Opening the review marks it seen.
+private struct ReviewButton: View {
+    let attachment: CUTask.Attachment
+    let taskId: String
+    let listId: String?
+    let uploaderId: Int?
+    let actorId: Int
+    let actorName: String
+    let commentId: String?
+
+    @State private var unseen = false
+    @State private var remoteUpdatedAt: String?
+
+    var body: some View {
+        Button {
+            // Opening = "seen": clear the dot and remember this version.
+            ReviewBackend.markSeen(forMediaUrl: attachment.url, updatedAt: remoteUpdatedAt)
+            unseen = false
+            ReviewPresenter.shared.present(
+                ReviewLink.params(attachment: attachment, taskId: taskId, listId: listId,
+                                  uploaderId: uploaderId, actorId: actorId,
+                                  actorName: actorName, commentId: commentId))
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "play.rectangle.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("REVIEW")
+                    .font(Editorial.sans(9.5, .bold))
+                    .tracking(0.4)
+            }
+            .foregroundStyle(Editorial.page)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 4).fill(Editorial.accent))
+            .overlay(alignment: .topTrailing) {
+                if unseen {
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 7, height: 7)
+                        .overlay(Circle().stroke(Editorial.accent, lineWidth: 1))
+                        .offset(x: 3, y: -3)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .help(unseen ? "Atualizado desde a última vez que você abriu" : "Abrir no Apollo Review")
+        .task(id: attachment.url) {
+            while !Task.isCancelled {
+                if let meta = await ReviewBackend.meta(forMediaUrl: attachment.url) {
+                    remoteUpdatedAt = meta.updatedAt
+                    unseen = ReviewBackend.hasUnseenUpdate(meta: meta, mediaUrl: attachment.url)
+                }
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
             }
         }
     }

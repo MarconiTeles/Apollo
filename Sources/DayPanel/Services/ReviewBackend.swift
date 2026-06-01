@@ -18,6 +18,18 @@ enum ReviewBackend {
     /// converge on the same blob. Mirrors `AppState.stableId`.
     static func att(forMediaUrl url: String) -> String { AppState.stableId(url) }
 
+    /// Cheap badge poll: does a review exist for this media, and when did it
+    /// last change? No comments/markup downloaded.
+    struct Meta { let exists: Bool; let updatedAt: String? }
+    static func meta(forMediaUrl mediaUrl: String) async -> Meta? {
+        let body: [String: Any] = ["attachmentId": att(forMediaUrl: mediaUrl)]
+        guard let data = await post("/session/meta", body),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return Meta(exists: (obj["exists"] as? Bool) ?? false,
+                    updatedAt: obj["updatedAt"] as? String)
+    }
+
     /// Load-or-create the review for a media URL; returns the worker's
     /// `{reviewId, versionId, status, comments}` JSON for ReviewKit to merge.
     static func resolve(mediaUrl: String, ext: String, title: String,
@@ -52,6 +64,26 @@ enum ReviewBackend {
             "comments": obj["comments"] ?? [],
         ]
         return await post("/session/save", body) != nil
+    }
+
+    // ── "Last seen" per review (drives the REVIEW button badge) ──────────────
+    // Local-only state: the `updatedAt` this user last saw for each review.
+    // A review whose remote `updatedAt` is newer than this got changed by
+    // someone else → badge. Opening the review marks it seen.
+    static func lastSeen(forMediaUrl mediaUrl: String) -> String? {
+        UserDefaults.standard.string(forKey: "reviewSeen.\(att(forMediaUrl: mediaUrl))")
+    }
+    static func markSeen(forMediaUrl mediaUrl: String, updatedAt: String?) {
+        guard let u = updatedAt else { return }
+        UserDefaults.standard.set(u, forKey: "reviewSeen.\(att(forMediaUrl: mediaUrl))")
+    }
+    /// True when there's a change the user hasn't seen yet. Conservative: never
+    /// badges a review the user has never opened (lastSeen == nil), so the dot
+    /// only ever means "updated since you last looked".
+    static func hasUnseenUpdate(meta: Meta, mediaUrl: String) -> Bool {
+        guard meta.exists, let remote = meta.updatedAt, let seen = lastSeen(forMediaUrl: mediaUrl)
+        else { return false }
+        return remote > seen
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

@@ -286,6 +286,13 @@ struct TaskRowView: View, Equatable {
                 Rectangle().fill(Editorial.rule).frame(height: 1)
             }
             .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            // Hover lift: a thin drop shadow tinted with the task's status
+            // accent (applied AFTER the clip so the halo isn't cropped).
+            .shadow(
+                color: rowHover ? Color(hex: cachedStatusHex).opacity(0.55) : .clear,
+                radius: rowHover ? 3 : 0, x: 0, y: 1
+            )
+            .animation(.easeInOut(duration: 0.18), value: rowHover)
             // PERF: outer `.clipShape(RoundedRectangle)` removed.
             // It forced an offscreen mask pass per cell (one of
             // CoreAnimation's more expensive ops) — and was
