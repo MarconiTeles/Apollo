@@ -80,6 +80,9 @@ struct AppNotification: Identifiable, Codable, Equatable, Hashable {
 
     enum TargetKind: String, Codable {
         case task, event
+        /// A review whose link was updated. `targetId` is the review's `att`
+        /// key; the tap reopens the Apollo Review window on that review.
+        case review
     }
 
     var hasTarget: Bool { targetKind != nil && targetId != nil }

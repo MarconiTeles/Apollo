@@ -148,6 +148,11 @@ final class NativeNotifier {
             case .event:
                 info[Key.targetKind] = "event"
                 content.categoryIdentifier = Category.eventTarget
+            case .review:
+                // Reuse the task category so the banner shows "Abrir no Apollo";
+                // the tap routes via targetKind="review" to reopen the review.
+                info[Key.targetKind] = "review"
+                content.categoryIdentifier = Category.taskTarget
             case .none:
                 content.categoryIdentifier = Category.plain
             }
@@ -314,6 +319,9 @@ final class NativeNotifier {
         case .event:
             info[Key.targetKind] = "event"
             content.categoryIdentifier = Category.eventTarget
+        case .review:
+            info[Key.targetKind] = "review"
+            content.categoryIdentifier = Category.taskTarget
         case .none:
             content.categoryIdentifier = Category.plain
         }

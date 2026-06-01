@@ -980,6 +980,8 @@ final class AppState: ObservableObject {
                        let event = self.events.first(where: { $0.id == id }) {
                         return event.colorHex
                     }
+                case .review:
+                    break   // review banners use the kind's default tint
                 case .none:
                     break
                 }
@@ -1031,9 +1033,10 @@ final class AppState: ObservableObject {
         // outlived the in-app row (e.g. user cleared notifications).
         let kind: AppNotification.TargetKind?
         switch targetKindRaw {
-        case "task":  kind = .task
-        case "event": kind = .event
-        default:      kind = nil
+        case "task":   kind = .task
+        case "event":  kind = .event
+        case "review": kind = .review
+        default:       kind = nil
         }
         guard let kind, let id = targetId else { return }
         openNotificationTarget(
@@ -1088,6 +1091,17 @@ final class AppState: ObservableObject {
                     withAnimation(.spring(duration: 0.45, bounce: 0.30)) {
                         detailTask = task
                     }
+                }
+            case .review:
+                // Reopen the Apollo Review window directly on the updated review
+                // (id == the review's `att` key). Actor = the connected user.
+                let actorId = clickUpAuthService.userId ?? 0
+                let actorName = availableMembers
+                    .first { $0.id == clickUpAuthService.userId }?.username ?? "Revisor"
+                if let params = ReviewWatcher.shared.openParams(att: id,
+                                                                actorId: actorId,
+                                                                actorName: actorName) {
+                    ReviewPresenter.shared.present(params)
                 }
             }
         }

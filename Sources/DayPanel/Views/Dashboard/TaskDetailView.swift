@@ -2978,28 +2978,11 @@ private struct AttachmentChip: View, Equatable {
                 // (video/image/PDF). Opens the native review app via the
                 // apolloreview:// scheme; bypasses the chip's download path.
                 if ReviewLink.isReviewable(attachment.ext), let taskId, let actorId {
-                    Button {
-                        ReviewPresenter.shared.present(
-                            ReviewLink.params(attachment: attachment, taskId: taskId, listId: listId,
-                                              uploaderId: attachment.uploaderId,
-                                              actorId: actorId, actorName: actorName))
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "play.rectangle.fill")
-                                .font(.system(size: 9, weight: .semibold))
-                            Text("REVIEW")
-                                .font(Editorial.sans(9.5, .bold))
-                                .tracking(0.4)
-                        }
-                        .foregroundStyle(Editorial.page)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(Editorial.accent))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .focusEffectDisabled()
-                    .help("Abrir no Apollo Review")
+                    // Shared component → carries the "unseen update" badge and
+                    // registers the review with the watcher on open.
+                    ReviewButton(attachment: attachment, taskId: taskId, listId: listId,
+                                 uploaderId: attachment.uploaderId, actorId: actorId,
+                                 actorName: actorName)
                 }
 
                 // When the attachment has unresolved annotations

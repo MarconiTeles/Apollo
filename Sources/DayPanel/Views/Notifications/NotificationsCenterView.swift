@@ -237,6 +237,8 @@ private struct NotificationRow: View, Equatable {
                let event = appState.events.first(where: { $0.id == id }) {
                 return Color(hex: event.colorHex)
             }
+        case .review:
+            break   // review rows use the kind's default tint
         case .none:
             break
         }

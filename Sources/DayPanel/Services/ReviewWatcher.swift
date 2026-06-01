@@ -1,4 +1,5 @@
 import Foundation
+import ReviewKit
 
 /// Watches the reviews this user knows about (opened at least once) and fires a
 /// native notification when one changes on the backend — so the Apollo user
@@ -17,24 +18,51 @@ final class ReviewWatcher {
     private let regKey = "reviewWatchRegistry"
     private var started = false
 
+    /// Posts the update notification. Injected by AppDelegate to route through
+    /// `AppState.notify` so it lands BOTH in the in-app Notifications panel AND
+    /// as a native macOS banner (notify() does both). `att` is the review key —
+    /// the tap reopens that review. nil → no-op.
+    var notify: ((_ title: String, _ subtitle: String?, _ att: String) -> Void)?
+
     struct Entry: Codable {
         var mediaUrl: String
+        var ext: String
         var taskId: String
         var title: String
+        var uploaderId: Int?
         var tintHex: String?
     }
 
     /// Called when the user opens a review — start watching it, and treat the
     /// version they just saw as already alerted so we only notify on FUTURE
     /// changes.
-    func register(att: String, mediaUrl: String, taskId: String, title: String,
-                  tintHex: String?, currentUpdatedAt: String?) {
+    func register(att: String, mediaUrl: String, ext: String, taskId: String,
+                  title: String, uploaderId: Int?, tintHex: String?,
+                  currentUpdatedAt: String?) {
         var reg = registry()
-        reg[att] = Entry(mediaUrl: mediaUrl, taskId: taskId, title: title, tintHex: tintHex)
+        reg[att] = Entry(mediaUrl: mediaUrl, ext: ext, taskId: taskId, title: title,
+                         uploaderId: uploaderId, tintHex: tintHex)
         save(reg)
         if let u = currentUpdatedAt {
             UserDefaults.standard.set(u, forKey: "reviewNotified.\(att)")
         }
+    }
+
+    /// Rebuild the params to reopen a watched review (tap on its notification).
+    /// The actor (who's opening) comes from the caller; everything else from the
+    /// registry captured when the review was opened.
+    func openParams(att: String, actorId: Int, actorName: String) -> OpenReviewParams? {
+        guard let e = registry()[att] else { return nil }
+        return OpenReviewParams(
+            taskId: e.taskId,
+            attachmentId: att,
+            mediaUrl: e.mediaUrl,
+            mediaTitle: e.title,
+            ext: e.ext,
+            uploaderId: e.uploaderId,
+            actorId: actorId,
+            actorName: actorName
+        )
     }
 
     /// Begins the background poll loop (idempotent).
@@ -58,15 +86,8 @@ final class ReviewWatcher {
             let notified = UserDefaults.standard.string(forKey: "reviewNotified.\(att)")
             // Changed since the user last opened it, and not already alerted.
             guard remote > seen, remote != notified else { continue }
-            NativeNotifier.shared.send(
-                kind: .info,
-                title: "Review atualizado",
-                subtitle: entry.title.isEmpty ? nil : entry.title,
-                body: "Alguém atualizou este review.",
-                targetKind: .task,
-                targetId: entry.taskId,
-                tintHex: entry.tintHex
-            )
+            let title = entry.title.isEmpty ? nil : entry.title
+            await MainActor.run { notify?("Review atualizado", title, att) }
             UserDefaults.standard.set(remote, forKey: "reviewNotified.\(att)")
         }
     }

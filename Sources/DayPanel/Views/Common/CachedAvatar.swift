@@ -79,3 +79,75 @@ struct CachedAvatar: View {
         }
     }
 }
+
+/// A ClickUp user avatar: the profile PHOTO when available, falling back to
+/// coloured initials. One component for every "profile circle" in the app.
+struct UserAvatar: View {
+    let initials: String
+    let colorHex: String?
+    let photoURL: URL?
+    var size: CGFloat = 22
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color(hex: colorHex ?? "#7A6597"))
+            Text(initials)
+                .font(.system(size: size * 0.42, weight: .bold))
+                .foregroundStyle(.white)
+                .minimumScaleFactor(0.5)
+            // Photo paints over the initials once loaded; CachedAvatar is
+            // transparent until then, so the initials show as the fallback.
+            if let photoURL {
+                CachedAvatar(url: photoURL)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+    }
+}
+
+extension CUTask.Assignee {
+    var photoURL: URL? {
+        guard let p = profilePicture, !p.isEmpty else { return nil }
+        return URL(string: p)
+    }
+    /// ClickUp's initials, or derived from the username (first letters of the
+    /// first two name tokens) when absent.
+    var avatarInitials: String {
+        if let i = initials, !i.isEmpty { return i.uppercased() }
+        let tokens = username.split(whereSeparator: { " ._-".contains($0) })
+        let a = tokens.first?.first.map(String.init) ?? ""
+        let b = tokens.dropFirst().first?.first.map(String.init) ?? ""
+        let s = (a + b).uppercased()
+        return s.isEmpty ? "?" : s
+    }
+}
+
+/// Overlapping stack of assignee avatars (board cards, etc.). Shows photos with
+/// initials fallback, a hairline ring to separate, and a "+N" chip past the cap.
+struct AvatarStack: View {
+    let assignees: [CUTask.Assignee]
+    var size: CGFloat = 22
+    var maxShown: Int = 3
+    /// Ring colour — should match the card surface behind the stack.
+    var ringColor: Color = Editorial.page
+
+    var body: some View {
+        let shown = Array(assignees.prefix(maxShown))
+        HStack(spacing: -size * 0.34) {
+            ForEach(Array(shown.enumerated()), id: \.offset) { _, a in
+                UserAvatar(initials: a.avatarInitials, colorHex: a.color,
+                           photoURL: a.photoURL, size: size)
+                    .overlay(Circle().stroke(ringColor, lineWidth: 1.5))
+            }
+            if assignees.count > maxShown {
+                Text("+\(assignees.count - maxShown)")
+                    .font(.system(size: size * 0.38, weight: .semibold))
+                    .foregroundStyle(Editorial.inkSoft)
+                    .frame(width: size, height: size)
+                    .background(Circle().fill(Editorial.card))
+                    .overlay(Circle().stroke(ringColor, lineWidth: 1.5))
+            }
+        }
+    }
+}

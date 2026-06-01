@@ -166,7 +166,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UNUserNotificationCenter.current().delegate = self
 
         // Poll watched reviews and fire a notification when someone updates one
-        // (the active counterpart to the REVIEW button's dot).
+        // (the active counterpart to the REVIEW button's dot). Route through
+        // AppState.notify so it lands in the in-app Notifications panel AND as a
+        // native banner.
+        ReviewWatcher.shared.notify = { [weak appState] title, subtitle, att in
+            appState?.notify(.info, title: title, subtitle: subtitle,
+                             message: "Alguém atualizou este review.",
+                             targetKind: .review, targetId: att)
+        }
         ReviewWatcher.shared.start()
 
         // Receive `daypanel://` URL opens (the standalone review app's
