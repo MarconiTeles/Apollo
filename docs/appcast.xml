@@ -5,6 +5,20 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 1.8.3</title>
+      <pubDate>Mon, 01 Jun 2026 20:03:04 +0000</pubDate>
+      <sparkle:version>71</sparkle:version>
+      <sparkle:shortVersionString>1.8.3</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>silent</sparkle:channel>
+      <description><![CDATA[Busca de convidados muito mais completa: agora puxa do Google (contatos, outros contatos e diretório da organização), igual ao Google Calendar — reconecte o Google em Configurações para conceder o acesso. Ordem dos status invertida (REVIEW primeiro). Polish: sombra de hover dos cards do quadro na cor do status; painel de notificações corrigido quando vazio.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.3/Apollo-1.8.3.zip"
+        sparkle:edSignature="lj81JpmhsIb1vQ11E+S/LkV3qIFJ7DEn0toOgQxusLDTwhRLJkUBgLDVPNLlRrKQLNnN9Dupl2xos6icIRVaAQ=="
+        length="40865396"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 1.8.2</title>
       <pubDate>Mon, 01 Jun 2026 18:14:10 +0000</pubDate>
       <sparkle:version>70</sparkle:version>
