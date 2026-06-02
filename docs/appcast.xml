@@ -5,6 +5,29 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 1.8.5</title>
+      <pubDate>Tue, 02 Jun 2026 13:39:35 +0000</pubDate>
+      <sparkle:version>73</sparkle:version>
+      <sparkle:shortVersionString>1.8.5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>silent</sparkle:channel>
+      <description><![CDATA[Polimento de UI e correções:
+- Material Liquid Glass em botões e pílulas (Nova tarefa, confirmações de popups, filtros, sidebar, RSVP).
+- Sombra de hover das tarefas com cor dinâmica (transiciona para o status no hover do DONE e no swipe).
+- Quadro: reordenação vertical local dos cards via drag-and-drop com animação bounce (não altera o fluxo no ClickUp).
+- Card de próximo evento: confirmação de presença (Você vai? Sim/Não/Talvez), material liquid glass, altura reduzida.
+- Modo escuro: cores de status e accents 35% mais brilhantes.
+- Correção do menu de botão direito dos eventos (Abrir / Copiar link / Transformar em tarefa / Excluir).
+- Linhas divisórias com fade suave nas pontas e opacidade reduzida.
+- Ajustes de tipografia e espaçamento nas células de tarefa.
+- Ícone do app com padding correto no Dock em macOS antigos.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.5/Apollo-1.8.5.zip"
+        sparkle:edSignature="RmHDrh29O8Gh3kX+MXStsrdJzhiEPFJ4AOroP8K2Q7QP47bEbO6M2xNZSNUh3TfmxeqZfoQGkfBxxbnS/jvOBg=="
+        length="41028368"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 1.8.4</title>
       <pubDate>Mon, 01 Jun 2026 21:55:38 +0000</pubDate>
       <sparkle:version>72</sparkle:version>
