@@ -5,6 +5,24 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 1.8.6</title>
+      <pubDate>Wed, 03 Jun 2026 12:11:21 +0000</pubDate>
+      <sparkle:version>74</sparkle:version>
+      <sparkle:shortVersionString>1.8.6</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>silent</sparkle:channel>
+      <description><![CDATA[Ajustes de UI nas células de tarefa:
+- Data e bandeirinha de prioridade agora na mesma linha do título (título longo trunca com '…').
+- Botão DONE alinhado verticalmente à linha do título; pílula de hover alinhada ao botão.
+- Sombra de hover com cor dinâmica (acompanha o status no hover do DONE e no swipe).
+- Ajustes finos de espaçamento e tamanho dos rótulos.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.6/Apollo-1.8.6.zip"
+        sparkle:edSignature="A5tegZkNzszZHHDQflOHmCligWp54MNGXW932U9rHSYkLSJLk6f0cKs/jaVV3JLHv3gjfvGCGQdXeni4/QBNAQ=="
+        length="41028895"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 1.8.5</title>
       <pubDate>Tue, 02 Jun 2026 13:39:35 +0000</pubDate>
       <sparkle:version>73</sparkle:version>
