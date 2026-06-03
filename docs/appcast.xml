@@ -5,6 +5,28 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 1.8.7</title>
+      <pubDate>Wed, 03 Jun 2026 20:45:42 +0000</pubDate>
+      <sparkle:version>75</sparkle:version>
+      <sparkle:shortVersionString>1.8.7</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Novidade: opção de mostrar/ocultar subtarefas na vista de Quadro (botão SUBTAREFAS no cabeçalho).
+
+Outras melhorias desta versão:
+- Quadro: reordenação vertical local dos cards via drag-and-drop com animação (não altera o fluxo no ClickUp); menu de botão direito nos cards.
+- Card de próximo evento: confirmação de presença (Você vai? Sim/Não/Talvez), material Liquid Glass e altura otimizada.
+- Material Liquid Glass em botões e pílulas (Nova tarefa, confirmações, filtros, sidebar, RSVP).
+- Tarefas: data e prioridade na mesma linha do título (com truncamento), sombra de hover com cor dinâmica, botão concluir alinhado ao título.
+- Modo escuro: cores de status e accents mais vivas.
+- Correção do menu de botão direito dos eventos.
+- Ícone do app com tamanho correto no Dock.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.7/Apollo-1.8.7.zip"
+        sparkle:edSignature="vpQbFgkJL0I+JlHoMGil6z4DQHXIs4mXKkM2nuNCGuKqPktfC4W6r42li9CyJujqVyLgSWuBi3k04TMh1/ilBQ=="
+        length="41043712"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 1.8.6</title>
       <pubDate>Wed, 03 Jun 2026 12:11:21 +0000</pubDate>
       <sparkle:version>74</sparkle:version>
