@@ -5,6 +5,20 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 1.8.8</title>
+      <pubDate>Sun, 07 Jun 2026 13:51:53 +0000</pubDate>
+      <sparkle:version>76</sparkle:version>
+      <sparkle:shortVersionString>1.8.8</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>silent</sparkle:channel>
+      <description><![CDATA[Novo ícone do Apollo.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.8/Apollo-1.8.8.zip"
+        sparkle:edSignature="zJd0niaZxQsX9T8OmPU3xJ8165Q3ZzzWCtkM1KLBrR3mGf42DQYMFAkNf4jTcDbNVGf2M28BXVb2J5UZ4cslAQ=="
+        length="41350679"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 1.8.7</title>
       <pubDate>Wed, 03 Jun 2026 20:45:42 +0000</pubDate>
       <sparkle:version>75</sparkle:version>
