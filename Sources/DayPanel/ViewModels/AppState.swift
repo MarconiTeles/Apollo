@@ -364,6 +364,36 @@ final class AppState: ObservableObject {
     @MainActor private func incSync() { activeSyncCount += 1 }
     @MainActor private func decSync() { activeSyncCount = max(0, activeSyncCount - 1) }
 
+    /// Reentrancy guard for `sync()`. Three independent triggers
+    /// (auto-sync timer, 30s fast-sync, window-focus) can fire on
+    /// top of each other; overlapping full syncs raced and the
+    /// slower (older) response overwrote the newer one's state.
+    /// Only one full sync runs at a time — callers that land
+    /// mid-flight coalesce into a single trailing re-run.
+    @MainActor private var syncInFlight = false
+    @MainActor private var syncRerunQueued = false
+
+    /// Monotonic ticket for fetch→publish of the visible `tasks`
+    /// array. A fetch takes a ticket when it STARTS; its result
+    /// only lands if no newer ticket has landed since. Without
+    /// this, an old slow response (full sync vs. `syncList`)
+    /// could overwrite fresher data and the list "went back in
+    /// time" for one cycle.
+    @MainActor private var taskFetchTicketCounter: UInt64 = 0
+    @MainActor private var lastAppliedTaskTicket: UInt64 = 0
+    @MainActor private func takeTaskFetchTicket() -> UInt64 {
+        taskFetchTicketCounter += 1
+        return taskFetchTicketCounter
+    }
+
+    /// Throttle for the per-list metadata trio (statuses,
+    /// members, tags). Effectively static within a session, but
+    /// it was re-fetched on EVERY sync — 3-4 extra requests per
+    /// 30s fast-sync tick for data that almost never changes.
+    /// Refetched when the active list changes or after 5 min.
+    @MainActor private var listMetaFetchedAt: Date = .distantPast
+    @MainActor private var listMetaFetchedForList: String = ""
+
     /// Wraps an async operation so its activity is reflected in
     /// `activeSyncCount`. Use this on every entry point that
     /// should surface progress (long fetches, mutations the user
@@ -718,6 +748,19 @@ final class AppState: ObservableObject {
     /// catches ClickUp-side edits (status changes, new tasks) within ~30s
     /// without burning the long-interval timer.
     private var fastSyncCancellable:  AnyCancellable?
+    /// Comment-notification polling on its own cadence (150s),
+    /// decoupled from `sync()` — see `startCommentPolling()`.
+    private var commentPollCancellable: AnyCancellable?
+    /// Main-thread only. True while a comment poll is draining
+    /// its capped 30 fetches; ticks that land mid-drain are
+    /// dropped instead of stacking a second wave of requests.
+    private var commentPollInFlight = false
+    /// Main-thread only. Timestamp of the user's last click /
+    /// keypress / scroll — the fast-sync gate skips its 30s tick
+    /// when the app is focused but idle (window open in a corner
+    /// all day ≠ actively working). The slow auto-sync timer
+    /// keeps running underneath either way.
+    var lastUserInteractionAt = Date()
 
     /// Drives the upcoming-event / due-soon-task reminder check on a
     /// 60-second cadence. Independent of the sync timer so reminders
@@ -1547,7 +1590,16 @@ final class AppState: ObservableObject {
         // didn't know to redraw.
         await MainActor.run {
             aiAgent.objectWillChange
-                .receive(on: DispatchQueue.main)
+                // THROTTLED: no view observes `aiAgent` directly —
+                // everything renders through this bridge. During
+                // chat streaming the agent publishes once PER
+                // TOKEN, which re-rendered every AppState-observing
+                // view in the app hundreds of times per response.
+                // 100ms keeps the chat feeling live (≤10 app-wide
+                // invalidations/s) and is a no-op when idle.
+                .throttle(for: .milliseconds(100),
+                          scheduler: DispatchQueue.main,
+                          latest: true)
                 .sink { [weak self] in self?.objectWillChange.send() }
                 .store(in: &cancellables)
         }
@@ -1652,7 +1704,10 @@ final class AppState: ObservableObject {
         if await MainActor.run(body: { isOnline }) { await sync() }
 
         restartAutoSync()
-        await MainActor.run { self.startReminderTicker() }
+        await MainActor.run {
+            self.startReminderTicker()
+            self.startCommentPolling()
+        }
     }
 
     // MARK: - Auto-sync timer
@@ -1675,12 +1730,60 @@ final class AppState: ObservableObject {
         fastSyncCancellable?.cancel()
         fastSyncCancellable = Timer.publish(every: 30, on: .main, in: .common)
             .autoconnect()
-            .sink { [weak self] _ in Task { await self?.sync() } }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                // Activity gate: focused-but-idle (no click/key/
+                // scroll for 3 min) skips the fast tick. The
+                // window sitting open in a corner all day was
+                // costing a full sync every 30s for nothing;
+                // the slow auto-sync still covers idle periods,
+                // and the first interaction resumes 30s polling.
+                guard Date().timeIntervalSince(self.lastUserInteractionAt) < 180 else { return }
+                Task { await self.sync() }
+            }
     }
 
     func disableFastSync() {
         fastSyncCancellable?.cancel()
         fastSyncCancellable = nil
+    }
+
+    /// Marks the session as actively used — called from the
+    /// AppDelegate's local event monitor (main thread) on any
+    /// click / keypress / scroll. Drives the fast-sync gate.
+    func noteUserInteraction() {
+        lastUserInteractionAt = Date()
+    }
+
+    // MARK: - Comment-notification polling
+
+    /// Comment polling on its OWN cadence, decoupled from
+    /// `sync()`. It used to fire as a tail call of every sync —
+    /// with 30s fast-sync that meant 30+ extra requests per tick
+    /// just for comments, which blew ClickUp's 100 req/min budget
+    /// and turned task fetches into silent 429s ("listas
+    /// parciais"). 150s keeps banners timely at a fraction of
+    /// the cost; `pollCommentNotifications` additionally
+    /// throttles to once per task per minute.
+    func startCommentPolling() {
+        commentPollCancellable?.cancel()
+        commentPollCancellable = Timer.publish(every: 150, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.kickCommentPoll() }
+        // One immediate pass so banners surface soon after
+        // launch (initialize() awaits the first sync before
+        // calling this, so `tasks` is already populated).
+        kickCommentPoll()
+    }
+
+    /// Main-thread only (the timer fires on .main).
+    private func kickCommentPoll() {
+        guard isOnline, !commentPollInFlight else { return }
+        commentPollInFlight = true
+        Task { [weak self] in
+            await self?.pollCommentNotifications()
+            await MainActor.run { self?.commentPollInFlight = false }
+        }
     }
 
     // MARK: - Upcoming-reminders ticker
@@ -1818,6 +1921,9 @@ final class AppState: ObservableObject {
     /// attempt. Lets views distinguish "first sync in flight"
     /// from "synced and got nothing".
     @Published private(set) var assignedToMeDidFirstLoad: Bool = false
+    /// Overlap guard for `syncAssignedToMeAcrossWorkspace` —
+    /// see the note at the top of that function.
+    @MainActor private var assignedSyncInFlight = false
 
     /// Streaming sync of the cross-workspace assigned-to-me set.
     /// Fetches `listMyTasksPage` one page at a time and writes
@@ -1826,9 +1932,22 @@ final class AppState: ObservableObject {
     /// tasks. Wrapped in `tracked` so the global
     /// `EditorialSyncBar` lights up for the duration.
     func syncAssignedToMeAcrossWorkspace() async {
+        // Overlap guard — this is fired-and-forgotten from
+        // `performSync` AND from view onAppear paths; two
+        // concurrent runs interleaved their page writes and the
+        // visible set jumped around. Drop the duplicate; the
+        // next sync cycle re-triggers anyway.
+        let alreadyRunning = await MainActor.run { () -> Bool in
+            if assignedSyncInFlight { return true }
+            assignedSyncInFlight = true
+            return false
+        }
+        guard !alreadyRunning else { return }
+
         await MainActor.run { incSync() }
         defer {
             Task { @MainActor in
+                self.assignedSyncInFlight = false
                 self.assignedToMeDidFirstLoad = true
                 self.decSync()
                 // Persist whatever we have (even partial pages)
@@ -1841,33 +1960,81 @@ final class AppState: ObservableObject {
         guard let uid = clickUpAuthService.userId,
               let wsId = await resolveWorkspaceId()
         else { return }
+
+        // Streaming page-by-page publish only on FIRST load (set
+        // is still empty): pages only APPEND, so nothing shifts.
+        // On a refresh, the per-page replace made the visible set
+        // shrink to page 1 and grow back — rows visibly jumped on
+        // every 30s fast-sync. Refreshes accumulate silently and
+        // publish once at the end; a mid-fetch failure keeps the
+        // previous (complete) set instead of a truncated one.
+        let fetchStartedAt = Date()
+        let hadContent = await MainActor.run { !assignedToMeTasks.isEmpty }
+
+        // WRITE GUARD (this path never had one): the Tarefas view
+        // renders from `assignedToMeTasks`, and this publish used
+        // to overwrite it with the raw server snapshot — undoing
+        // any optimistic status change whose write the snapshot
+        // predates. Same merge rule as `performSync`/`syncList`.
+        func merged(_ snapshot: [CUTask]) async -> [CUTask] {
+            await MainActor.run {
+                if pendingTaskMutations.isEmpty && recentTaskMutations.isEmpty {
+                    return snapshot
+                }
+                let localById = Dictionary(
+                    assignedToMeTasks.map { ($0.id, $0) },
+                    uniquingKeysWith: { _, new in new }
+                )
+                return snapshot.map { fresh in
+                    if shouldPreserveLocalTask(fresh.id, fetchStartedAt: fetchStartedAt),
+                       let local = localById[fresh.id] {
+                        return local
+                    }
+                    return fresh
+                }
+            }
+        }
+
         var accumulated: [CUTask] = []
+        var failed = false
         for page in 0..<5 {
             do {
                 let pageTasks = try await cuSvc.listMyTasksPage(
                     workspaceId: wsId, userId: uid, page: page
                 )
                 accumulated += pageTasks
-                let snapshot = accumulated
-                await MainActor.run { assignedToMeTasks = snapshot }
+                if !hadContent {
+                    let snapshot = await merged(accumulated)
+                    await MainActor.run { assignedToMeTasks = snapshot }
+                }
                 if pageTasks.count < 100 { break }    // last page
             } catch {
                 Log.error("syncAssignedToMe page=\(page): \(error)")
+                failed = true
                 break
+            }
+        }
+        if hadContent && !failed {
+            let snapshot = await merged(accumulated)
+            await MainActor.run {
+                // Equality guard — identical refresh result skips
+                // the publish (and the view invalidation).
+                if assignedToMeTasks != snapshot {
+                    assignedToMeTasks = snapshot
+                }
             }
         }
     }
 
     /// Snapshot the current `assignedToMeTasks` into the on-disk
-    /// AppCache without touching the other cache fields — so a
-    /// fresh assigned-to-me load doesn't wipe events/tasks
-    /// caches when the main sync hasn't run yet.
+    /// cache without touching the other sections. The cache is
+    /// split per section now, so this is a single queued write —
+    /// the old implementation decoded AND re-encoded the entire
+    /// ~30 MB snapshot on the MainActor just to swap one field,
+    /// freezing the UI after every assigned-to-me refresh.
     @MainActor
     private func persistAssignedToMeCache() {
-        let existing = cache.load() ?? .empty
-        var next = existing
-        next.assignedToMeTasks = assignedToMeTasks
-        cache.save(next)
+        cache.saveAssigned(assignedToMeTasks)
     }
 
     /// Kept for backward compat — non-streaming, one-shot
@@ -1885,6 +2052,31 @@ final class AppState: ObservableObject {
     // MARK: - Sync
 
     func sync() async {
+        // Coalescing gate — see `syncInFlight`. If a full sync is
+        // already running, queue exactly one trailing re-run and
+        // bail; the in-flight sync picks it up on completion. This
+        // collapses the timer/focus/manual pile-up into a single
+        // serialized stream of syncs.
+        let shouldRun = await MainActor.run { () -> Bool in
+            if syncInFlight { syncRerunQueued = true; return false }
+            syncInFlight = true
+            return true
+        }
+        guard shouldRun else { return }
+
+        var again = true
+        while again {
+            await performSync()
+            again = await MainActor.run { () -> Bool in
+                let queued = syncRerunQueued
+                syncRerunQueued = false
+                if !queued { syncInFlight = false }
+                return queued
+            }
+        }
+    }
+
+    private func performSync() async {
         // Counter ref so the global EditorialSyncBar lights up
         // for the full duration of the sync (calendar + ClickUp
         // + members + tags). Decremented at every exit path.
@@ -1910,6 +2102,22 @@ final class AppState: ObservableObject {
         var fetched:      [CalendarEvent] = []
         var fetchedTasks: [CUTask]        = []
         var hadError = false
+        // Per-source success flags. A failed fetch leaves its
+        // array empty — applying that wholesale used to CLEAR the
+        // visible list (and re-baseline the diff snapshots to
+        // empty, which then spammed "Nova tarefa" for everything
+        // on the next good sync). Each source's state is only
+        // touched when its own fetch actually succeeded.
+        var calFetchSucceeded = false
+        var cuFetchSucceeded  = false
+        // Ticket taken BEFORE the fetch starts — see
+        // `lastAppliedTaskTicket` for the out-of-order guard.
+        let fetchTicket = await MainActor.run { takeTaskFetchTicket() }
+        // Causality stamp: data returned by this fetch reflects
+        // the server no later than NOW. Any task mutated locally
+        // after this instant must keep its local row — see
+        // `shouldPreserveLocalTask`.
+        let fetchStartedAt = Date()
 
         if calConfigured {
             // Fetch 60-day range (-30…+30 from today) so the timeline can
@@ -1922,6 +2130,7 @@ final class AppState: ObservableObject {
             // Single source of truth: Google Calendar API.
             do {
                 fetched = try await googleCalendar.listEvents(from: start, to: end)
+                calFetchSucceeded = true
             } catch {
                 hadError = true
                 Log.error("Google Calendar list failed: \(error)")
@@ -1938,25 +2147,47 @@ final class AppState: ObservableObject {
                 // a cross-list status set would be a noisy union.
                 let mode = await MainActor.run { taskViewMode }
 
-                async let statusesReq = cuSvc.getListStatuses()
-                async let membersReq  = cuSvc.getMembers()
-                async let tagsReq     = cuSvc.getSpaceTags()
+                // Metadata throttle — see `listMetaFetchedAt`.
+                // Statuses drive the filter pills, so they DO
+                // refetch immediately whenever the active list
+                // changes; otherwise once per 5 min is plenty.
+                let activeListKey = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId) ?? ""
+                let needMeta = await MainActor.run {
+                    listMetaFetchedForList != activeListKey ||
+                    Date().timeIntervalSince(listMetaFetchedAt) > 300
+                }
+
+                func fetchTasksForMode() async throws -> [CUTask] {
+                    if mode == .myWork,
+                       let uid  = clickUpAuthService.userId,
+                       let wsId = await resolveWorkspaceId() {
+                        return try await cuSvc.listMyTasks(workspaceId: wsId,
+                                                           userId: uid)
+                    }
+                    return try await cuSvc.listTasks()
+                }
 
                 let t: [CUTask]
-                if mode == .myWork,
-                   let uid  = clickUpAuthService.userId,
-                   let wsId = await resolveWorkspaceId() {
-                    t = try await cuSvc.listMyTasks(workspaceId: wsId,
-                                                    userId: uid)
+                var meta: ([CUStatus], [CUMember], [CUTask.Tag])? = nil
+                if needMeta {
+                    async let statusesReq = cuSvc.getListStatuses()
+                    async let membersReq  = cuSvc.getMembers()
+                    async let tagsReq     = cuSvc.getSpaceTags()
+                    t = try await fetchTasksForMode()
+                    meta = try await (statusesReq, membersReq, tagsReq)
                 } else {
-                    t = try await cuSvc.listTasks()
+                    t = try await fetchTasksForMode()
                 }
-                let (s, m, tg) = try await (statusesReq, membersReq, tagsReq)
                 fetchedTasks = t
+                cuFetchSucceeded = true
                 await MainActor.run {
-                    availableStatuses = s
-                    availableMembers  = m
-                    availableTags     = tg
+                    if let (s, m, tg) = meta {
+                        availableStatuses = s
+                        availableMembers  = m
+                        availableTags     = tg
+                        listMetaFetchedAt = Date()
+                        listMetaFetchedForList = activeListKey
+                    }
                     // Warm the per-list cache with the active
                     // list's freshly-fetched tasks so a switch
                     // away → back is instant.
@@ -1970,31 +2201,26 @@ final class AppState: ObservableObject {
                     if mode != .myWork,
                        let active = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId),
                        !active.isEmpty {
-                        let pendingNow = pendingTaskMutations
-                        if pendingNow.isEmpty {
-                            tasksByListId[active] = t
-                        } else {
-                            // Reuse whichever local copy we have
-                            // (the visible `tasks` is freshest;
-                            // the cached list is a reasonable
-                            // fallback) so the optimistic state
-                            // is preserved on the locked ids.
-                            let localPool: [CUTask] =
-                                !tasks.isEmpty ? tasks : (tasksByListId[active] ?? [])
-                            // `uniquingKeysWith:` so duplicate task
-                            // ids (Tasks-in-Multiple-Lists) don't
-                            // trap — see comment at line ~2026.
-                            let localById = Dictionary(
-                                localPool.map { ($0.id, $0) },
-                                uniquingKeysWith: { _, new in new }
-                            )
-                            tasksByListId[active] = t.map { fresh in
-                                if pendingNow.contains(fresh.id),
-                                   let local = localById[fresh.id] {
-                                    return local
-                                }
-                                return fresh
+                        // Reuse whichever local copy we have
+                        // (the visible `tasks` is freshest;
+                        // the cached list is a reasonable
+                        // fallback) so the optimistic state
+                        // is preserved on the protected ids.
+                        let localPool: [CUTask] =
+                            !tasks.isEmpty ? tasks : (tasksByListId[active] ?? [])
+                        // `uniquingKeysWith:` so duplicate task
+                        // ids (Tasks-in-Multiple-Lists) don't
+                        // trap — see comment at line ~2026.
+                        let localById = Dictionary(
+                            localPool.map { ($0.id, $0) },
+                            uniquingKeysWith: { _, new in new }
+                        )
+                        tasksByListId[active] = t.map { fresh in
+                            if shouldPreserveLocalTask(fresh.id, fetchStartedAt: fetchStartedAt),
+                               let local = localById[fresh.id] {
+                                return local
                             }
+                            return fresh
                         }
                     }
                 }
@@ -2015,21 +2241,50 @@ final class AppState: ObservableObject {
         }
 
         let now = Date()
-        cache.save(AppCache(events: fetched, tasks: fetchedTasks, lastSyncedAt: now,
-                            assignedToMeTasks: assignedToMeTasks))
+        // Only persist when nothing failed — a failed fetch leaves
+        // its array empty, and saving that would poison the launch
+        // cache (next app start would boot with an empty list).
+        if !hadError {
+            cache.save(AppCache(events: fetched, tasks: fetchedTasks, lastSyncedAt: now,
+                                assignedToMeTasks: assignedToMeTasks))
+        }
 
         // Diff against the snapshot from the previous sync — surfaces
         // changes that came from elsewhere (a teammate moved a task, an
         // event got rescheduled in Google Calendar, etc.). Suppressed on
         // the very first sync of the session so we don't notify "Nova
-        // tarefa" for everything that already exists.
+        // tarefa" for everything that already exists. A failed source
+        // passes [] (no-op diff: the loop only walks NEW items) and its
+        // snapshot is NOT re-baselined below, so notifications for it
+        // simply defer to the next good sync.
         await MainActor.run {
-            diffAndNotifyRemoteChanges(newTasks: fetchedTasks, newEvents: fetched)
+            diffAndNotifyRemoteChanges(
+                newTasks:  cuFetchSucceeded  ? fetchedTasks : [],
+                newEvents: calFetchSucceeded ? fetched      : []
+            )
         }
 
         await MainActor.run {
             showMockData = false
-            events       = applyPendingRSVPs(to: fetched)
+            // Per-source apply guard: a source's state is replaced
+            // when its fetch succeeded, or when it isn't configured
+            // at all (disconnecting Google/ClickUp legitimately
+            // clears the respective array). A FAILED fetch keeps
+            // the previous data on screen instead of blanking it.
+            let applyCal = !calConfigured || calFetchSucceeded
+            let applyCU  = (!cuConfigured || cuFetchSucceeded)
+                // Out-of-order guard: a newer fetch (e.g. a
+                // `syncList` the user just triggered) may have
+                // already landed while this one was in flight.
+                && fetchTicket >= lastAppliedTaskTicket
+            if applyCal {
+                // Equality guard: identical server data (the
+                // common case for a 30s poll) used to be
+                // re-assigned anyway, firing the `didSet` index
+                // rebuild + a full view invalidation for nothing.
+                let newEvents = applyPendingRSVPs(to: fetched)
+                if events != newEvents { events = newEvents }
+            }
             // Preserve hydrated per-task fields that the LIST
             // endpoint doesn't return. Specifically:
             //
@@ -2054,43 +2309,56 @@ final class AppState: ObservableObject {
             // signature `_NativeDictionary.merge` on this exact
             // call after a sync that pulled a multi-list task.
             // Last-wins matches the snapshot init a few lines down.
-            let oldById = Dictionary(
-                tasks.map { ($0.id, $0) },
-                uniquingKeysWith: { _, new in new }
-            )
-            let pendingNow = pendingTaskMutations
-            tasks = fetchedTasks.map { fresh in
-                guard let existing = oldById[fresh.id] else { return fresh }
-                // PENDING-WRITE GUARD: if a user-initiated
-                // mutation for this task is still in flight to
-                // ClickUp, the server may be returning its
-                // pre-write read snapshot. Preserve the local
-                // (optimistically-updated) row entirely so a
-                // drag-drop on the board doesn't snap back.
-                // Cleared automatically once `updateTaskStatus`
-                // (or sibling) defers its `endPendingMutation`.
-                if pendingNow.contains(fresh.id) { return existing }
-                var merged = fresh
-                if merged.attachments.isEmpty && !existing.attachments.isEmpty {
-                    merged.attachments = existing.attachments
+            if applyCU {
+                lastAppliedTaskTicket = fetchTicket
+                let oldById = Dictionary(
+                    tasks.map { ($0.id, $0) },
+                    uniquingKeysWith: { _, new in new }
+                )
+                let rebuilt = fetchedTasks.map { fresh in
+                    guard let existing = oldById[fresh.id] else { return fresh }
+                    // WRITE GUARD: if a user-initiated mutation
+                    // for this task is in flight OR this fetch
+                    // STARTED before the mutation landed (the
+                    // causality check — a slow fetch returns a
+                    // pre-write snapshot no matter when it
+                    // finishes), preserve the local row entirely
+                    // so the change doesn't visually snap back.
+                    if shouldPreserveLocalTask(fresh.id, fetchStartedAt: fetchStartedAt) {
+                        return existing
+                    }
+                    var merged = fresh
+                    if merged.attachments.isEmpty && !existing.attachments.isEmpty {
+                        merged.attachments = existing.attachments
+                    }
+                    return merged
                 }
-                return merged
+                // Equality guard — see the `events` note above.
+                if tasks != rebuilt { tasks = rebuilt }
             }
             syncStatus   = hadError ? .error("Algumas fontes falharam") : .success(now)
-            // Re-baseline the snapshots to the just-synced state.
+            // Re-baseline the snapshots to the just-synced state —
+            // but ONLY for the sources whose fetch succeeded (the
+            // diff above used [] for the failed ones; re-baselining
+            // those to empty would spam "Nova tarefa" for the whole
+            // workspace on the next good sync).
             // EventKit can hand back multiple occurrences of a
             // recurring event sharing the same `eventIdentifier`,
             // and ClickUp's pagination has occasionally returned a
             // task twice. Both make `uniqueKeysWithValues:` trap
             // fatally — collapse duplicates with last-wins instead.
-            previousTaskSnapshots = Dictionary(
-                fetchedTasks.map { ($0.id, TaskSnapshot($0)) },
-                uniquingKeysWith: { _, new in new }
-            )
-            previousEventSnapshots = Dictionary(
-                fetched.map { ($0.id, EventSnapshot($0)) },
-                uniquingKeysWith: { _, new in new }
-            )
+            if cuFetchSucceeded {
+                previousTaskSnapshots = Dictionary(
+                    fetchedTasks.map { ($0.id, TaskSnapshot($0)) },
+                    uniquingKeysWith: { _, new in new }
+                )
+            }
+            if calFetchSucceeded {
+                previousEventSnapshots = Dictionary(
+                    fetched.map { ($0.id, EventSnapshot($0)) },
+                    uniquingKeysWith: { _, new in new }
+                )
+            }
         }
         if hadError {
             notify(.error,
@@ -2111,13 +2379,12 @@ final class AppState: ObservableObject {
             }
         }
 
-        // Fire-and-forget comment polling. We don't await
-        // because it runs N HTTP fetches per call (one per
-        // assigned task, capped at 30) and the user expects
-        // `sync()` to complete in well under a second to
-        // unfreeze the syncStatus pill. Notifications surface
-        // when each fetch completes, asynchronously.
-        Task { await self.pollCommentNotifications() }
+        // Comment polling is NOT chained here any more. As a
+        // tail call of every sync it fired up to 30+ extra
+        // requests per 30s fast-sync tick — that alone could
+        // blow ClickUp's 100 req/min budget and starve the task
+        // fetches into silent 429s. It now runs on its own
+        // 150s timer — see `startCommentPolling()`.
     }
 
     /// Pulls events for every contact in `sharedCalendars`
@@ -2538,9 +2805,103 @@ final class AppState: ObservableObject {
     /// runway to converge even on a busy workspace.
     private let pendingMutationTTL: TimeInterval = 15
 
+    /// When each task was last mutated locally — the CAUSALITY
+    /// guard that replaced the fragile fixed-TTL protection.
+    /// A fetch snapshots the server BEFORE it returns; if the
+    /// fetch STARTED before (or within `replicaLagMargin` of)
+    /// a local mutation, its data for that task predates the
+    /// write and must not overwrite the local row — no matter
+    /// how long the fetch took to come back. The old TTL lost
+    /// this race whenever a fetch outlived 15s (e.g. a 429
+    /// retry with backoff), which reverted freshly-changed
+    /// statuses to their pre-write value.
+    @MainActor private var recentTaskMutations: [String: Date] = [:]
+    private let replicaLagMargin: TimeInterval = 10
+
+    /// True when fetched data for `taskId` must be discarded in
+    /// favour of the local row. Combines the in-flight lock
+    /// (`pendingTaskMutations`) with the causality check above.
+    @MainActor
+    func shouldPreserveLocalTask(_ taskId: String,
+                                 fetchStartedAt: Date) -> Bool {
+        Self.shouldPreserveLocal(
+            pending:        pendingTaskMutations.contains(taskId),
+            mutatedAt:      recentTaskMutations[taskId],
+            fetchStartedAt: fetchStartedAt,
+            margin:         replicaLagMargin
+        )
+    }
+
+    /// Static core of the causality decision — pure and
+    /// unit-testable. `true` ⇢ the local row wins.
+    static func shouldPreserveLocal(pending: Bool,
+                                    mutatedAt: Date?,
+                                    fetchStartedAt: Date,
+                                    margin: TimeInterval) -> Bool {
+        if pending { return true }
+        if let mutatedAt,
+           fetchStartedAt < mutatedAt.addingTimeInterval(margin) {
+            return true
+        }
+        return false
+    }
+
+    /// Drop causality entries old enough that no live fetch can
+    /// predate them (any sane fetch finishes well under 5 min).
+    @MainActor
+    private func pruneRecentTaskMutations() {
+        let cutoff = Date().addingTimeInterval(-300)
+        recentTaskMutations = recentTaskMutations.filter { $0.value > cutoff }
+    }
+
     @MainActor
     private func beginPendingMutation(_ taskId: String) {
         pendingTaskMutations.insert(taskId)
+        recentTaskMutations[taskId] = Date()
+        pruneRecentTaskMutations()
+    }
+
+    /// Writes an optimistic (or rolled-back) status into EVERY
+    /// in-memory mirror of the task. `updateTaskStatus` used to
+    /// patch only `tasks` — so the Tarefas view (reads
+    /// `assignedToMeTasks`) and the open detail popup (reads
+    /// `detailTask`) kept the OLD status and re-exposed it on
+    /// their next refresh, which read as "a tarefa voltou ao
+    /// status anterior".
+    @MainActor
+    private func applyStatusToMirrors(taskId: String,
+                                      status: String,
+                                      color: String,
+                                      completed: Bool) {
+        if let idx = tasks.firstIndex(where: { $0.id == taskId }) {
+            tasks[idx].status      = status
+            tasks[idx].statusColor = color
+            tasks[idx].isCompleted = completed
+        }
+        if let idx = assignedToMeTasks.firstIndex(where: { $0.id == taskId }) {
+            assignedToMeTasks[idx].status      = status
+            assignedToMeTasks[idx].statusColor = color
+            assignedToMeTasks[idx].isCompleted = completed
+        }
+        if detailTask?.id == taskId {
+            detailTask?.status      = status
+            detailTask?.statusColor = color
+            detailTask?.isCompleted = completed
+        }
+        for i in detailSubtaskStack.indices where detailSubtaskStack[i].id == taskId {
+            detailSubtaskStack[i].status      = status
+            detailSubtaskStack[i].statusColor = color
+            detailSubtaskStack[i].isCompleted = completed
+        }
+    }
+
+    /// Re-stamp the causality clock at PUT-success: the server
+    /// only applied the write NOW, so fetches that started up
+    /// to this moment still carry the pre-write snapshot (a
+    /// retried PUT can land tens of seconds after the click).
+    @MainActor
+    private func touchMutationClock(_ taskId: String) {
+        recentTaskMutations[taskId] = Date()
     }
 
     /// Schedule lock release after `pendingMutationTTL` seconds
@@ -2833,11 +3194,10 @@ final class AppState: ObservableObject {
         let original = task
         await MainActor.run {
             beginPendingMutation(task.id)
-            if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
-                tasks[idx].status      = status.status
-                tasks[idx].statusColor = status.color
-                tasks[idx].isCompleted = status.isClosed
-            }
+            applyStatusToMirrors(taskId: task.id,
+                                 status: status.status,
+                                 color: status.color,
+                                 completed: status.isClosed)
         }
 
         let online = await MainActor.run { isOnline }
@@ -2869,7 +3229,13 @@ final class AppState: ObservableObject {
 
         do {
             try await cuSvc.updateTaskStatus(id: task.id, to: status.status)
-            await MainActor.run { bumpTaskSnapshot(for: task.id) }
+            await MainActor.run {
+                bumpTaskSnapshot(for: task.id)
+                // The server applied the write NOW (a retried PUT
+                // can land long after the click) — restart the
+                // causality window from this moment.
+                touchMutationClock(task.id)
+            }
             if !silent {
                 notifyTask(.success,
                            title:    task.title,
@@ -2913,12 +3279,15 @@ final class AppState: ObservableObject {
             Log.error("updateTaskStatus ROLLBACK id=\(task.id) " +
                       "\(original.status) → \(status.status) reason=\(error)")
             await MainActor.run {
-                if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
-                    tasks[idx].status      = original.status
-                    tasks[idx].statusColor = original.statusColor
-                    tasks[idx].isCompleted = original.isCompleted
-                }
+                applyStatusToMirrors(taskId: task.id,
+                                     status: original.status,
+                                     color: original.statusColor,
+                                     completed: original.isCompleted)
                 endPendingMutationNow(task.id)
+                // Rollback restores server truth — clear the
+                // causality stamp so the next fetch can apply
+                // canonical data immediately.
+                recentTaskMutations[task.id] = nil
             }
             let title = (error as? APIError)?.userFacingTitle ?? "Falha ao mudar status"
             let msg   = (error as? APIError)?.userFacingMessage ?? original.notificationDetails
@@ -3291,7 +3660,12 @@ final class AppState: ObservableObject {
         // array over instantly so the UI snaps to the new list
         // without a network round-trip. The `tasks` didSet
         // (`rebuildTaskIndex`) does the rest.
-        if let cached = tasksByListId[id] {
+        // Takes (and immediately lands) a fetch ticket: a user-
+        // initiated switch must win over any older fetch still in
+        // flight, otherwise its late response would overwrite the
+        // list the user just picked.
+        lastAppliedTaskTicket = takeTaskFetchTicket()
+        if let cached = tasksByListId[id], tasks != cached {
             tasks = cached
         }
 
@@ -3318,68 +3692,97 @@ final class AppState: ObservableObject {
         await MainActor.run { incSync() }
         defer { Task { @MainActor in self.decSync() } }
 
-        // STREAMING pagination: fetch one page at a time and
-        // update the UI between pages. Effect — the user sees
-        // the first 100 tasks land in ~500ms instead of waiting
-        // for the whole paginated set (which could be 1.5-3s
-        // on a busy list). Matches ClickUp web's progressive
-        // render. Cap at 10 pages = 1000 tasks (sane upper
-        // bound for any realistic list).
+        // Ticket taken at fetch start — guards the visible-`tasks`
+        // write below against newer fetches landing first.
+        let fetchTicket = await MainActor.run { takeTaskFetchTicket() }
+        // Causality stamp for `shouldPreserveLocalTask` — see
+        // the matching comment in `performSync`.
+        let fetchStartedAt = Date()
+
+        // STREAMING pagination only on FIRST load of a list (no
+        // cached content yet): the user sees the first 100 tasks
+        // land in ~500ms instead of waiting for the whole set,
+        // and pages only ever APPEND so nothing jumps around.
+        // On a REFRESH of a list that already has content, the
+        // old per-page replace made the visible list shrink to
+        // 100 rows and grow back page by page on every refresh —
+        // the "lista pisca/reordena" symptom. Refreshes now
+        // accumulate silently and publish ONCE at the end.
+        let hadContent = await MainActor.run {
+            !(tasksByListId[id] ?? []).isEmpty
+        }
+
+        // Merge-and-publish for one snapshot of the accumulated
+        // pages. Pending-write guard preserved from the original:
+        // tasks with an in-flight user mutation keep the local
+        // (optimistically-mutated) row, so a drag-drop on the
+        // board mid-fetch doesn't snap back.
+        func publish(_ snapshot: [CUTask]) async {
+            await MainActor.run {
+                let merged: [CUTask]
+                if pendingTaskMutations.isEmpty && recentTaskMutations.isEmpty {
+                    merged = snapshot
+                } else {
+                    // Local source = the visible `tasks` if
+                    // this is the active list, else whatever
+                    // is in the per-list cache.
+                    let active = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId)
+                    let localPool: [CUTask] =
+                        (active == id) ? tasks : (tasksByListId[id] ?? [])
+                    // `uniquingKeysWith:` so multi-list task
+                    // duplicates don't trap.
+                    let localById = Dictionary(
+                        localPool.map { ($0.id, $0) },
+                        uniquingKeysWith: { _, new in new }
+                    )
+                    merged = snapshot.map { fresh in
+                        if shouldPreserveLocalTask(fresh.id, fetchStartedAt: fetchStartedAt),
+                           let local = localById[fresh.id] {
+                            return local
+                        }
+                        return fresh
+                    }
+                }
+                // Equality guards: identical data (the common
+                // case for a periodic refresh) skips the
+                // assignment so the `didSet` index rebuild and
+                // the view invalidation don't fire for nothing.
+                if tasksByListId[id] != merged {
+                    tasksByListId[id] = merged
+                }
+                // Only replace the visible list if the user is
+                // still on this list (prevents a slow fetch for
+                // List A from overwriting List B) AND no newer
+                // fetch already landed (out-of-order guard).
+                let active = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId)
+                if active == id, fetchTicket >= lastAppliedTaskTicket {
+                    lastAppliedTaskTicket = fetchTicket
+                    if tasks != merged { tasks = merged }
+                }
+            }
+        }
+
+        // Cap at 10 pages = 1000 tasks (sane upper bound).
         var accumulated: [CUTask] = []
+        var failed = false
         for page in 0..<10 {
             do {
                 let pageTasks = try await cuSvc.listTasksPage(listId: id, page: page)
                 accumulated += pageTasks
-                // Snapshot to avoid the inout-capture warning
-                // inside the MainActor block.
-                let snapshot = accumulated
-                await MainActor.run {
-                    // PENDING-WRITE GUARD: for any task with an
-                    // in-flight user mutation, keep the local
-                    // (optimistically-mutated) row from `tasks`
-                    // / `tasksByListId[id]` instead of the fresh
-                    // server snapshot — the server's read can
-                    // still be the pre-write state during the
-                    // round-trip window. Without this, dragging
-                    // a card on the board mid-prefetch reverts.
-                    let pendingNow = pendingTaskMutations
-                    let merged: [CUTask]
-                    if pendingNow.isEmpty {
-                        merged = snapshot
-                    } else {
-                        // Local source = the visible `tasks` if
-                        // this is the active list, else whatever
-                        // is in the per-list cache.
-                        let active = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId)
-                        let localPool: [CUTask] =
-                            (active == id) ? tasks : (tasksByListId[id] ?? [])
-                        // `uniquingKeysWith:` so multi-list task
-                        // duplicates don't trap.
-                        let localById = Dictionary(
-                            localPool.map { ($0.id, $0) },
-                            uniquingKeysWith: { _, new in new }
-                        )
-                        merged = snapshot.map { fresh in
-                            if pendingNow.contains(fresh.id),
-                               let local = localById[fresh.id] {
-                                return local
-                            }
-                            return fresh
-                        }
-                    }
-                    tasksByListId[id] = merged
-                    // Only replace the visible list if the user
-                    // is still on this list. Prevents a slow
-                    // fetch for List A from overwriting tasks
-                    // the user is now reading from List B.
-                    let active = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId)
-                    if active == id { tasks = merged }
-                }
+                if !hadContent { await publish(accumulated) }
                 if pageTasks.count < 100 { break }   // last page
             } catch {
                 Log.error("syncList(\(id)) page=\(page): \(error)")
+                failed = true
                 break
             }
+        }
+        // Refresh path: single atomic publish at the end. On a
+        // mid-fetch failure keep the old data on screen instead
+        // of applying a truncated set (an empty success is real —
+        // the list may have been emptied server-side).
+        if hadContent && !failed {
+            await publish(accumulated)
         }
     }
 
@@ -3394,11 +3797,15 @@ final class AppState: ObservableObject {
         guard !pinned.isEmpty else { return }
         let activeId = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId)
         // Skip the currently active list (already fresh from
-        // the main sync). Skip ids already cached & touched in
-        // the last 30 seconds to avoid hammering the API on
-        // back-to-back syncs.
+        // the main sync). Skip ids refreshed in the last 10 min:
+        // with the 30s fast-sync, the old 30s staleness meant
+        // EVERY tick re-downloaded every pinned list (8-13
+        // requests per list per tick). The pinned cache only
+        // exists to make switching feel instant, and a switch
+        // always triggers its own fresh `syncList` anyway —
+        // 10 min staleness is more than enough.
         let now = Date()
-        let stale: TimeInterval = 30
+        let stale: TimeInterval = 600
         let toFetch = pinned.filter { id in
             if id == activeId { return false }
             if let last = listPrefetchedAt[id],
@@ -4843,11 +5250,19 @@ final class AppState: ObservableObject {
     /// branch in `TaskListView` so the order is consistent
     /// regardless of which filter is active.
     func sortByDeadlineThenPriority(_ tasks: [CUTask]) -> [CUTask] {
+        Self.sortByDeadlineThenPriority(tasks, statuses: availableStatuses)
+    }
+
+    /// Static core — pure function of (tasks, statuses), so the
+    /// determinism invariant is unit-testable without spinning
+    /// up an AppState (whose init constructs live services).
+    static func sortByDeadlineThenPriority(_ tasks: [CUTask],
+                                           statuses: [CUStatus]) -> [CUTask] {
         // Pre-compute the status name → (typeRank, workflowIdx)
         // lookup once so every comparison is O(1).
         var statusInfo: [String: (typeRank: Int, idx: Int)] = [:]
-        statusInfo.reserveCapacity(availableStatuses.count)
-        for (idx, s) in availableStatuses.enumerated() {
+        statusInfo.reserveCapacity(statuses.count)
+        for (idx, s) in statuses.enumerated() {
             statusInfo[s.status.lowercased()] = (Self.typeRank(for: s.type), idx)
         }
         return tasks.sorted { lhs, rhs in
@@ -4857,7 +5272,13 @@ final class AppState: ObservableObject {
             if lKey.1 != rKey.1 { return lKey.1 < rKey.1 }
             if lKey.2 != rKey.2 { return lKey.2 < rKey.2 }
             if lKey.3 != rKey.3 { return lKey.3 < rKey.3 }
-            return lKey.4 < rKey.4
+            if lKey.4 != rKey.4 { return lKey.4 < rKey.4 }
+            // Final deterministic tie-break. Swift's sort is NOT
+            // stable, so fully-tied tasks (same status, no due
+            // date, same priority — a very common combination)
+            // came out in a different order on every sync and the
+            // list visibly shuffled. The id pins them down.
+            return lhs.id < rhs.id
         }
     }
 
@@ -4878,7 +5299,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// (typeRank, statusIdx, hasNoDate, secondsUntilDue,
+    /// (typeRank, statusIdx, hasNoDate, dueTimestamp,
     /// priority) — designed so ascending sort yields "active
     /// status, earliest workflow, most urgent deadline,
     /// highest priority first". `statusIdx` is the position
@@ -4891,15 +5312,38 @@ final class AppState: ObservableObject {
         for task: CUTask,
         statusInfo: [String: (typeRank: Int, idx: Int)]
     ) -> (Int, Int, Int, TimeInterval, Int) {
-        let now = Date()
         let priority = (task.priority >= 1 && task.priority <= 4)
             ? task.priority : Int.max
         let info = statusInfo[task.status.lowercased()]
         let typeRank  = info?.typeRank ?? 4
         let statusIdx = info?.idx      ?? Int.max
         if let due = task.dueDate {
-            return (typeRank, statusIdx, 0, due.timeIntervalSince(now), priority)
+            // Absolute timestamp, NOT seconds-from-now: ordering
+            // is identical (earlier due = smaller key) but the key
+            // no longer drifts with the clock. The old
+            // `timeIntervalSince(Date())` produced a different key
+            // on every comparison and every sync, which both
+            // violated strict-weak-ordering and reshuffled
+            // near-tied tasks on each refresh.
+            return (typeRank, statusIdx, 0, due.timeIntervalSinceReferenceDate, priority)
         }
         return (typeRank, statusIdx, 1, .infinity, priority)
     }
 }
+
+#if DEBUG
+extension AppState {
+    /// Canvas/preview-only instance preloaded with mock data.
+    /// Nothing calls `initialize()`, so no network, no timers,
+    /// no cache reads — safe for the SwiftUI preview canvas.
+    /// (The `#Preview` blocks in ContentView referenced this
+    /// and the DEBUG build didn't compile without it.)
+    static var preview: AppState {
+        let s = AppState()
+        s.showMockData = true
+        s.events = CalendarEvent.mock()
+        s.tasks  = CUTask.mock()
+        return s
+    }
+}
+#endif

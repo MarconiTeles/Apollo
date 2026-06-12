@@ -37,6 +37,17 @@ let package = Package(
             ],
             path: "Sources/DayPanel",
             exclude: ["Resources/Info.plist"]
+        ),
+        // Invariants that were expensive to (re)discover in
+        // production: deterministic task ordering, page-order
+        // assembly of the parallel pagination, the causality
+        // guard that protects optimistic mutations from slow
+        // fetches, and the split-cache round-trip. Run with
+        // `swift test`.
+        .testTarget(
+            name: "DayPanelTests",
+            dependencies: ["DayPanel"],
+            path: "Tests/DayPanelTests"
         )
     ]
 )

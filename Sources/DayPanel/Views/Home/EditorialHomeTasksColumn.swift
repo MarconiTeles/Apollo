@@ -24,14 +24,19 @@ struct EditorialHomeTasksColumn: View {
     private var collapsedRaw: String = ""
 
     var body: some View {
+        // ONE filter+sort+flatten pass per render. The previous
+        // shape re-ran the whole chain (filter → group → sort)
+        // from three places — `groups.isEmpty`, the `.animation`
+        // value, and `flattenedRows.first` inside EVERY row — so
+        // a 30-row column evaluated it 30+ times per render.
+        let flat = flattenedRows(groups)
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if groups.isEmpty {
+                if flat.isEmpty {
                     emptyOrSkeleton
                 } else {
-                    let flat = flattenedRows
                     ForEach(Array(flat.enumerated()), id: \.element.id) { (i, row) in
-                        rowOrHeader(row)
+                        rowOrHeader(row, isFirst: i == 0)
                             .cascadeAppear(index: i)
                     }
                 }
@@ -39,7 +44,7 @@ struct EditorialHomeTasksColumn: View {
             .padding(.horizontal, 8)
             .padding(.top, 4)
             .padding(.bottom, 80)
-            .animation(.easeOut(duration: 0.22), value: filteredPendingTasks.count)
+            .animation(.easeOut(duration: 0.22), value: flat.count)
         }
     }
 
@@ -82,8 +87,12 @@ struct EditorialHomeTasksColumn: View {
     }
 
     private func sorted(_ tasks: [CUTask]) -> [CUTask] {
-        tasks.sorted { a, b in
-            let now = Date()
+        // Clock snapshotted ONCE + id tie-break — same
+        // strict-weak-ordering fix as EditorialMyTasksView /
+        // AppState's main sort (per-comparison `Date()` and an
+        // unstable sort reshuffled near-tied rows every render).
+        let now = Date()
+        return tasks.sorted { a, b in
             let aOver = (a.dueDate.map { $0 < now } ?? false)
             let bOver = (b.dueDate.map { $0 < now } ?? false)
             if aOver != bOver { return aOver }
@@ -99,7 +108,9 @@ struct EditorialHomeTasksColumn: View {
                 let bP = b.priority == 0 ? 99 : b.priority
                 return aP < bP
             }
-            return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
+            let t = a.title.localizedCaseInsensitiveCompare(b.title)
+            if t != .orderedSame { return t == .orderedAscending }
+            return a.id < b.id
         }
     }
 
@@ -117,7 +128,7 @@ struct EditorialHomeTasksColumn: View {
             }
         }
     }
-    private var flattenedRows: [FlatRow] {
+    private func flattenedRows(_ groups: [(status: CUStatus, tasks: [CUTask])]) -> [FlatRow] {
         var out: [FlatRow] = []
         for g in groups {
             let key = g.status.status.lowercased()
@@ -131,17 +142,28 @@ struct EditorialHomeTasksColumn: View {
     }
 
     @ViewBuilder
-    private func rowOrHeader(_ row: FlatRow) -> some View {
+    private func rowOrHeader(_ row: FlatRow, isFirst: Bool) -> some View {
         switch row {
         case .header(let s, let c, let collapsed):
             VStack(alignment: .leading, spacing: 0) {
-                if row.id != flattenedRows.first?.id {
+                if !isFirst {
                     Color.clear.frame(height: 18)
                 }
                 groupHeader(status: s, count: c, collapsed: collapsed)
             }
         case .task(let t, _):
-            taskRow(t)
+            // Reuse the "Próximos" cell — swipe actions + DONE button — inside
+            // the Hoje vertical grouping. Wrapped in `SwipeCellHost` so the
+            // two-finger swipe wires up in this pure-SwiftUI list (no
+            // NSCollectionListView host here). The transition makes the row
+            // slide + fade when its status section is collapsed/expanded
+            // (driven by the `withAnimation` in `toggleCollapsed`).
+            SwipeCellHost { TaskRowView(task: t, appState: appState) }
+                .frame(maxWidth: .infinity)
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .move(edge: .top)),
+                    removal:   .opacity.combined(with: .move(edge: .top))
+                ))
         }
     }
 
@@ -154,9 +176,13 @@ struct EditorialHomeTasksColumn: View {
             toggleCollapsed(status.status.lowercased())
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                // Single chevron rotated 0°→90° so the open/close
+                // toggle animates smoothly (swapping right⇄down symbols
+                // would snap instead of rotate).
+                Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(Editorial.inkFaint)
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
                     .frame(width: 12)
                 Circle()
                     .fill(Color(hex: status.displayHex))
@@ -177,7 +203,11 @@ struct EditorialHomeTasksColumn: View {
         .buttonStyle(.plain)
         .focusEffectDisabled()
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Editorial.rule).frame(height: 0.5)
+            // Category divider — same 0.65 opacity + soft lateral fade as
+            // the task/event row dividers.
+            Rectangle().fill(Editorial.rule.opacity(0.65))
+                .frame(height: 0.5)
+                .edgeFadedHorizontal()
         }
     }
 
@@ -277,10 +307,7 @@ struct EditorialHomeTasksColumn: View {
                                               to:   cal.startOfDay(for: d)).day ?? 0
         if days > 1 && days < 7   { return "em \(days) dias" }
         if days < -1 && days > -7 { return "\(-days) dias atrás" }
-        let fmt = DateFormatter()
-        fmt.locale = Locale(identifier: "pt_BR")
-        fmt.dateFormat = "d 'de' MMM."
-        return fmt.string(from: d)
+        return SharedDateFormatters.dayOfMonthAbbrevPTBR.string(from: d)
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -319,6 +346,11 @@ struct EditorialHomeTasksColumn: View {
     private func toggleCollapsed(_ key: String) {
         var set = collapsedSet
         if set.contains(key) { set.remove(key) } else { set.insert(key) }
-        collapsedRaw = set.sorted().joined(separator: ",")
+        // Animate the section open/close — the inserted/removed task
+        // rows ride the `.transition` defined in `rowOrHeader`, and the
+        // header chevron rotates, all driven by this single state change.
+        withAnimation(.easeInOut(duration: 0.26)) {
+            collapsedRaw = set.sorted().joined(separator: ",")
+        }
     }
 }

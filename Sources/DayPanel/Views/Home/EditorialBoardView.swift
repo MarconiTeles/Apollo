@@ -19,6 +19,26 @@ struct EditorialBoardView: View {
     /// is over them.
     @State private var dragOverStatus: String? = nil
 
+    /// ID of the card the user is actively dragging. Set on `.onDrag`,
+    /// cleared on drop. Drives the live in-column reorder (which card is
+    /// being slotted) and the source card's dimmed placeholder look.
+    @State private var draggingTaskId: String? = nil
+
+    /// LOCAL, per-status vertical ordering of cards — purely a viewing
+    /// preference, never written back to ClickUp. JSON `[statusKey:
+    /// [taskId]]` persisted in AppStorage so the user's hand-arranged
+    /// order survives relaunches. Cards absent from the saved list fall
+    /// to the end in their natural (server) order, so newly-synced tasks
+    /// always appear without needing a migration.
+    @AppStorage("dp_board_cardOrder_v1") private var cardOrderRaw: String = "{}"
+
+    /// Show/hide subtask cards on the board. Subtasks are independent
+    /// units of work here (their own card), but a busy list can drown in
+    /// them — this toggle lets the user collapse the board down to just
+    /// the top-level tasks. View-only preference, persisted across
+    /// launches. Defaults to `true` so existing behaviour is unchanged.
+    @AppStorage("dp_board_showSubtasks_v1") private var showSubtasks: Bool = true
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -33,9 +53,12 @@ struct EditorialBoardView: View {
     // ────────────────────────────────────────────────────────────────────
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 16) {
+        // Outer row centers the breadcrumb cluster, the tagline and the
+        // subtask toggle vertically; the crumb+count keep their own
+        // baseline alignment inside the leading group.
+        HStack(alignment: .center, spacing: 16) {
             // QUADRO · <SPACE> · <LIST>  N cards
-            HStack(spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(crumbText)
                     .font(Editorial.sans(11, .semibold))
                     .tracking(1.4)
@@ -48,16 +71,49 @@ struct EditorialBoardView: View {
 
             Spacer(minLength: 24)
 
-            // Editorial tagline (right aligned, serif italic with pilcrow).
+            // Editorial tagline (serif italic with pilcrow).
             Text("¶ arraste cards entre colunas — Apollo aprende sua rotina.")
                 .font(Editorial.serif(12).italic())
                 .foregroundStyle(Editorial.inkMute)
                 .lineLimit(1)
                 .truncationMode(.tail)
+
+            // Subtarefas on/off — collapse the board to top-level cards.
+            subtaskToggle
         }
         .padding(.horizontal, 28)
         .padding(.top, 22)
         .padding(.bottom, 14)
+    }
+
+    /// Pill switch + label that flips `showSubtasks`. Matches the
+    /// Editorial toggle look used in Settings (`SetToggle`), trimmed
+    /// slightly to sit in the header rule.
+    private var subtaskToggle: some View {
+        Button { showSubtasks.toggle() } label: {
+            HStack(spacing: 8) {
+                Text("SUBTAREFAS")
+                    .font(Editorial.sans(10, .semibold))
+                    .tracking(1.2)
+                    .foregroundStyle(showSubtasks ? Editorial.inkSoft : Editorial.inkFaint)
+                ZStack(alignment: showSubtasks ? .trailing : .leading) {
+                    Capsule()
+                        .fill(showSubtasks ? Editorial.ink : Editorial.rule)
+                        .frame(width: 32, height: 18)
+                    Circle()
+                        .fill(Editorial.page)
+                        .frame(width: 14, height: 14)
+                        .padding(2)
+                        .shadow(color: .black.opacity(0.20), radius: 1, y: 1)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .help(showSubtasks ? "Ocultar subtarefas do quadro" : "Exibir subtarefas no quadro")
+        .animation(.easeInOut(duration: 0.15), value: showSubtasks)
+        .fixedSize()
     }
 
     /// "QUADRO · MINIMAL · MARKETING" — uppercased breadcrumb.
@@ -83,13 +139,16 @@ struct EditorialBoardView: View {
     /// column totals.
     private var boardTasks: [CUTask] {
         let listId = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId) ?? ""
-        // Include EVERY task in the active list (parents AND
-        // subtasks) so the column counts match the sidebar's
-        // list count. Subtasks render as their own card — the
-        // kanban view treats them as independent units of work.
+        // By default include EVERY task in the active list (parents AND
+        // subtasks) — subtasks render as their own card, the kanban view
+        // treats them as independent units of work, and the column totals
+        // match the sidebar's list count. When `showSubtasks` is off the
+        // user has chosen to collapse the board to top-level cards only;
+        // the header total then reflects exactly what's on screen.
         return appState.tasks.filter { t in
             !t.archived &&
-            (listId.isEmpty || t.listId == listId)
+            (listId.isEmpty || t.listId == listId) &&
+            (showSubtasks || !t.isSubtask)
         }
     }
 
@@ -118,6 +177,13 @@ struct EditorialBoardView: View {
             .padding(.bottom, 24)
         }
         .frame(maxHeight: .infinity)
+        // Catch-all: any drop that falls through the columns/cards (e.g.
+        // released over board chrome) still clears the drag state so a
+        // source card never stays stuck in its dimmed ghost look.
+        .onDrop(of: [.text], delegate: BoardResetDropDelegate(
+            draggingTaskId: $draggingTaskId,
+            dragOverStatus: $dragOverStatus
+        ))
     }
 
     /// Render EVERY workspace status as a column, including the
@@ -154,15 +220,85 @@ struct EditorialBoardView: View {
         appState.tasks.isEmpty && appState.isSyncing
     }
 
+    // ────────────────────────────────────────────────────────────────────
+    // MARK: Local card ordering (view-only, never synced to ClickUp)
+    // ────────────────────────────────────────────────────────────────────
+
+    /// Decoded `[statusKey: [taskId]]` order map.
+    private var cardOrder: [String: [String]] {
+        (try? JSONDecoder().decode([String: [String]].self,
+                                   from: Data(cardOrderRaw.utf8))) ?? [:]
+    }
+
+    /// Persist a new order map back into AppStorage.
+    private func setCardOrder(_ dict: [String: [String]]) {
+        guard let data = try? JSONEncoder().encode(dict),
+              let str  = String(data: data, encoding: .utf8) else { return }
+        cardOrderRaw = str
+    }
+
+    /// Raw (server-order) cards for a status key.
+    private func columnCards(_ statusKey: String) -> [CUTask] {
+        boardTasks.filter { $0.status.lowercased() == statusKey }
+    }
+
+    /// Apply the user's saved local order: cards present in the saved
+    /// list sort by their stored index; cards absent (newly synced)
+    /// keep their natural relative order and fall to the end.
+    private func orderedCards(_ cards: [CUTask], statusKey: String) -> [CUTask] {
+        let saved = cardOrder[statusKey] ?? []
+        let pos = Dictionary(saved.enumerated().map { ($1, $0) },
+                             uniquingKeysWith: { a, _ in a })
+        return cards.enumerated().sorted { a, b in
+            switch (pos[a.element.id], pos[b.element.id]) {
+            case let (.some(x), .some(y)): return x < y
+            case (.some, .none):           return true
+            case (.none, .some):           return false
+            case (.none, .none):           return a.offset < b.offset
+            }
+        }.map(\.element)
+    }
+
+    /// Move the dragged card to sit immediately BEFORE `targetId` in the
+    /// given column's local order, then persist. Used live from the
+    /// card-level drop delegate's `dropEntered` (wrapped in
+    /// `withAnimation` so the surrounding cards reflow under the cursor).
+    private func reorder(dragInFrontOf targetId: String, statusKey: String) {
+        guard let dragId = draggingTaskId, dragId != targetId else { return }
+        var ids = orderedCards(columnCards(statusKey), statusKey: statusKey).map(\.id)
+        guard ids.contains(dragId), ids.contains(targetId) else { return }
+        ids.removeAll { $0 == dragId }
+        guard let insertAt = ids.firstIndex(of: targetId) else { return }
+        ids.insert(dragId, at: insertAt)
+        var dict = cardOrder
+        dict[statusKey] = ids
+        setCardOrder(dict)
+    }
+
+    /// Place `dragId` before `targetId` after a CROSS-column drop (the
+    /// task's status was just changed to this column), so it lands where
+    /// the user dropped it rather than at the column's tail.
+    private func place(_ dragId: String, before targetId: String, statusKey: String) {
+        var ids = orderedCards(columnCards(statusKey), statusKey: statusKey).map(\.id)
+        ids.removeAll { $0 == dragId }
+        let insertAt = ids.firstIndex(of: targetId) ?? ids.count
+        ids.insert(dragId, at: insertAt)
+        var dict = cardOrder
+        dict[statusKey] = ids
+        setCardOrder(dict)
+    }
+
     private func column(for status: CUStatus) -> some View {
-        let cards = boardTasks.filter { $0.status.lowercased() == status.status.lowercased() }
-        let isDropTarget = dragOverStatus == status.status.lowercased()
+        let statusKey = status.status.lowercased()
+        let cards = orderedCards(columnCards(statusKey), statusKey: statusKey)
+        let isDropTarget = dragOverStatus == statusKey
         return VStack(alignment: .leading, spacing: 12) {
             // Header stays PINNED at the top of the column even
             // when its cards scroll — the column's own height is
             // the available chrome height, and only the inner
             // card list scrolls.
             columnHeader(status: status, count: cards.count)
+                .padding(.horizontal, 10)   // align with the inset card list
 
             // Per-column vertical scroll. Each status column
             // scrolls independently; columns with few cards stay
@@ -183,18 +319,45 @@ struct EditorialBoardView: View {
                         }
                     }
                     ForEach(cards, id: \.id) { task in
-                        BoardCardRow(task: task, appState: appState)
+                        BoardCardRow(
+                            task: task,
+                            appState: appState,
+                            status: status,
+                            draggingTaskId: $draggingTaskId,
+                            dragOverStatus: $dragOverStatus,
+                            onReorder: { targetId in
+                                // Gentle bouncy reflow — the surrounding
+                                // cards lightly overshoot and settle as
+                                // they make room, so the rearrangement
+                                // reads as physical without feeling springy.
+                                withAnimation(.bouncy(duration: 0.40,
+                                                      extraBounce: 0.12)) {
+                                    reorder(dragInFrontOf: targetId,
+                                            statusKey: statusKey)
+                                }
+                            },
+                            onCrossColumnPlace: { dragId, targetId in
+                                place(dragId, before: targetId,
+                                      statusKey: statusKey)
+                            }
+                        )
                     }
                     addCardPlaceholder(for: status)
                         .padding(.top, 4)
                 }
+                // Horizontal + vertical breathing room INSIDE the scroll so the
+                // cards' hover shadow (incl. its soft blur tail, wider than the
+                // radius) isn't clipped by the ScrollView bounds.
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
                 .padding(.bottom, 8)
             }
             .frame(maxHeight: .infinity)
         }
         // Soft drop-target wash: tint the whole column when a card from
-        // another status hovers it.
-        .padding(8)
+        // another status hovers it. Horizontal padding moved INSIDE (header +
+        // card list) so the card shadow has room before the scroll clip.
+        .padding(.vertical, 8)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -209,24 +372,37 @@ struct EditorialBoardView: View {
         .onDrop(of: [.text], delegate: BoardDropDelegate(
             targetStatus: status,
             appState: appState,
-            dragOverStatus: $dragOverStatus
+            dragOverStatus: $dragOverStatus,
+            draggingTaskId: $draggingTaskId
         ))
     }
 
     private func columnHeader(status: CUStatus, count: Int) -> some View {
-        HStack(spacing: 9) {
-            Circle()
-                .fill(Color(hex: status.displayHex))
-                .frame(width: 7, height: 7)
-            Text(status.status.uppercased())
-                .font(Editorial.sans(10.5, .semibold))
-                .tracking(1.2)
-                .foregroundStyle(Color(hex: status.displayHex))
-                .lineLimit(1)
-            Text("\(count)")
-                .font(Editorial.sans(11, .semibold))
-                .foregroundStyle(Editorial.inkMute)
-                .monospacedDigit()
+        // `statusHex` (not raw `hex`) so the colour gets the dark-mode
+        // vibrancy/brightening like every other status surface.
+        let color = Color(statusHex: status.displayHex)
+        return HStack(spacing: 9) {
+            // Status label sits in a Liquid Glass pill tinted with the
+            // status accent colour — matches the prototype, where each
+            // column heading read as a coloured glass chip.
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 7, height: 7)
+                Text(status.status.uppercased())
+                    .font(Editorial.sans(10.5, .semibold))
+                    .tracking(1.2)
+                    .foregroundStyle(color)
+                    .lineLimit(1)
+                Text("\(count)")
+                    .font(Editorial.sans(11, .semibold))
+                    .foregroundStyle(color.opacity(0.6))
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .modifier(StatusGlassPill(color: color))
+
             Spacer(minLength: 4)
             // "+" — opens the existing CreateTaskSheet pre-bound to this
             // status. Calls into the legacy create flow; no per-status
@@ -299,6 +475,11 @@ struct BoardCard: View {
     let task: CUTask
     @EnvironmentObject var appState: AppState
 
+    /// Hover state — drives the subtle lift + drop shadow that
+    /// signals the card is interactive. Local @State so it
+    /// doesn't touch AppState (no observer cascade).
+    @State private var hover: Bool = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             topRow
@@ -314,18 +495,28 @@ struct BoardCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // Solid card surface — no material/translucency. Pure
         // white in light mode, charcoal in dark; opaque so the
-        // chrome paper / desktop don't bleed through. Shadow
-        // removed and the hairline rule restored to full
-        // Editorial.rule opacity so the card reads flat-solid
-        // rather than "glassy lifted".
+        // chrome paper / desktop don't bleed through.
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Editorial.page)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Editorial.rule, lineWidth: 0.5)
         )
+        // Hover lift: a drop shadow tinted with the task's status accent
+        // (no scale — the colour, not the size, signals "ready"). Fades to
+        // zero opacity at rest so the card stays flat-Editorial-Calm.
+        .shadow(color: hover ? Color(statusHex: task.statusDisplayHex).opacity(0.5) : .clear,
+                radius: hover ? 4 : 0,
+                x: 0,
+                y: hover ? 2 : 0)
+        .animation(.easeOut(duration: 0.16), value: hover)
+        .onHover { hover = $0 }
+        // Right-click → the canonical task context menu (Copiar link /
+        // ID, Favoritar, Renomear, Mover, Duplicar, Arquivar, Excluir…),
+        // same spec the dashboard rows and the task popup use.
+        .taskContextMenu(task: task, appState: appState)
     }
 
     // ── Top row: status dot + breadcrumb caps + priority chip ──────────
@@ -333,7 +524,7 @@ struct BoardCard: View {
     private var topRow: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(Color(hex: task.statusDisplayHex))
+                .fill(Color(statusHex: task.statusDisplayHex))
                 .frame(width: 6, height: 6)
             Text(breadcrumb)
                 .font(Editorial.sans(9.5, .semibold))
@@ -373,16 +564,18 @@ struct BoardCard: View {
         }
     }
 
+    @ViewBuilder
     private var avatar: some View {
-        let initial = String(firstName.first ?? "·").uppercased()
-        return Circle()
-            .fill(Color(statusHex: assigneeColorHex))
-            .frame(width: 18, height: 18)
-            .overlay(
-                Text(initial)
-                    .font(Editorial.sans(9, .bold))
-                    .foregroundStyle(.white)
-            )
+        if task.assignees.isEmpty {
+            // No assignee — neutral placeholder dot.
+            Circle()
+                .fill(Color(statusHex: assigneeColorHex))
+                .frame(width: 18, height: 18)
+                .overlay(Text("·").font(Editorial.sans(9, .bold)).foregroundStyle(.white))
+        } else {
+            // Stacked photos (initials fallback) for one-or-many responsáveis.
+            AvatarStack(assignees: task.assignees, size: 18, maxShown: 3)
+        }
     }
 
     private var firstName: String {
@@ -425,10 +618,7 @@ struct BoardCard: View {
                                               to:   cal.startOfDay(for: d)).day ?? 0
         if days > 1 && days < 7  { return "em \(days) dias" }
         if days < -1 && days > -7 { return "\(-days) dias atrás" }
-        let fmt = DateFormatter()
-        fmt.locale = Locale(identifier: "pt_BR")
-        fmt.dateFormat = "d 'de' MMM."
-        return fmt.string(from: d)
+        return SharedDateFormatters.dayOfMonthAbbrevPTBR.string(from: d)
     }
 }
 
@@ -483,19 +673,54 @@ private struct PriorityChip: View {
 private struct BoardCardRow: View {
     let task: CUTask
     let appState: AppState
+    /// The column this card lives in.
+    let status: CUStatus
+    /// Shared "which card is being dragged" state, owned by the board.
+    @Binding var draggingTaskId: String?
+    @Binding var dragOverStatus: String?
+    /// Live in-column reorder: move the dragged card before THIS card.
+    let onReorder: (_ targetId: String) -> Void
+    /// After a cross-column status change, place the dropped card before
+    /// THIS card in the destination's local order.
+    let onCrossColumnPlace: (_ dragId: String, _ targetId: String) -> Void
 
     @State private var cardFrame: CGRect = .zero
+
+    private var isDragging: Bool { draggingTaskId == task.id }
 
     var body: some View {
         BoardCard(task: task)
             .captureFrame($cardFrame)
+            // The source card dims + shrinks slightly while it's the one
+            // under the cursor, so the moving preview reads as "lifted
+            // out" and the gap it leaves is obvious as siblings reflow.
+            .opacity(isDragging ? 0.35 : 1)
+            .scaleEffect(isDragging ? 0.98 : 1)
+            // Gentle bouncy lift/settle so the source card softly springs
+            // as it's picked up and eases back into the flow on drop.
+            .animation(.bouncy(duration: 0.34, extraBounce: 0.12),
+                       value: isDragging)
             .onDrag {
-                NSItemProvider(object: task.id as NSString)
+                draggingTaskId = task.id
+                return NSItemProvider(object: task.id as NSString)
             } preview: {
                 BoardCard(task: task)
                     .frame(width: 260)
                     .shadow(color: .black.opacity(0.22), radius: 14, y: 8)
             }
+            // Card-level drop target → live vertical reorder. As the
+            // dragged card hovers this one, `dropEntered` slots it into
+            // this position and the column reflows under the cursor
+            // (animation supplied by the board's `onReorder` closure).
+            .onDrop(of: [.text], delegate: CardReorderDropDelegate(
+                targetId: task.id,
+                status: status,
+                appState: appState,
+                draggingTaskId: $draggingTaskId,
+                dragOverStatus: $dragOverStatus,
+                onReorder: onReorder,
+                onCrossColumnPlace: onCrossColumnPlace
+            ))
             .onTapGesture {
                 // Same transition as every other surface — the
                 // settings-style bottom slide (`.bottomSlide` is
@@ -508,6 +733,80 @@ private struct BoardCardRow: View {
                 appState.detailTaskOrigin = rect
                 appState.detailTask       = task
             }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// MARK: - Card-level reorder drop delegate
+// ────────────────────────────────────────────────────────────────────────
+
+/// Drop target attached to EACH card so the user can reorder cards
+/// vertically WITHIN a column (a local viewing preference — never
+/// written to ClickUp) and, when a card is dragged in from another
+/// column, drop it at a precise slot.
+///
+/// • Same-column drag → `dropEntered` calls `onReorder(targetId)` live,
+///   so cards reflow to make room while the cursor is still moving.
+/// • Cross-column drag → `performDrop` changes the task's status to this
+///   column (the only ClickUp write), then places it locally at the drop
+///   slot via `onCrossColumnPlace`.
+private struct CardReorderDropDelegate: DropDelegate {
+    let targetId: String
+    let status: CUStatus
+    let appState: AppState
+    @Binding var draggingTaskId: String?
+    @Binding var dragOverStatus: String?
+    let onReorder: (_ targetId: String) -> Void
+    let onCrossColumnPlace: (_ dragId: String, _ targetId: String) -> Void
+
+    private var statusKey: String { status.status.lowercased() }
+
+    /// The status the dragged task currently belongs to.
+    private var draggedStatusKey: String? {
+        guard let id = draggingTaskId,
+              let t = appState.tasks.first(where: { $0.id == id })
+        else { return nil }
+        return t.status.lowercased()
+    }
+
+    func dropEntered(info: DropInfo) {
+        // Live reorder only when staying within the same column — a
+        // cross-column drag just lights the destination column (handled
+        // by the column-level delegate) until it's dropped.
+        if draggedStatusKey == statusKey {
+            onReorder(targetId)
+        } else {
+            dragOverStatus = statusKey
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.text])
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let draggedId = draggingTaskId
+        let fromKey   = draggedStatusKey
+        draggingTaskId = nil
+        dragOverStatus = nil
+        guard let draggedId else { return false }
+
+        if let fromKey, fromKey != statusKey,
+           let task = appState.tasks.first(where: { $0.id == draggedId }) {
+            // Cross-column: the ONE remote write — change status — then
+            // drop it at the targeted slot locally.
+            Task { @MainActor in
+                await appState.updateTaskStatus(task, to: status, silent: true)
+                onCrossColumnPlace(draggedId, targetId)
+            }
+        }
+        // Same-column reorder was already applied live in dropEntered;
+        // the persisted order is current, nothing more to do.
+        return true
     }
 }
 
@@ -534,6 +833,62 @@ func taskDetailNaturalSize(for window: CGSize) -> CGSize {
 }
 
 // ────────────────────────────────────────────────────────────────────────
+// MARK: - Status header glass pill
+// ────────────────────────────────────────────────────────────────────────
+
+/// Liquid Glass chip tinted with the status accent colour, used behind
+/// each board column heading (dot + name + count). On macOS 26+ it's a
+/// real Liquid Glass material with a coloured tint; older systems fall
+/// back to a translucent accent fill. Both carry a faint accent border.
+private struct StatusGlassPill: ViewModifier {
+    let color: Color
+
+    func body(content: Content) -> some View {
+        // NOTE: deliberately NOT `.glassEffect` here. The board's column
+        // headers live inside a horizontal `ScrollView`, and the real
+        // Liquid Glass material recomputes its adaptive shadow as the
+        // pill moves — producing a transient shadow that flickered on
+        // the LEFT of each status pill during a horizontal scroll. A
+        // frosted `.ultraThinMaterial` capsule tinted with the status
+        // colour keeps the glassy translucent look WITHOUT that
+        // scroll-time shadow artifact.
+        let shape = Capsule(style: .continuous)
+        content
+            .background(
+                ZStack {
+                    shape.fill(.ultraThinMaterial)
+                    shape.fill(color.opacity(0.16))
+                }
+            )
+            .overlay(shape.strokeBorder(color.opacity(0.22), lineWidth: 0.6))
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// MARK: - Board-level reset drop delegate (catch-all)
+// ────────────────────────────────────────────────────────────────────────
+
+/// Outermost drop target on the whole board. Inner column/card
+/// delegates consume drops over them; this one only ever fires for a
+/// drop that lands on board chrome (gutters, header gap). Its sole job
+/// is to clear the transient drag state so a released card always
+/// returns from its ghost placeholder to full opacity.
+private struct BoardResetDropDelegate: DropDelegate {
+    @Binding var draggingTaskId: String?
+    @Binding var dragOverStatus: String?
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingTaskId = nil
+        dragOverStatus = nil
+        return false
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
 // MARK: - Drop delegate
 // ────────────────────────────────────────────────────────────────────────
 
@@ -545,6 +900,7 @@ private struct BoardDropDelegate: DropDelegate {
     let targetStatus: CUStatus
     let appState: AppState
     @Binding var dragOverStatus: String?
+    @Binding var draggingTaskId: String?
 
     func dropEntered(info: DropInfo) {
         dragOverStatus = targetStatus.status.lowercased()
@@ -556,13 +912,24 @@ private struct BoardDropDelegate: DropDelegate {
         }
     }
 
+    // Advertise MOVE (not the default COPY) so the cursor shows the
+    // plain move indicator instead of a green "+" — the card already
+    // belongs to the board, nothing is being added.
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
     func validateDrop(info: DropInfo) -> Bool {
         info.hasItemsConforming(to: [.text])
     }
 
     func performDrop(info: DropInfo) -> Bool {
+        // Always clear the drag state so the source card un-dims even
+        // when the drop lands in the column gutter (not on a card) —
+        // otherwise it would stay stuck in its ghost placeholder look.
+        draggingTaskId = nil
         guard let provider = info.itemProviders(for: [.text]).first
-        else { return false }
+        else { dragOverStatus = nil; return false }
         provider.loadObject(ofClass: NSString.self) { obj, _ in
             guard let taskId = obj as? String else { return }
             Task { @MainActor in

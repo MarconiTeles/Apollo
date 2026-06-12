@@ -257,10 +257,7 @@ struct TaskDetailSheet: View, Equatable {
     // MARK: - EditorialDetailV2 — masthead
 
     private func dayMonth(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "pt_BR")
-        f.dateFormat = "d MMM"
-        return f.string(from: d)
+        SharedDateFormatters.shortDayMonthPTBR.string(from: d)
     }
 
     private var statusLabel: String { liveTask.status.capitalized }

@@ -89,26 +89,32 @@ struct EditorialHomeHeader: View {
     private func nextEventCard(_ ev: CalendarEvent) -> some View {
         let mins = max(0, Int(ev.startDate.timeIntervalSinceNow / 60))
         let crumbText = (ev.calendarName ?? "Evento").uppercased()
-        return HStack(alignment: .top, spacing: 28) {
-            VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 0) {
+          // 10 = 28 × 0.35 — gap between the time column and the title
+          // column cut ~65%.
+          HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
                 Folio(mins == 0 ? "Agora" : "Em \(mins) min", accent: true)
                 Text(timeFmt(ev.startDate))
-                    .font(Editorial.serif(28, .medium))
+                    .font(Editorial.serif(22, .medium))
                     .foregroundStyle(Editorial.ink)
                     .monospacedDigit()
                 Text("até \(timeFmt(ev.endDate))")
                     .font(Editorial.serif(11.5).italic())
                     .foregroundStyle(Editorial.inkMute)
             }
-            .frame(width: 140, alignment: .leading)
+            // Trimmed 140 → 112 so the leftover whitespace after the time
+            // doesn't re-introduce the wide gap before the title.
+            .frame(width: 112, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(crumbText)
                     .font(Editorial.sans(10.5, .semibold))
                     .tracking(1.2)
                     .foregroundStyle(Editorial.inkMute)
                 Text(ev.title)
-                    .font(Editorial.serif(24, .medium))
+                    // Sans (no serif) for the event title in this card.
+                    .font(Editorial.sans(20, .semibold))
                     .foregroundStyle(Editorial.ink)
                     .tracking(-0.3)
                     .lineLimit(2)
@@ -141,17 +147,81 @@ struct EditorialHomeHeader: View {
                 }
                 .buttonStyle(.plain)
             }
+          }
+
+          // RSVP — "Você vai?" Sim / Não / Talvez, shown only when the
+          // connected user is actually an attendee of this event.
+          rsvpRow(ev)
         }
         .padding(.horizontal, 22)
-        .padding(.vertical, 20)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Editorial.accent.opacity(0.06))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Editorial.accent.opacity(0.18), lineWidth: 0.5)
-        )
+        // Vertical padding trimmed (20 → 14) as part of the ~30% height
+        // reduction; the card stays balanced because the inner spacings
+        // and type sizes were scaled down proportionally.
+        .padding(.vertical, 14)
+        // Liquid Glass surface with a white accent + a soft drop shadow
+        // (corner radius bumped 8 → 11, +35%).
+        .modifier(LiquidGlassHeroCard(cornerRadius: 11))
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // MARK: RSVP ("Você vai?")
+    // ────────────────────────────────────────────────────────────────────
+
+    /// Presence-confirmation row for the hero card — only rendered when
+    /// the connected user is one of the event's attendees. Mirrors the
+    /// RSVP control in `EventDetailView` and routes to the same
+    /// `appState.updateRSVP` (optimistic local + Google push).
+    @ViewBuilder
+    private func rsvpRow(_ ev: CalendarEvent) -> some View {
+        if let me = ev.attendees.first(where: { $0.isCurrentUser }) {
+            VStack(alignment: .leading, spacing: 0) {
+                Rectangle().fill(Editorial.rule.opacity(0.65))
+                    .frame(height: 0.5)
+                    .edgeFadedHorizontal()
+                    .padding(.top, 10)
+                HStack(spacing: 8) {
+                    Text("VOCÊ VAI?")
+                        .font(Editorial.sans(10.5, .semibold))
+                        .tracking(1.2)
+                        .foregroundStyle(Editorial.inkMute)
+                    rsvpPill("Sim",    status: .accepted,  ev: ev, me: me)
+                    rsvpPill("Não",    status: .declined,  ev: ev, me: me)
+                    rsvpPill("Talvez", status: .tentative, ev: ev, me: me)
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 8)
+            }
+        }
+    }
+
+    private func rsvpPill(_ label: String,
+                          status: CalendarEvent.Attendee.Status,
+                          ev: CalendarEvent,
+                          me: CalendarEvent.Attendee) -> some View {
+        let isCurrent = me.status == status
+        return Button {
+            appState.updateRSVP(for: ev, attendeeEmail: me.email, to: status)
+        } label: {
+            Text(label)
+                .font(Editorial.sans(12, .medium))
+                .foregroundStyle(isCurrent ? Editorial.page : Editorial.ink)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 5)
+                // Liquid Glass pill — ink-tinted when selected, neutral
+                // page glass at rest.
+                .liquidGlassCapsule(tint: isCurrent ? Editorial.ink : Editorial.page,
+                                    tintOpacity: isCurrent ? 0.85 : 0.55)
+                .overlay(
+                    Capsule().strokeBorder(
+                        isCurrent ? Color.clear : Editorial.rule,
+                        lineWidth: 1
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .glassHover()
+        .animation(.easeOut(duration: 0.16), value: isCurrent)
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -348,36 +418,26 @@ struct EditorialHomeHeader: View {
 
     // ── Date formatters ────────────────────────────────────────────────
 
+    // All shared instances — these computed vars run on every
+    // header render; allocating+configuring a DateFormatter per
+    // call was pure churn (5 allocations per render).
     private var weekdayName: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "pt_BR")
-        f.dateFormat = "EEEE"
-        return f.string(from: Date())
+        SharedDateFormatters.weekdayFullPTBR.string(from: Date())
     }
     private var weekdayShort: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "pt_BR")
-        f.dateFormat = "EEE"
-        return f.string(from: Date()).replacingOccurrences(of: ".", with: "")
+        SharedDateFormatters.weekdayShortPTBR.string(from: Date())
+            .replacingOccurrences(of: ".", with: "")
     }
     private var dayMonth: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "pt_BR")
-        f.dateFormat = "d 'de' MMMM"
-        return f.string(from: Date())
+        SharedDateFormatters.dayMonthFullPTBR.string(from: Date())
     }
     private var dayOfMonth: Int { Calendar.current.component(.day, from: Date()) }
     private var monthShort: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "pt_BR")
-        f.dateFormat = "MMM"
-        return f.string(from: Date()).replacingOccurrences(of: ".", with: "")
+        SharedDateFormatters.monthAbbrevPTBR.string(from: Date())
+            .replacingOccurrences(of: ".", with: "")
     }
     private func timeFmt(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "pt_BR")
-        f.dateFormat = "HH:mm"
-        return f.string(from: d)
+        SharedDateFormatters.shortTime24h.string(from: d)
     }
 
     // ── Event helpers ──────────────────────────────────────────────────
@@ -406,6 +466,33 @@ struct EditorialHomeHeader: View {
             }
         }
         return nil
+    }
+}
+
+/// Liquid Glass surface for the "next event" hero card. On macOS 26+
+/// it paints a real Liquid Glass material tinted toward white (the
+/// requested white accent); older systems fall back to a frosted
+/// `.regularMaterial`. Both carry a hairline white edge and a soft
+/// drop shadow so the card reads as a lifted glass panel.
+private struct LiquidGlassHeroCard: ViewModifier {
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if #available(macOS 26.0, *) {
+            content
+                .background(shape.fill(.thinMaterial))
+                .glassEffect(.regular.tint(Color.white.opacity(0.40)), in: shape)
+                .clipShape(shape)
+                .overlay(shape.strokeBorder(Color.white.opacity(0.55), lineWidth: 0.7))
+                .shadow(color: .black.opacity(0.12), radius: 9, x: 0, y: 4)
+        } else {
+            content
+                .background(shape.fill(.regularMaterial))
+                .clipShape(shape)
+                .overlay(shape.strokeBorder(Color.white.opacity(0.50), lineWidth: 0.7))
+                .shadow(color: .black.opacity(0.12), radius: 9, x: 0, y: 4)
+        }
     }
 }
 

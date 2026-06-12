@@ -1797,13 +1797,11 @@ struct TaskDetailView: View, Equatable {
     // MARK: - Reminders (Apollo-native, local)
 
     private func reminderLabel(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "pt_BR")
-        f.dateFormat = Calendar.current.isDateInToday(d)
-            ? "'hoje' HH:mm"
+        let f = Calendar.current.isDateInToday(d)
+            ? SharedDateFormatters.reminderTodayPTBR
             : (Calendar.current.isDateInTomorrow(d)
-               ? "'amanhã' HH:mm"
-               : "d MMM · HH:mm")
+               ? SharedDateFormatters.reminderTomorrowPTBR
+               : SharedDateFormatters.reminderFullPTBR)
         return f.string(from: d)
     }
 

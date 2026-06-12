@@ -236,6 +236,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in
                 guard let self else { return }
+                // Refocusing counts as interaction so the fast
+                // loop's activity gate opens immediately.
+                self.appState.noteUserInteraction()
                 Task { await self.appState.sync() }
                 self.appState.enableFastSync()
             }
@@ -246,6 +249,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.appState.disableFastSync()
             }
             .store(in: &cancellables)
+
+        // Activity signal for the fast-sync gate — any click,
+        // keypress or scroll marks the session as actively used;
+        // ticks while idle are skipped (see `enableFastSync`).
+        // Local monitor = events delivered to THIS app only, on
+        // the main thread; updating one timestamp is negligible.
+        NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown, .leftMouseDown, .rightMouseDown,
+                       .otherMouseDown, .scrollWheel]
+        ) { [weak self] event in
+            self?.appState.noteUserInteraction()
+            return event
+        }
 
         // Kick off the fast loop now if we launched into an active window.
         if NSApp.isActive { appState.enableFastSync() }

@@ -15,6 +15,45 @@ final class ClickUpService {
     private var token:  String? { auth.accessToken }   // reads dp_clickup_token
     private var listId: String? { KeychainHelper.load(for: KeychainHelper.Keys.clickupListId) }
 
+    /// Drop-in replacement for `URLSession.shared.data(for:)`
+    /// used by every ClickUp call. ClickUp caps the API at
+    /// 100 req/min; a 429 used to come back as an unparseable
+    /// body that `parseTasks` silently turned into an empty
+    /// array — lists rendered PARTIAL/empty with no error.
+    /// Now: 429 retries after the server's `Retry-After` hint
+    /// (mutations included — a 429 was never processed, so the
+    /// retry can't double-apply), transient 5xx retries with
+    /// exponential backoff on idempotent GETs only, and if the
+    /// retry budget runs out the classified `APIError` is THROWN
+    /// instead of letting garbage flow into the parsers.
+    static func data(retrying req: URLRequest,
+                     attempts: Int = 3) async throws -> (Data, URLResponse) {
+        var attempt = 0
+        while true {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return (data, response) }
+
+            let isGet = (req.httpMethod ?? "GET").uppercased() == "GET"
+            let retryable = http.statusCode == 429 ||
+                            ((500...599).contains(http.statusCode) && isGet)
+            if !retryable { return (data, response) }
+
+            if attempt >= attempts - 1 {
+                // Out of budget — surface the typed error so the
+                // caller's catch keeps its previous data instead
+                // of applying a truncated parse.
+                throw APIError.classify(response: response, data: data, thrown: nil)
+                    ?? APIError.serverError(statusCode: http.statusCode)
+            }
+            let serverHint = http.value(forHTTPHeaderField: "Retry-After")
+                .flatMap(TimeInterval.init)
+            // 1s → 2s → 4s, capped; server hint (when present) wins.
+            let backoff = min(serverHint ?? pow(2, Double(attempt)), 15)
+            try await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+            attempt += 1
+        }
+    }
+
 
     // MARK: - Tasks
 
@@ -42,7 +81,7 @@ final class ClickUpService {
         ]
         var req = URLRequest(url: comps.url!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         return parseTasks(data)
     }
 
@@ -56,37 +95,56 @@ final class ClickUpService {
         // tasks per response. Without walking the pages, lists
         // bigger than 100 silently truncate — Listas / Copy with
         // ~100 tasks was hitting exactly this and dropping tasks
-        // that lived on page 2. Now we loop until a page comes
-        // back short of 100 (last page) or `maxPages` is reached.
+        // that lived on page 2. (`subtasks=true` and
+        // `include_markdown_description` rationale lives in
+        // `listTasksPage`, which builds the actual request.)
         // 10 pages = 1000 tasks is generous; the cap just bounds
         // a pathological list size.
-        var all: [CUTask] = []
-        for page in 0..<maxPages {
-            var comps = URLComponents(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))/task")!
-            comps.queryItems = [
-                URLQueryItem(name: "include_closed", value: "true"),
-                // `subtasks=true` makes ClickUp include child tasks in
-                // the response (each with its `parent` field set to
-                // the parent task's id). The app filters them out of
-                // the top-level list view and only surfaces them
-                // under the parent's detail popup.
-                URLQueryItem(name: "subtasks",       value: "true"),
-                // `markdown_description` opt-in: ClickUp's plain
-                // `description` / `text_content` fields silently drop
-                // inline file references (Google Drive embeds,
-                // pasted-as-link attachments). The markdown version
-                // includes them as `[label](url)` so the renderer can
-                // surface them. parseTasks falls back to the plain
-                // field when markdown_description isn't returned.
-                URLQueryItem(name: "include_markdown_description", value: "true"),
-                URLQueryItem(name: "page",           value: String(page)),
-            ]
-            var req = URLRequest(url: comps.url!)
-            req.setValue(token, forHTTPHeaderField: "Authorization")
-            let (data, _) = try await URLSession.shared.data(for: req)
-            let pageTasks = parseTasks(data)
-            all += pageTasks
-            if pageTasks.count < 100 { break }      // last page
+        //
+        // PERF: pages after the first are fetched in PARALLEL
+        // batches of 3 — a 900-task list used to cost 9 serial
+        // round-trips (~4-5s of pure latency on every sync); now
+        // it's ~4 round-trip windows. Page order is preserved on
+        // assembly. The only waste is ≤2 empty fetches when the
+        // last page falls mid-batch.
+        _ = token  // keep the notConfigured guard above meaningful
+        return try await Self.paginated(maxPages: maxPages) { page in
+            try await self.listTasksPage(listId: listId, page: page)
+        }
+    }
+
+    /// Shared batched-parallel pagination walker. Fetches page 0
+    /// first (most lists fit in one page — no speculative cost),
+    /// then walks the remainder in concurrent batches of 3 until
+    /// a short page (<100) or `maxPages`. Results are stitched in
+    /// page order. Internal (not private) so the assembly-order
+    /// invariant is unit-testable with a fake `fetchPage`.
+    static func paginated(
+        maxPages: Int,
+        batchSize: Int = 3,
+        fetchPage: @escaping (Int) async throws -> [CUTask]
+    ) async throws -> [CUTask] {
+        var all = try await fetchPage(0)
+        if all.count < 100 || maxPages <= 1 { return all }
+
+        var nextPage = 1
+        while nextPage < maxPages {
+            let batch = Array(nextPage..<min(nextPage + batchSize, maxPages))
+            var byPage: [Int: [CUTask]] = [:]
+            try await withThrowingTaskGroup(of: (Int, [CUTask]).self) { group in
+                for p in batch {
+                    group.addTask { (p, try await fetchPage(p)) }
+                }
+                for try await (p, pageTasks) in group { byPage[p] = pageTasks }
+            }
+            var reachedEnd = false
+            for p in batch {
+                let pageTasks = byPage[p] ?? []
+                all += pageTasks
+                if pageTasks.count < 100 { reachedEnd = true; break }
+            }
+            if reachedEnd { break }
+            nextPage += batch.count
         }
         return all
     }
@@ -123,38 +181,22 @@ final class ClickUpService {
         ]
         var req = URLRequest(url: comps.url!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         return parseTasks(data)
     }
 
     func listMyTasks(workspaceId: String,
                      userId: Int,
                      maxPages: Int = 5) async throws -> [CUTask] {
-        guard let token else { throw CUError.notConfigured }
-        var all: [CUTask] = []
-        for page in 0..<maxPages {
-            var comps = URLComponents(string:
-                "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/task")!
-            comps.queryItems = [
-                URLQueryItem(name: "assignees[]",   value: String(userId)),
-                URLQueryItem(name: "include_closed", value: "true"),
-                URLQueryItem(name: "subtasks",       value: "true"),
-                URLQueryItem(name: "include_markdown_description", value: "true"),
-                URLQueryItem(name: "page",           value: String(page)),
-                // Newest-updated first so the most relevant work
-                // is at the top before Apollo's own grouping.
-                URLQueryItem(name: "order_by",       value: "updated"),
-            ]
-            var req = URLRequest(url: comps.url!)
-            req.setValue(token, forHTTPHeaderField: "Authorization")
-            let (data, _) = try await URLSession.shared.data(for: req)
-            let pageTasks = parseTasks(data)
-            all += pageTasks
-            // ClickUp's team endpoint pages at 100. A short page
-            // means we've reached the end.
-            if pageTasks.count < 100 { break }
+        guard token != nil else { throw CUError.notConfigured }
+        // Same batched-parallel walk as `listTasks` — page 0
+        // first, then concurrent batches. Request shape lives in
+        // `listMyTasksPage`.
+        return try await Self.paginated(maxPages: maxPages) { page in
+            try await self.listMyTasksPage(workspaceId: workspaceId,
+                                           userId: userId,
+                                           page: page)
         }
-        return all
     }
 
     func createTask(
@@ -190,7 +232,7 @@ final class ClickUpService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let task = parseTasks(data, single: true).first else { throw CUError.parse }
         return task
     }
@@ -238,7 +280,7 @@ final class ClickUpService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard var task = parseTasks(data, single: true).first else { throw CUError.parse }
         // Belt-and-suspenders: ClickUp sometimes echoes back
         // the parent only on subsequent fetches, so fill it in
@@ -270,7 +312,7 @@ final class ClickUpService {
         ]
         var req = URLRequest(url: comps.url!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let task = parseTasks(data, single: true).first else {
             throw CUError.parse
         }
@@ -301,7 +343,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (_, response) = try await URLSession.shared.data(for: req)
+        let (_, response) = try await Self.data(retrying: req)
         if let http = response as? HTTPURLResponse,
            !(200..<300).contains(http.statusCode) {
             throw CUError.parse
@@ -336,7 +378,7 @@ final class ClickUpService {
         )!)
         req.httpMethod = "POST"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (_, response) = try await URLSession.shared.data(for: req)
+        let (_, response) = try await Self.data(retrying: req)
         if let http = response as? HTTPURLResponse,
            !(200..<300).contains(http.statusCode) {
             throw CUError.parse
@@ -354,7 +396,7 @@ final class ClickUpService {
         )!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (_, response) = try await URLSession.shared.data(for: req)
+        let (_, response) = try await Self.data(retrying: req)
         if let http = response as? HTTPURLResponse,
            !(200..<300).contains(http.statusCode) {
             throw CUError.parse
@@ -371,7 +413,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))?include_subtasks=false&custom_task_ids=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return [] }
 
@@ -390,7 +432,7 @@ final class ClickUpService {
         // Try the dedicated activity endpoint.
         var actReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/history")!)
         actReq.setValue(token, forHTTPHeaderField: "Authorization")
-        if let (actData, _) = try? await URLSession.shared.data(for: actReq),
+        if let (actData, _) = try? await Self.data(retrying: actReq),
            let actJson = try? JSONSerialization.jsonObject(with: actData) as? [String: Any],
            let items = actJson["history_items"] as? [[String: Any]] {
             // One-shot ground-truth dump so the activity-timeline
@@ -445,7 +487,7 @@ final class ClickUpService {
         //    so we always have a "task created" anchor.
         var taskReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))?include_subtasks=false&custom_task_ids=false")!)
         taskReq.setValue(token, forHTTPHeaderField: "Authorization")
-        let (taskData, _) = try await URLSession.shared.data(for: taskReq)
+        let (taskData, _) = try await Self.data(retrying: taskReq)
         let taskJson = (try? JSONSerialization.jsonObject(with: taskData)) as? [String: Any]
 
         var events: [TaskActivityEvent] = []
@@ -501,7 +543,7 @@ final class ClickUpService {
         //    client like ours can't reach it.
         var actReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/history")!)
         actReq.setValue(token, forHTTPHeaderField: "Authorization")
-        if let (actData, _) = try? await URLSession.shared.data(for: actReq),
+        if let (actData, _) = try? await Self.data(retrying: actReq),
            let actJson = try? JSONSerialization.jsonObject(with: actData) as? [String: Any],
            let items = actJson["history_items"] as? [[String: Any]] {
             events.append(contentsOf: items.compactMap(Self.parseActivityItem))
@@ -795,7 +837,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/time")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let items = json["data"] as? [[String: Any]]
         else { return [] }
@@ -847,7 +889,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/tag/\(encoded)")!)
         req.httpMethod = "POST"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await Self.data(retrying: req)
     }
 
     func removeTaskTag(id: String, tag: String) async throws {
@@ -856,7 +898,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/tag/\(encoded)")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await Self.data(retrying: req)
     }
 
     // MARK: - Comments
@@ -865,7 +907,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(taskId))/comment")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         return parseComments(data)
     }
 
@@ -944,7 +986,7 @@ final class ClickUpService {
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         // The POST response carries id/date but not the full user object, so
         // re-fetch for the canonical record. ClickUp's read lags a beat, so if
         // the re-fetch misses, fall back to a minimal record built from the POST
@@ -977,7 +1019,7 @@ final class ClickUpService {
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String
     }
 
@@ -1087,7 +1129,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await Self.data(retrying: req)
     }
 
     // MARK: - Reactions
@@ -1099,7 +1141,7 @@ final class ClickUpService {
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["reaction": emoji])
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await Self.data(retrying: req)
     }
 
     func removeCommentReaction(commentId: String, emoji: String) async throws {
@@ -1108,7 +1150,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))/reaction/\(encoded)")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await Self.data(retrying: req)
     }
 
     // MARK: - Threaded replies
@@ -1117,7 +1159,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))/reply")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         return parseComments(data)
     }
 
@@ -1143,7 +1185,7 @@ final class ClickUpService {
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String
     }
 
@@ -1154,7 +1196,7 @@ final class ClickUpService {
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let cid = json["id"] as? String {
             let replies = try await getCommentReplies(commentId: commentId)
@@ -1420,7 +1462,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/team")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
 
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let teams = json["teams"] as? [[String: Any]],
               let team  = teams.first,
@@ -1443,21 +1485,49 @@ final class ClickUpService {
 
     // MARK: - Space tags (for tag picker)
 
+    /// list → space resolution cache. A list's space NEVER
+    /// changes, yet `getSpaceTags` re-resolved it with an extra
+    /// `/list/{id}` request on every sync — duplicating the very
+    /// fetch `getListStatuses` makes in the same cycle. One
+    /// round-trip per list per app launch is enough.
+    private static var spaceIdByListId: [String: String] = [:]
+    private static let spaceIdLock = NSLock()
+
+    /// Synchronous accessors so the lock isn't taken directly
+    /// inside an async function (NSLock.lock is flagged
+    /// unavailable-from-async; the critical section here is a
+    /// dictionary read/write — microseconds, no await inside).
+    private static func cachedSpaceId(for listId: String) -> String? {
+        spaceIdLock.lock(); defer { spaceIdLock.unlock() }
+        return spaceIdByListId[listId]
+    }
+    private static func storeSpaceId(_ spaceId: String, for listId: String) {
+        spaceIdLock.lock(); defer { spaceIdLock.unlock() }
+        spaceIdByListId[listId] = spaceId
+    }
+
     func getSpaceTags() async throws -> [CUTask.Tag] {
         guard let token, let listId else { throw CUError.notConfigured }
 
-        // 1) Resolve list → space ID
-        var listReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))")!)
-        listReq.setValue(token, forHTTPHeaderField: "Authorization")
-        let (listData, _) = try await URLSession.shared.data(for: listReq)
-        guard let listJson = try? JSONSerialization.jsonObject(with: listData) as? [String: Any],
-              let space    = listJson["space"] as? [String: Any],
-              let spaceId  = space["id"] as? String else { throw CUError.parse }
+        // 1) Resolve list → space ID (cached after first hit)
+        let spaceId: String
+        if let cached = Self.cachedSpaceId(for: listId) {
+            spaceId = cached
+        } else {
+            var listReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))")!)
+            listReq.setValue(token, forHTTPHeaderField: "Authorization")
+            let (listData, _) = try await Self.data(retrying: listReq)
+            guard let listJson = try? JSONSerialization.jsonObject(with: listData) as? [String: Any],
+                  let space    = listJson["space"] as? [String: Any],
+                  let resolved = space["id"] as? String else { throw CUError.parse }
+            Self.storeSpaceId(resolved, for: listId)
+            spaceId = resolved
+        }
 
         // 2) Fetch tags for that space
         var tagsReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(Self.cuPathSafe(spaceId))/tag")!)
         tagsReq.setValue(token, forHTTPHeaderField: "Authorization")
-        let (tagsData, _) = try await URLSession.shared.data(for: tagsReq)
+        let (tagsData, _) = try await Self.data(retrying: tagsReq)
         guard let json = try? JSONSerialization.jsonObject(with: tagsData) as? [String: Any],
               let raw  = json["tags"] as? [[String: Any]] else { return [] }
 
@@ -1479,7 +1549,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
 
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json     = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let statuses = json["statuses"] as? [[String: Any]] else { throw CUError.parse }
 
@@ -1499,7 +1569,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/team")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let teams = json["teams"] as? [[String: Any]] else { throw CUError.parse }
         return teams.compactMap { t in
@@ -1512,7 +1582,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/space?archived=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let spaces = json["spaces"] as? [[String: Any]] else { throw CUError.parse }
         return spaces.compactMap { s in
@@ -1532,7 +1602,7 @@ final class ClickUpService {
     private func fetchFolderlessLists(spaceId: String, token: String) async throws -> [CUList] {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(Self.cuPathSafe(spaceId))/list?archived=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let lists = json["lists"] as? [[String: Any]] else { return [] }
         return lists.compactMap { l in
@@ -1544,7 +1614,7 @@ final class ClickUpService {
     private func fetchFolderLists(spaceId: String, token: String) async throws -> [CUList] {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(Self.cuPathSafe(spaceId))/folder?archived=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json    = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let folders = json["folders"] as? [[String: Any]] else { return [] }
 
@@ -2005,7 +2075,7 @@ final class ClickUpService {
             "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/time_entries/current")!
         var req = URLRequest(url: url)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let d = json["data"] as? [String: Any],
               let task = d["task"] as? [String: Any],
@@ -2412,7 +2482,7 @@ final class ClickUpService {
     /// remains the legacy path until they're refactored.
     func sendClassified(_ req: URLRequest) async throws -> Data {
         do {
-            let (data, response) = try await URLSession.shared.data(for: req)
+            let (data, response) = try await Self.data(retrying: req)
             if let err = APIError.classify(response: response,
                                            data: data,
                                            thrown: nil) {
