@@ -166,6 +166,51 @@ private struct SwipeRegistration: NSViewRepresentable {
     }
 }
 
+// MARK: - Standalone swipe host (for SwiftUI LazyVStack lists)
+
+/// Hosts arbitrary SwiftUI content inside a `SwipeAwareHostingView`
+/// so the two-finger swipe works on pages that lay rows out with a
+/// plain SwiftUI `ScrollView`/`LazyVStack` (e.g. "Hoje", "Minhas
+/// Tarefas") instead of `NSCollectionListView`.
+///
+/// Why it's needed: `twoFingerSwipe` installs a `SwipeRegistrationProbe`
+/// that walks the NSView superview chain looking for a
+/// `SwipeAwareHosting` ancestor to wire its callbacks into. In the
+/// collection-view list every cell is hosted by a `SwipeAwareHostingView`,
+/// so the probe finds it. In a pure SwiftUI list there's no such
+/// ancestor — the whole scroll content shares one stock hosting view —
+/// so the callbacks were never connected and the swipe (plus its
+/// haptic) silently did nothing. Wrapping each cell in its own
+/// `SwipeAwareHostingView` restores the gesture.
+///
+/// Assumes FIXED-HEIGHT content (the task cell is single-line), so the
+/// row height comes straight from the hosting view's intrinsic size and
+/// doesn't depend on the proposed width. Pair with
+/// `.frame(maxWidth: .infinity)` at the call site so the host fills the
+/// column and the cell's own `maxWidth: .infinity` expands inside it.
+struct SwipeCellHost<Content: View>: NSViewRepresentable {
+    let content: Content
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+
+    func makeNSView(context: Context) -> SwipeAwareHostingView<Content> {
+        SwipeAwareHostingView(rootView: content)
+    }
+
+    func updateNSView(_ nsView: SwipeAwareHostingView<Content>, context: Context) {
+        nsView.rootView = content
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize,
+                      nsView: SwipeAwareHostingView<Content>,
+                      context: Context) -> CGSize? {
+        let intrinsic = nsView.intrinsicContentSize
+        let width  = proposal.width ?? intrinsic.width
+        let height = intrinsic.height > 0 ? intrinsic.height
+                                          : nsView.fittingSize.height
+        return CGSize(width: width, height: height)
+    }
+}
+
 extension View {
     /// Mail-style two-finger trackpad horizontal swipe. Unlike
     /// the previous wrapping container, this implementation

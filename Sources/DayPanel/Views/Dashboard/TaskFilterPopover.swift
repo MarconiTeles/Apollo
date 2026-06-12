@@ -606,10 +606,10 @@ struct TaskFilterPopover: View {
             .foregroundStyle(isActive ? c : Editorial.ink)
             .padding(.horizontal, 11)
             .padding(.vertical, 5)
-            .background(
-                isActive ? AnyShapeStyle(c.opacity(0.10)) : AnyShapeStyle(Editorial.page),
-                in: Capsule()
-            )
+            // Liquid Glass pill — tinted with the filter colour when
+            // active, neutral page glass at rest.
+            .liquidGlassCapsule(tint: isActive ? c : Editorial.page,
+                                tintOpacity: isActive ? 0.18 : 0.55)
             .overlay(
                 Capsule().strokeBorder(
                     isActive ? c : Editorial.rule,
@@ -619,6 +619,7 @@ struct TaskFilterPopover: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .glassHover()
     }
 
     private func chipAvatar(_ m: CUMember) -> some View {

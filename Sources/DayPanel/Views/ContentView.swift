@@ -1473,13 +1473,17 @@ struct ContentView: View {
                 .foregroundStyle(Color.white)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
-                .background(
-                    Capsule().fill(Editorial.accent)
-                )
+                // Liquid Glass material tinted with the cinnabar accent —
+                // interactive glass carries its own hover/press feedback.
+                .liquidGlassCapsule(tint: Editorial.accent, tintOpacity: 0.9)
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
             .help("Nova tarefa")
+            // Pull the CTA ~11pt closer to the separator: the gap was
+            // 18pt (HStack spacing 26 − the separator's −8 inset); −11
+            // brings it to ~7pt, a 60% reduction.
+            .padding(.leading, -11)
             .captureFrame($newTaskOrigin)
         }
         // Leading kept tight (14pt) so the Apollo brand mark sits
@@ -1585,8 +1589,9 @@ struct ContentView: View {
                 TimelineView(forwardOnly: true)
                     .frame(width: timelineW)
                 Rectangle()
-                    .fill(Editorial.rule)
+                    .fill(Editorial.rule.opacity(0.65))
                     .frame(width: 1)
+                    .edgeFadedVertical()
                 EditorialHomeTasksColumn()
                     .environmentObject(appState)
                     .frame(maxWidth: .infinity)
@@ -1632,8 +1637,9 @@ struct ContentView: View {
                 TimelineView(forwardOnly: skipsLegacyHeaderInsets)
                     .frame(width: timelineW)
                 Rectangle()
-                    .fill(Editorial.rule)
+                    .fill(Editorial.rule.opacity(0.65))
                     .frame(width: 1)
+                    .edgeFadedVertical()
                 TaskListView(skipsLegacyHeaderInsets: skipsLegacyHeaderInsets)
                     .frame(maxWidth: .infinity)
             }

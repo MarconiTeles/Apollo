@@ -76,8 +76,10 @@ enum Editorial {
 
     // ── Single accent — cinnabar (newsroom red), nudged brighter
     //    in dark so it keeps punching against the warm-black canvas.
-    static let accent     = Color(nsColor: .editorial(light: "#C7321B", dark: "#E04A2E"))
-    static let accentSoft = Color(nsColor: .editorial(light: "#C7321B", dark: "#E04A2E", lightAlpha: 0.10, darkAlpha: 0.18))
+    // Dark hex bumped 35% brighter (#E04A2E → #FF643E) so the cinnabar
+    // accent reads as vividly in dark mode as the status colours now do.
+    static let accent     = Color(nsColor: .editorial(light: "#C7321B", dark: "#FF643E"))
+    static let accentSoft = Color(nsColor: .editorial(light: "#C7321B", dark: "#FF643E", lightAlpha: 0.10, darkAlpha: 0.18))
 
     /// Status colors — used ONLY as dots + caption text, never
     /// as a filled pill (that's the whole point of the redesign).
@@ -287,10 +289,12 @@ struct PaperButtonStyle: ButtonStyle {
             .foregroundStyle(active ? Editorial.page : Editorial.ink)
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(active ? Editorial.ink : Editorial.page)
-            )
+            // Liquid Glass material — ink-tinted for the primary
+            // (active) action, neutral page glass for the secondary.
+            .liquidGlass(in: RoundedRectangle(cornerRadius: 4,
+                                              style: .continuous),
+                         tint: active ? Editorial.ink : Editorial.page,
+                         tintOpacity: active ? 0.85 : 0.55)
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
                     .strokeBorder(active ? Editorial.ink : Editorial.rule,
@@ -389,6 +393,38 @@ struct KbdTB: View {
             .padding(.vertical, 1)
             .background(RoundedRectangle(cornerRadius: 3).fill(Editorial.rule))
             .padding(.leading, 4)
+    }
+}
+
+extension View {
+    /// Masks a HORIZONTAL rule so its left/right ends dissolve softly
+    /// (clear → opaque → clear) instead of terminating in a hard tip.
+    /// Same edge fade used by the task/event row dividers and hover glow.
+    func edgeFadedHorizontal() -> some View {
+        mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.0),
+                    .init(color: .black, location: 0.06),
+                    .init(color: .black, location: 0.94),
+                    .init(color: .clear, location: 1.0),
+                ],
+                startPoint: .leading, endPoint: .trailing)
+        )
+    }
+
+    /// Masks a VERTICAL rule so its top/bottom ends dissolve softly.
+    func edgeFadedVertical() -> some View {
+        mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.0),
+                    .init(color: .black, location: 0.06),
+                    .init(color: .black, location: 0.94),
+                    .init(color: .clear, location: 1.0),
+                ],
+                startPoint: .top, endPoint: .bottom)
+        )
     }
 }
 

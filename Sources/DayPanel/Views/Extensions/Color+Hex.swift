@@ -326,12 +326,30 @@ extension NSColor {
             let isDark =
                 appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             guard isDark else { return base }
+            // Dark mode: 35% brighter than the authored hue (RGB ×1.35,
+            // clamped) so the muted ClickUp status colours don't read as
+            // murky smudges over the charcoal canvas. A brightness floor
+            // lifts very dark hues (slate/backlog) enough to stay legible.
+            let bright = base.brightened(by: 1.35)
             var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-            base.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
-            let nb = min(1.0, max(b + 0.26, 0.74))   // brighter, with a floor
-            let ns = min(1.0, max(s, 0.60))          // keep it vivid
-            return NSColor(hue: h, saturation: ns, brightness: nb, alpha: a)
+            (bright.usingColorSpace(.sRGB) ?? bright)
+                .getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+            if b < 0.62 {
+                return NSColor(hue: h, saturation: s, brightness: 0.62, alpha: a)
+            }
+            return bright
         }
+    }
+
+    /// Scales each RGB channel by `factor` (clamped to 1.0), preserving
+    /// alpha — a simple, hue-stable "N% brighter". Used for the dark-mode
+    /// status + accent brightening.
+    func brightened(by factor: CGFloat) -> NSColor {
+        guard let c = usingColorSpace(.sRGB) else { return self }
+        return NSColor(srgbRed: min(1.0, c.redComponent   * factor),
+                       green:   min(1.0, c.greenComponent * factor),
+                       blue:    min(1.0, c.blueComponent  * factor),
+                       alpha:   c.alphaComponent)
     }
 }
 

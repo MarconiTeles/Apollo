@@ -794,16 +794,58 @@ struct AgendaEventCard: View, Equatable {
             // hover wash + top rule bleed 8pt into the gutter on
             // each side while the content stays at the column
             // edge (background/overlay extended, not the content).
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(hover ? Editorial.card : Color.clear)
-                    .padding(.horizontal, -8)
-            )
             .overlay(alignment: .top) {
-                Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+                // Event divider — 35% lower opacity, masked so it fades
+                // out toward the lateral edges (same edge fade as the
+                // hover glow) instead of ending in a hard vertical cut.
+                Rectangle().fill(Editorial.ruleSoft.opacity(0.65))
+                    .frame(height: 1)
                     .padding(.horizontal, -8)
+                    .mask(eventGlowEdgeFade)
+            }
+            // Hover lift — the SAME top/bottom status-tinted glow the
+            // task rows use, here tinted with the event's calendar
+            // accent (`color`, the same hue as the attendee avatar disc
+            // on the right). No light fill: the glow alone signals hover.
+            // Each strip is masked horizontally so it fades out toward
+            // the lateral edges instead of ending in a hard vertical cut.
+            //
+            // The strips sit just OUTSIDE the card (`.offset(y: ±5)`),
+            // with the dense colour hugging the card's perimeter divider
+            // line and fading AWAY from the card — identical to the task
+            // rows (not bleeding INTO the content, which read as
+            // "inverted"). Within a day the events live in a `VStack`
+            // (one List row), so these out-of-bounds strips stay inside
+            // the day-section frame; `.zIndex(hover ? 1 : 0)` below lifts
+            // the hovered card above its siblings so neither strip is
+            // occluded by the adjacent card.
+            .overlay(alignment: .top) {
+                if hover {
+                    LinearGradient(colors: [.clear, color.opacity(0.45)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 5)
+                        .padding(.horizontal, -8)
+                        .mask(eventGlowEdgeFade)
+                        .offset(y: -5)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if hover {
+                    LinearGradient(colors: [color.opacity(0.45), .clear],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 5)
+                        .padding(.horizontal, -8)
+                        .mask(eventGlowEdgeFade)
+                        .offset(y: 5)
+                        .allowsHitTesting(false)
+                }
             }
             .contentShape(Rectangle())
+            // Lift the hovered card above its VStack siblings so its
+            // out-of-bounds glow strips draw OVER the adjacent cards
+            // instead of being occluded by them.
+            .zIndex(hover ? 1 : 0)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -820,12 +862,21 @@ struct AgendaEventCard: View, Equatable {
         // overlay rather than SwiftUI `.contextMenu`. The host
         // List would otherwise show its row-selection highlight
         // (blue rectangle around the WHOLE day section) on
-        // right-click; the AppKit overlay intercepts the right-
+        // right-click; the AppKit catcher intercepts the right-
         // click before the List sees it, so no row selection
         // is triggered. Left-clicks pass through untouched (the
-        // overlay's `hitTest` returns nil unless a right button
+        // catcher's `hitTest` returns nil unless a right button
         // is currently pressed).
-        .background(
+        //
+        // Mounted as an `.overlay` (in FRONT of the event Button),
+        // not `.background`: as a background it sat BEHIND the
+        // Button's hosting view, which won the hit-test for the
+        // right-click so `rightMouseDown` never reached the catcher
+        // and the menu silently never opened. In front, the catcher
+        // wins right-clicks (its hitTest returns self only while the
+        // secondary button is down) while still passing every
+        // left-click through to the Button below.
+        .overlay(
             EventRightClickCatcher { buildContextMenu() }
                 .allowsHitTesting(true)
         )
@@ -838,51 +889,34 @@ struct AgendaEventCard: View, Equatable {
         let m = NSMenu()
         m.autoenablesItems = false
 
-        let openItem = NSMenuItem(title: "Abrir evento",
-                                  action: nil, keyEquivalent: "")
-        openItem.image = NSImage(systemSymbolName: "doc.text.magnifyingglass",
-                                 accessibilityDescription: nil)
-        openItem.target = MenuActionTarget.shared
-        openItem.action = #selector(MenuActionTarget.perform(_:))
-        openItem.representedObject = { [event] in onTap(event) } as MenuAction
-        m.addItem(openItem)
+        func item(_ title: String, _ symbol: String,
+                  _ action: @escaping () -> Void) -> NSMenuItem {
+            let it = NSMenuItem(title: title, action: #selector(MenuActionBox.invoke),
+                                keyEquivalent: "")
+            it.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            let box = MenuActionBox(action)
+            it.target = box               // weak — retained by representedObject below
+            it.representedObject = box
+            return it
+        }
+
+        m.addItem(item("Abrir evento", "doc.text.magnifyingglass") { [event] in onTap(event) })
 
         let hasLink = event.meetingURL != nil
             || !(event.location ?? "").isEmpty
         if let onCopyLink, hasLink {
-            let copy = NSMenuItem(title: "Copiar link",
-                                  action: nil, keyEquivalent: "")
-            copy.image = NSImage(systemSymbolName: "link",
-                                 accessibilityDescription: nil)
-            copy.target = MenuActionTarget.shared
-            copy.action = #selector(MenuActionTarget.perform(_:))
-            copy.representedObject = { [event] in onCopyLink(event) } as MenuAction
-            m.addItem(copy)
+            m.addItem(item("Copiar link", "link") { [event] in onCopyLink(event) })
         }
 
         m.addItem(.separator())
 
         if let onConvert {
-            let conv = NSMenuItem(title: "Transformar em tarefa",
-                                  action: nil, keyEquivalent: "")
-            conv.image = NSImage(systemSymbolName: "arrow.2.squarepath",
-                                 accessibilityDescription: nil)
-            conv.target = MenuActionTarget.shared
-            conv.action = #selector(MenuActionTarget.perform(_:))
-            conv.representedObject = { [event] in onConvert(event) } as MenuAction
-            m.addItem(conv)
+            m.addItem(item("Transformar em tarefa", "arrow.2.squarepath") { [event] in onConvert(event) })
         }
 
         if let onDelete {
             m.addItem(.separator())
-            let del = NSMenuItem(title: "Excluir evento",
-                                 action: nil, keyEquivalent: "")
-            del.image = NSImage(systemSymbolName: "trash",
-                                accessibilityDescription: nil)
-            del.target = MenuActionTarget.shared
-            del.action = #selector(MenuActionTarget.perform(_:))
-            del.representedObject = { [event] in onDelete(event) } as MenuAction
-            m.addItem(del)
+            m.addItem(item("Excluir evento", "trash") { [event] in onDelete(event) })
         }
         return m
     }
@@ -915,6 +949,20 @@ struct AgendaEventCard: View, Equatable {
                 .foregroundColor(Editorial.inkSoft)
         }
         return t
+    }
+
+    /// Horizontal mask for the hover glow strips: transparent at
+    /// both ends, opaque through the middle, so the accent glow
+    /// dissolves toward the lateral edges instead of cutting off.
+    private var eventGlowEdgeFade: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .clear, location: 0.0),
+                .init(color: .black, location: 0.10),
+                .init(color: .black, location: 0.90),
+                .init(color: .clear, location: 1.0),
+            ],
+            startPoint: .leading, endPoint: .trailing)
     }
 
     /// Colour disc with a letter. Confirmed (RSVP accepted, or
@@ -1007,18 +1055,26 @@ private struct CompactLabelStyle: LabelStyle {
 // pressed), so the SwiftUI Button below still receives normal
 // taps untouched.
 
-/// A closure stored in an NSMenuItem's `representedObject`.
-/// Retained boxed by reference inside the target's `perform`.
-typealias MenuAction = () -> Void
-
-/// Single shared @objc target used as the action receiver for
-/// every dynamically-built NSMenuItem. Reads the item's
-/// `representedObject` (the closure) and invokes it.
-final class MenuActionTarget: NSObject {
-    static let shared = MenuActionTarget()
-    @objc func perform(_ sender: NSMenuItem) {
-        (sender.representedObject as? MenuAction)?()
-    }
+/// Reference box for a closure stored in an NSMenuItem's
+/// `representedObject`.
+///
+/// BUGFIX: previously the closure was stored as a bare `() -> Void`
+/// (`typealias MenuAction`). `representedObject` is `Any?` bridged to
+/// the Objective-C `id` runtime, and a bare Swift function value does
+/// NOT round-trip through that bridge — reading it back with
+/// `as? () -> Void` returned `nil`, so every event context-menu item
+/// silently did nothing. Wrapping the closure in an `NSObject`
+/// subclass stores a real Objective-C object, which round-trips
+/// reliably and fires the action.
+final class MenuActionBox: NSObject {
+    let run: () -> Void
+    init(_ run: @escaping () -> Void) { self.run = run }
+    /// The menu item's `action`. Unambiguous `@objc` selector, and the
+    /// box is its OWN target — so there's no shared receiver and no
+    /// `representedObject`-bridging round-trip to fail. (The item also
+    /// keeps a STRONG ref to the box via `representedObject` because
+    /// `NSMenuItem.target` is `weak`.)
+    @objc func invoke() { run() }
 }
 
 struct EventRightClickCatcher: NSViewRepresentable {

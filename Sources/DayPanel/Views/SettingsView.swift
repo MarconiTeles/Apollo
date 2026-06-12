@@ -2072,8 +2072,9 @@ struct CUListPickerSheet: View {
                     .font(Editorial.sans(12.5, .medium))
                     .foregroundStyle(Editorial.ink)
                     .padding(.horizontal, 14).padding(.vertical, 7)
-                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(Editorial.page))
+                    .liquidGlass(in: RoundedRectangle(cornerRadius: 4,
+                                                      style: .continuous),
+                                 tint: Editorial.page, tintOpacity: 0.6)
                     .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .strokeBorder(Editorial.rule, lineWidth: 1))
             }
@@ -2338,11 +2339,11 @@ struct CUListPickerSheet: View {
                                 .foregroundStyle(sel ? Editorial.accent : Editorial.ink)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 5)
-                                .background(
-                                    Capsule().fill(sel
-                                        ? Editorial.accent.opacity(0.10)
-                                        : Editorial.page)
-                                )
+                                // Liquid Glass pill — accent-tinted when
+                                // selected, neutral page glass at rest.
+                                .liquidGlassCapsule(
+                                    tint: sel ? Editorial.accent : Editorial.page,
+                                    tintOpacity: sel ? 0.16 : 0.55)
                                 .overlay(
                                     Capsule().strokeBorder(
                                         sel ? Editorial.accent : Editorial.rule,
@@ -2352,6 +2353,7 @@ struct CUListPickerSheet: View {
                             }
                             .buttonStyle(.plain)
                             .focusEffectDisabled()
+                            .glassHover()
                         }
                     }
                     .padding(.horizontal, 20)

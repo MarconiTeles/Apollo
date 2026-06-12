@@ -452,13 +452,13 @@ private struct SidebarNavRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("↳")
                     .font(Editorial.serif(14).italic())
-                    .foregroundStyle(disabled ? Editorial.inkFaint : Editorial.accent)
+                    .foregroundStyle(disabled ? Editorial.inkFaint : Editorial.inkSoft)
                     .opacity(isActive && !disabled ? 1 : 0)
                     .frame(width: 8, alignment: .leading)
                 if mark {
                     Text("✦")
                         .font(Editorial.serif(13))
-                        .foregroundStyle(disabled ? Editorial.inkFaint : Editorial.accent)
+                        .foregroundStyle(disabled ? Editorial.inkFaint : Editorial.inkSoft)
                 }
                 Text(label)
                     .font(italic
@@ -467,7 +467,7 @@ private struct SidebarNavRow: View {
                     .tracking(-0.05)
                     .foregroundStyle(disabled
                                      ? Editorial.inkFaint
-                                     : (isActive ? Editorial.accent : Editorial.ink))
+                                     : Editorial.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
@@ -476,7 +476,7 @@ private struct SidebarNavRow: View {
                         .font(Editorial.sans(11, .medium))
                         .foregroundStyle(disabled
                                          ? Editorial.inkFaint
-                                         : (isActive ? Editorial.accent : Editorial.inkMute))
+                                         : (isActive ? Editorial.ink : Editorial.inkMute))
                         .monospacedDigit()
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
@@ -484,12 +484,19 @@ private struct SidebarNavRow: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
+            // Hover wash (non-active rows only).
             .background(
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(hover && !isActive && !disabled
                           ? Editorial.ink.opacity(0.03)
                           : Color.clear)
             )
+            // Selected → red (accent) Liquid Glass pill. The LABEL text
+            // stays neutral ink — only the pill carries the colour.
+            .liquidGlassSelected(isActive && !disabled,
+                                 in: RoundedRectangle(cornerRadius: 6,
+                                                      style: .continuous),
+                                 tint: Editorial.accent)
         }
         .buttonStyle(.plain)
         .disabled(disabled)
@@ -530,12 +537,18 @@ private struct SidebarDotRow: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
+            // Hover wash (non-active rows only).
             .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(isActive ? Editorial.accent.opacity(0.10)
-                          : hover ? Editorial.ink.opacity(0.03)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(!isActive && hover ? Editorial.ink.opacity(0.03)
                           : Color.clear)
             )
+            // Selected list → red (accent) Liquid Glass pill. The LABEL
+            // text stays neutral ink — only the pill carries the colour.
+            .liquidGlassSelected(isActive,
+                                 in: RoundedRectangle(cornerRadius: 6,
+                                                      style: .continuous),
+                                 tint: Editorial.accent)
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }

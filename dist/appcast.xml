@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.7.10</title>
-      <pubDate>Sat, 30 May 2026 01:09:44 +0000</pubDate>
-      <sparkle:version>66</sparkle:version>
-      <sparkle:shortVersionString>1.7.10</sparkle:shortVersionString>
+      <title>Apollo 1.8.10</title>
+      <pubDate>Mon, 08 Jun 2026 21:31:16 +0000</pubDate>
+      <sparkle:version>78</sparkle:version>
+      <sparkle:shortVersionString>1.8.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Animações dos popups (Configurações, Tarefa, Evento, Apollo IA) unificadas. Drag-and-drop no Quadro mais robusto: tarefas não voltam mais ao status anterior. Skeleton no carregamento inicial das colunas do Quadro. Toast redundante no Quadro removido — alterações de status de outras pessoas continuam notificando normalmente.]]></description>
+      <description><![CDATA[Novo ícone do app.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.7.10/Apollo-1.7.10.zip"
-        sparkle:edSignature="LwgkEdCimG59aLIJ1C9+AGb4bEg5+jxW46NiVRUqGEFlj8XyZko6fs65CIOlanCSR6pDmM8JmiehQnM/qBmNBg=="
-        length="40704302"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.10/Apollo-1.8.10.zip"
+        sparkle:edSignature="0CVhmj/giyuHumnyuzFuxn3SB7ygkEBAVnI99Q2xRfPalIyjLmo3+QDHhavAQokPFVhtPhbTpUwo0a5K4UIABg=="
+        length="42230543"
         type="application/octet-stream" />
     </item>
   </channel>

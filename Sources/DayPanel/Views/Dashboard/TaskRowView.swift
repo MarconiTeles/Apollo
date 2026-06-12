@@ -52,6 +52,10 @@ struct TaskRowView: View, Equatable {
     @State private var showStatusMenu    = false
     @State private var dragOffset:    CGFloat = 0
     @State private var hoveringCheckbox  = false
+    /// True once a swipe has crossed the commit threshold — used to
+    /// fire a single "armed" haptic tick on the crossing (and reset
+    /// when the drag retreats back under the threshold).
+    @State private var swipeArmed        = false
     /// Row-level hover — drives the editorial background wash
     /// (transparent at rest → `Editorial.card` on hover). Replaced
     /// the old status-tinted glass card + glow feedback.
@@ -100,6 +104,86 @@ struct TaskRowView: View, Equatable {
     private var doneColor: Color {
         if let hex = doneTargetStatus?.displayHex { return Color(hex: hex) }
         return .blue
+    }
+
+    // MARK: - Dynamic hover-glow colour
+    //
+    // The top/bottom edge glow normally carries the task's CURRENT
+    // status colour. It cross-fades to a different hue while the user is
+    // interacting:
+    //   • hovering the DONE checkbox → the target status's accent
+    //     (the colour the task is about to move into);
+    //   • swiping right → the same status the DONE swipe-action reveals;
+    //   • swiping left  → the previous status the revert reveals.
+    // Driven by `glowSource` so a single value change animates the fade.
+
+    private enum GlowSource: Equatable { case status, doneHover, swipeRight, swipeLeft }
+
+    private var glowSource: GlowSource {
+        if dragOffset > 1 { return .swipeRight }
+        if dragOffset < -1 { return .swipeLeft }
+        if hoveringCheckbox && !task.isCompleted && !completing { return .doneHover }
+        return .status
+    }
+
+    private var glowColor: Color {
+        switch glowSource {
+        case .swipeRight:
+            return doneTargetStatus.map { Color(statusHex: $0.displayHex) } ?? doneColor
+        case .swipeLeft:
+            return previousStatus.map { Color(statusHex: $0.displayHex) }
+                ?? Color(hex: cachedStatusHex)
+        case .doneHover:
+            return doneColor
+        case .status:
+            return Color(hex: cachedStatusHex)
+        }
+    }
+
+    /// Glow strength ramps up with the swipe distance so the shadow
+    /// reacts to the gesture, then settles back to its resting strength.
+    private var glowOpacity: Double {
+        let base = 0.45
+        guard abs(dragOffset) > 1 else { return base }
+        let prog = min(1.0, abs(dragOffset) / 220.0)
+        return base + 0.30 * prog
+    }
+
+    /// The glow shows on row hover AND throughout a swipe (so its colour
+    /// transition is visible even during a two-finger trackpad swipe
+    /// where the cursor never enters the row).
+    private var glowVisible: Bool { rowHover || dragOffset != 0 }
+
+    /// How far the title + assignee slide RIGHT while the DONE
+    /// checkbox is hovered, so the expanding pill never overlaps
+    /// the labels. Previously a FIXED 66pt — fine for short
+    /// statuses ("DONE") but a wide label like "CANCELADO" grew
+    /// past 66pt and collided with the title. Now the shift is
+    /// measured from the pill's ACTUAL rendered width so it always
+    /// clears the pill regardless of the status name's length.
+    private var doneHoverOffset: CGFloat {
+        let label = (doneTargetStatus?.status ?? "DONE").uppercased()
+        // Mirror the pill's own metrics (see `donePillOverlay`):
+        // Editorial.sans(10, .semibold) text + 0.4pt tracking, a 6pt
+        // colour dot, 5pt HStack spacing, and 9pt horizontal padding
+        // each side.
+        let font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+        let textW = (label as NSString)
+            .size(withAttributes: [.font: font]).width
+        let tracking = CGFloat(label.count) * 0.4
+        let pillWidth = 6 + 5 + textW + tracking + 18
+        // +8pt breathing gap between the pill's trailing edge and
+        // the label's new leading edge.
+        return pillWidth + 8
+    }
+
+    /// Fire a trackpad haptic. Used for the DONE-checkbox hover
+    /// reveal and the swipe-action arm/commit so the cell's touch
+    /// interactions feel physical (Force Touch trackpads only — a
+    /// no-op on hardware without a haptic engine).
+    private func haptic(_ pattern: NSHapticFeedbackManager.FeedbackPattern) {
+        NSHapticFeedbackManager.defaultPerformer
+            .perform(pattern, performanceTime: .now)
     }
 
     /// Read-only accessor for the cached assignee first name.
@@ -281,18 +365,56 @@ struct TaskRowView: View, Equatable {
             // 4pt category-colour stripe on the leading edge for
             // the dashboard's NSCollectionListView path; this
             // SwiftUI fallback keeps the editorial baseline.
-            .background(rowHover ? Editorial.card : Color.clear)
+            // No hover fill wash — the top/bottom edge glow below is the only
+            // hover affordance now.
+            .background(Color.clear)
             .overlay(alignment: .bottom) {
-                Rectangle().fill(Editorial.rule).frame(height: 1)
+                // Row divider — 35% lower opacity, and masked with the
+                // same horizontal clear→opaque→clear gradient as the
+                // hover glow so the line fades out toward the lateral
+                // edges instead of ending in a hard vertical cut.
+                Rectangle().fill(Editorial.rule.opacity(0.65))
+                    .frame(height: 1)
+                    .mask(edgeFadeMask)
             }
             .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-            // Hover lift: a thin drop shadow tinted with the task's status
-            // accent (applied AFTER the clip so the halo isn't cropped).
-            .shadow(
-                color: rowHover ? Color(hex: cachedStatusHex).opacity(0.55) : .clear,
-                radius: rowHover ? 3 : 0, x: 0, y: 1
-            )
+            // Hover lift: a soft status-tinted glow on the TOP and BOTTOM edges
+            // ONLY (no lateral halo). Two gradient strips the width of the row,
+            // offset just outside it, read as a vertical-only shadow — a blur
+            // would spill sideways, which is exactly what we don't want here.
+            // Each strip is masked with a horizontal clear→opaque→clear gradient
+            // so the glow FADES OUT toward the left/right edges instead of being
+            // chopped off with a hard vertical edge.
+            .overlay(alignment: .top) {
+                if glowVisible {
+                    LinearGradient(colors: [.clear, glowColor.opacity(glowOpacity)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 5)
+                        .mask(edgeFadeMask)
+                        // `-dragOffset` cancels the parent's swipe
+                        // translation so the hover glow stays PINNED to
+                        // the row's resting position while the card
+                        // slides out from under it during a swipe.
+                        .offset(x: -dragOffset, y: -5)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if glowVisible {
+                    LinearGradient(colors: [glowColor.opacity(glowOpacity), .clear],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 5)
+                        .mask(edgeFadeMask)
+                        // See the top strip — keep the glow stationary
+                        // while the card swipes.
+                        .offset(x: -dragOffset, y: 5)
+                        .allowsHitTesting(false)
+                }
+            }
             .animation(.easeInOut(duration: 0.18), value: rowHover)
+            // Cross-fade the glow's HUE when the interaction source
+            // changes (resting status ⇄ DONE-hover accent ⇄ swipe status).
+            .animation(.easeInOut(duration: 0.22), value: glowSource)
             // PERF: outer `.clipShape(RoundedRectangle)` removed.
             // It forced an offscreen mask pass per cell (one of
             // CoreAnimation's more expensive ops) — and was
@@ -422,8 +544,18 @@ struct TaskRowView: View, Equatable {
                 // intent ("yes, I really want this action") and
                 // makes the snap-out at release feel earned.
                 dragOffset = delta
+                // Single haptic tick the instant the drag crosses the
+                // ±220pt commit threshold (and re-arms if it retreats),
+                // so the user feels the action "arm" before releasing —
+                // the macOS-trackpad analogue of an iOS swipe-action snap.
+                let armed = abs(delta) > 220
+                if armed != swipeArmed {
+                    swipeArmed = armed
+                    if armed { haptic(.levelChange) }
+                }
             },
             onEnd: { final in
+                swipeArmed = false
                 // Commit threshold: the user must drag the card
                 // almost completely off the visible row strip
                 // (≈220pt) before the action fires. Anything
@@ -505,12 +637,22 @@ struct TaskRowView: View, Equatable {
                     actionLabel(
                         icon:  "checkmark.circle.fill",
                         text:  target.status.uppercased(),
-                        color: .white
+                        // Status-coloured label (not white) so it stays
+                        // legible over the now-subtle 10% tinted fill.
+                        color: Color(statusHex: target.displayHex)
                     )
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(statusHex: target.displayHex).opacity(0.92))
+                // Status bg tint at 10% opacity (was 92%), masked with the
+                // same horizontal clear→opaque→clear gradient as the hover
+                // glow so the fill DISSOLVES toward the lateral edges
+                // instead of ending in a hard vertical cut. The label
+                // itself stays unmasked (only the colour fill fades).
+                .background(
+                    Color(statusHex: target.displayHex).opacity(0.1)
+                        .mask(edgeFadeMask)
+                )
                 .opacity(rightProgress)
             }
             if let prev = previousStatus {
@@ -521,11 +663,19 @@ struct TaskRowView: View, Equatable {
                     actionLabel(
                         icon:  "arrow.uturn.backward",
                         text:  prev.status.uppercased(),
-                        color: .white
+                        // Status-coloured label (not white) so it stays
+                        // legible over the now-subtle 10% tinted fill.
+                        color: Color(statusHex: prev.displayHex)
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(statusHex: prev.displayHex).opacity(0.92))
+                // Status bg tint at 10% opacity (was 92%), masked so the
+                // fill dissolves toward the lateral edges — same edge
+                // fade as the hover glow. Label stays unmasked.
+                .background(
+                    Color(statusHex: prev.displayHex).opacity(0.1)
+                        .mask(edgeFadeMask)
+                )
                 .opacity(leftProgress)
             }
         }
@@ -550,36 +700,14 @@ struct TaskRowView: View, Equatable {
     // MARK: - Compact row (collapsed state)
 
     private var compactRow: some View {
-        // The DONE pill is attached as `.overlay` on the row
-        // content. Overlays paint on top WITHOUT
-        // participating in the host's layout sizing — that's
-        // the structural guarantee that the pill's
-        // `.fixedSize()` intrinsic width cannot push the row
-        // card wider.
-        //
-        // The HStack inside the overlay positions the pill
-        // EXPLICITLY: a 14pt-wide `Color.clear` placeholder
-        // mirrors the row's outer `.padding(.leading, 14)`,
-        // pushing `donePillOverlay`'s leading edge to land
-        // exactly at the icon's leading edge. A trailing
-        // `Spacer` consumes the rest of the row's width.
-        // This is more robust than relying on
-        // `.overlay(alignment: .leading)` with
-        // `.padding(.leading, 14)` — the overlay system
-        // sometimes anchors the overlay's CENTER (not its
-        // leading edge) to the host's leading guide when the
-        // overlay's content uses `.fixedSize()`, producing
-        // the regression where the DOING pill stuck out
-        // past the row's left border.
+        // The DONE pill is now attached as an `.overlay` on the
+        // `checkboxButton` itself (see `compactRowContent`), so it tracks
+        // the checkbox's position EXACTLY — both horizontally (its leading
+        // edge lands on the icon) and vertically (centred on the checkbox,
+        // which is aligned to the first/title line). Overlays don't
+        // participate in layout, so the pill's `.fixedSize()` width still
+        // can't widen the row.
         compactRowContent
-            .overlay(alignment: .leading) {
-                HStack(spacing: 0) {
-                    Color.clear.frame(width: 14)
-                    donePillOverlay
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
     }
 
     /// The actual row content (icon + title VStack +
@@ -603,13 +731,22 @@ struct TaskRowView: View, Equatable {
             // sibling HStack — the title group's intrinsic height is
             // exactly the title's content height, so the stripe and
             // checkbox center on the title in both states.
-            HStack(alignment: .center, spacing: 8) {
+            // `.firstTextBaseline` aligns the DONE checkbox to the FIRST
+            // label line (the title) rather than the centre of the whole
+            // two-line block. Gap to the labels = 9.
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
                 // Status color used to live as a 3pt stripe here; it's
                 // now expressed as a coloured drop shadow on the whole
                 // row card (see `.shadow(...)` below) so the row reads
                 // as a "tinted card" instead of needing a vertical
                 // accent bar to communicate status.
+                //
+                // DONE pill attached as a leading overlay on the checkbox
+                // so it sits EXACTLY where the checkbox is — same vertical
+                // line as the title, same leading X — without the pill's
+                // intrinsic width affecting the row layout.
                 checkboxButton
+                    .overlay(alignment: .leading) { donePillOverlay }
 
                 // Spacing 8pt between title and meta row gives the
                 // title clear breathing room — at 3pt the meta pills
@@ -630,159 +767,59 @@ struct TaskRowView: View, Equatable {
                 // have received if the slot had grown to 80pt, but
                 // applied via padding instead of slot growth so
                 // the row card's outer dimensions stay invariant.
-                VStack(alignment: .leading, spacing: 1.44) {
-                    // Title slides RIGHT on DONE hover via
-                    // `.offset(x:)` — visual-only shift, doesn't
-                    // affect layout sizing. 66pt clears the DONE
-                    // pill's intrinsic width.
-                    titleView
-                        .offset(x: hoveringCheckbox && !task.isCompleted && !completing ? 66 : 0)
+                VStack(alignment: .leading, spacing: 6.728) {  // gap between the two label lines
+                    // LINE 1 — title + date/priority on the SAME row.
+                    // The title takes the flexible width and truncates with
+                    // "…" when long; the date/flag cluster keeps its
+                    // intrinsic size (`layoutPriority(1)`) and hugs the
+                    // trailing edge, so the TITLE compresses first.
+                    HStack(spacing: 8) {
+                        // Title slides RIGHT on DONE hover (`.offset(x:)`,
+                        // visual-only) to clear the revealed DONE pill.
+                        titleView
+                            .offset(x: hoveringCheckbox && !task.isCompleted && !completing && dragOffset == 0 ? doneHoverOffset : 0)
+                            .animation(.spring(response: 0.30, dampingFraction: 0.82),
+                                       value: hoveringCheckbox)
+
+                        HStack(spacing: 6) {
+                            // Priority flag left of the date so the date hugs
+                            // the row's trailing edge.
+                            priorityBadge
+                            if let due = task.dueDate {
+                                metaDateBadge(due: due)
+                            }
+                        }
+                        .fixedSize()
+                        .layoutPriority(1)
+                        // Hidden while the DONE pill is revealed so the
+                        // sliding title can't collide with it.
+                        .opacity(hoveringCheckbox && !task.isCompleted && !completing && dragOffset == 0 ? 0 : 1)
+                        .animation(.easeInOut(duration: 0.18), value: hoveringCheckbox)
+                    }
+
+                    // LINE 2 — assignee first name.
+                    Text(assigneeFirstName ?? "")
+                        .font(Editorial.serif(12.5).italic())
+                        .foregroundStyle(Editorial.inkSoft)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .opacity(hoveringCheckbox ? 0 : 1)
+                        .offset(x: hoveringCheckbox && !task.isCompleted && !completing && dragOffset == 0 ? doneHoverOffset : 0)
                         .animation(.spring(response: 0.30, dampingFraction: 0.82),
                                    value: hoveringCheckbox)
-
-                    // Fixed-width slots so variable content (status
-                    // name, due-date label) doesn't push the avatar /
-                    // date / priority around between rows.
-                    //
-                    // Always show the trailing meta cluster — the
-                    // inline-expand UX was removed, so there's no
-                    // alternate "expanded" view to swap to.
-                    do {
-                        // Tighter inter-cell spacing (4pt) for the
-                        // trailing cluster — at 8pt the assignee
-                        // name sat far from its avatar and the date
-                        // sat far from the priority flag, leaving
-                        // the "who/when" group feeling sparse.
-                        HStack(spacing: 4) {
-                            // Order swapped: status pill on the LEFT
-                            // (it's the row's primary state badge —
-                            // colored, eye-catching, deserves the
-                            // leading anchor that aligns with the
-                            // title above), assignee text follows
-                            // on the right as secondary metadata.
-                            // Status badge slides right with the
-                            // title on DONE hover.
-                            statusBadge
-                                .frame(width: 168, alignment: .leading)
-                                .offset(x: hoveringCheckbox && !task.isCompleted && !completing ? 66 : 0)
-                                .animation(.spring(response: 0.30, dampingFraction: 0.82),
-                                           value: hoveringCheckbox)
-
-                            // Assignee first name — sits to the RIGHT
-                            // of the status pill. Intrinsic width,
-                            // left-aligned so the name reads
-                            // naturally "STATUS · Marconi" left-to-
-                            // right. Slides with the status on DONE
-                            // hover so the pair stays visually
-                            // grouped.
-                            Text(assigneeFirstName ?? "")
-                                .font(Editorial.serif(12.5).italic())
-                                .foregroundStyle(Editorial.inkSoft)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .opacity(hoveringCheckbox ? 0 : 1)
-                                // Static -60pt shift — pulls "Marconi"
-                                // tight up against the status pill's
-                                // trailing edge. Iteratively widened
-                                // from the original -30: a single 35%
-                                // step left only consumed half the
-                                // visible gap, so this doubles it for
-                                // the cumulative "35% more left" pass.
-                                // `.offset` is composed (not replaced)
-                                // by the hover-slide offset below, so
-                                // both transforms stack cleanly.
-                                .offset(x: -60)
-                                .offset(x: hoveringCheckbox && !task.isCompleted && !completing ? 66 : 0)
-                                .animation(.spring(response: 0.30, dampingFraction: 0.82),
-                                           value: hoveringCheckbox)
-
-                            // Spacer pushes the trailing meta cluster
-                            // (assignee name, avatar, date, priority)
-                            // against the right edge of the card,
-                            // away from the status pill on the left.
-                            Spacer(minLength: 4)
-
-                            // Trailing meta cluster — the GROUP is
-                            // right-anchored against the row's
-                            // trailing edge, but every cell inside
-                            // is left-aligned within a fixed-width
-                            // slot. This keeps the leading edge of
-                            // each piece of info (assignee text,
-                            // avatar, date) consistent across rows
-                            // — natural reading direction — while
-                            // the cluster as a whole hugs the right
-                            // side of the card.
-                            //
-                            // Hidden while the DONE checkbox is in
-                            // its expanded "REVIEW" pill state — at
-                            // the minimum panel width (480pt) the
-                            // sum of fixed slots overflows the
-                            // available column once the checkbox
-                            // grows from 14pt to ~60pt, which would
-                            // otherwise stretch the entire card.
-                            // Yielding the assignee slot is enough
-                            // to keep the row width pinned.
-                            // ─────────────────────────────────────
-                            // Trailing meta cluster wrapped in its
-                            // own fixed-width container so the
-                            // avatar lands at the SAME absolute X
-                            // for every row. Previously each cell
-                            // had a fixed slot but the cluster as
-                            // a whole had no width lock — when one
-                            // row's date or priority rendered with
-                            // slightly different intrinsic content,
-                            // the Spacer above absorbed the diff
-                            // and the entire cluster (name + photo
-                            // included) drifted right or left,
-                            // visually misaligning across rows
-                            // with different assignees.
-                            //
-                            // Now: photo + name pinned to a 90pt
-                            // sub-block right-aligned to the
-                            // cluster's leading edge; date and
-                            // priority occupy their own fixed
-                            // slots after. Cluster total = 178pt,
-                            // independent of content.
-                            HStack(spacing: 4) {
-                                Group {
-                                    if let due = task.dueDate {
-                                        metaDateBadge(due: due)
-                                    }
-                                }
-                                .frame(width: 78, alignment: .leading)
-
-                                priorityBadge
-                            }
-                            // Right-anchor the cluster against the
-                            // FULL row width — without `maxWidth:
-                            // .infinity` here, the meta HStack's
-                            // width is dictated by the widest sibling
-                            // in the title VStack (the title text
-                            // itself), so rows with different title
-                            // lengths landed the cluster (and thus
-                            // the avatar) at different X positions.
-                            // Forcing infinity makes the meta row
-                            // always span the available width and
-                            // pins the cluster's trailing edge to a
-                            // single column.
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                        }
-                        .transition(.asymmetric(
-                            insertion: .opacity.combined(with: .offset(y: -8)),
-                            removal:   .opacity.combined(with: .offset(y: 8))
-                        ))
-                    }
                 }
                 // Nudges title + assignee/status row 10pt to the
                 // right (a small "10%" visual offset) so both
                 // labels share the same leading X and sit slightly
                 // inside the row instead of crowding the checkbox.
-                .padding(.leading, 10)
+                // 5 = 10 × 0.5 — halved alongside the checkbox↔labels gap.
+                .padding(.leading, 5)
 
                 Spacer(minLength: 0)
             }
-            .padding(.leading, 14)
+            // 22 = 34 × 0.65 — left padding before the DONE checkbox
+            // reduced 35%.
+            .padding(.leading, 22)
             .padding(.vertical, 14)
 
             // Trailing button column was removed: the row's tap
@@ -790,7 +827,9 @@ struct TaskRowView: View, Equatable {
             // expand button used to. With inline-expand gone,
             // there's only one detail-view path — the duplicate
             // affordance was just visual noise.
-            Spacer().frame(width: 14)
+            // 15pt trailing gutter — the date's anchored right edge
+            // sits 15pt in from the row's trailing edge.
+            Spacer().frame(width: 15)
         }
         // Tap anywhere on the row (outside the inner buttons)
         // opens the detail popup. Inline-expand was removed —
@@ -892,13 +931,14 @@ struct TaskRowView: View, Equatable {
             commitStatusChange(to: target, direction: 1)
         } label: {
             Image(systemName: checkIcon)
-                .font(.system(size: 14, weight: .regular))
+                // 10 = 14 × 0.7 — DONE checkbox shrunk 30%.
+                .font(.system(size: 10, weight: .regular))
                 .foregroundStyle(task.isCompleted
                                  ? Editorial.statusColor("complete")
                                  : Editorial.inkFaint)
                 .symbolEffect(.bounce, value: task.isCompleted)
-                .frame(width: 14, height: 14)
-                .opacity(hoveringCheckbox && !task.isCompleted && !completing ? 0 : 1)
+                .frame(width: 10, height: 10)
+                .opacity(hoveringCheckbox && !task.isCompleted && !completing && dragOffset == 0 ? 0 : 1)
                 .animation(.easeInOut(duration: 0.18),
                            value: hoveringCheckbox)
         }
@@ -920,6 +960,11 @@ struct TaskRowView: View, Equatable {
             if ScrollStateObserver.shared.isScrolling {
                 if hoveringCheckbox { hoveringCheckbox = false }
                 return
+            }
+            // Haptic tick on the rising edge of the hover (when the
+            // DONE pill reveals), not while merely staying hovered.
+            if hover, !hoveringCheckbox, !task.isCompleted, !completing {
+                haptic(.alignment)
             }
             hoveringCheckbox = hover
         }
@@ -947,7 +992,11 @@ struct TaskRowView: View, Equatable {
     /// traverses either the icon or the pill body.
     @ViewBuilder
     private var donePillOverlay: some View {
+        // `dragOffset == 0` gates the DONE pill OFF during a swipe —
+        // the reveal pill must not appear while the row is being
+        // dragged for a status change.
         let isHover = hoveringCheckbox && !task.isCompleted && !completing
+            && dragOffset == 0
         let pillColor = doneColor
         let pillLabel = (doneTargetStatus?.status ?? "DONE").uppercased()
         // PERF: the EXPENSIVE pill content (Text + Capsule.fill
@@ -986,9 +1035,18 @@ struct TaskRowView: View, Equatable {
                     }
                     .padding(.horizontal, 9)
                     .padding(.vertical, 4)
+                    // Liquid Glass material for the DONE-pill reveal,
+                    // tinted toward the target status colour. The status-
+                    // accent drop shadow stays (rendered under the glass)
+                    // so the pill still lifts + previews the destination.
                     .background(
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(Editorial.page))
+                            .fill(Color.clear)
+                            .shadow(color: pillColor.opacity(0.45),
+                                    radius: 5, x: 0, y: 2))
+                    .liquidGlass(in: RoundedRectangle(cornerRadius: 4,
+                                                      style: .continuous),
+                                 tint: pillColor, tintOpacity: 0.16)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)
                             .strokeBorder(Editorial.rule, lineWidth: 1))
@@ -1006,7 +1064,7 @@ struct TaskRowView: View, Equatable {
                     // the hover-area would disappear, defeating
                     // the cursor-transition guard the dual-onHover
                     // pattern was designed for.
-                    Color.clear.frame(width: 14, height: 22)
+                    Color.clear.frame(width: 10, height: 22)
                 }
             }
         }
@@ -1029,6 +1087,23 @@ struct TaskRowView: View, Equatable {
             }
             hoveringCheckbox = hover
         }
+    }
+
+    // MARK: - Hover glow edge fade
+
+    /// Horizontal mask for the top/bottom hover glow strips: fully
+    /// transparent at both ends, opaque through the middle, so the
+    /// status-tinted glow dissolves toward the lateral edges instead
+    /// of terminating in a hard vertical line.
+    private var edgeFadeMask: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .clear, location: 0.0),
+                .init(color: .black, location: 0.10),
+                .init(color: .black, location: 0.90),
+                .init(color: .clear, location: 1.0),
+            ],
+            startPoint: .leading, endPoint: .trailing)
     }
 
     // MARK: - Status badge with dropdown
@@ -1077,18 +1152,19 @@ struct TaskRowView: View, Equatable {
     // MARK: - Compact-row meta badges (date, priority)
 
     private func metaDateBadge(due: Date) -> some View {
+        // SINGLE LINE only — the previous two-line "atrasada" subtitle
+        // made overdue rows taller than on-time rows, so cell heights
+        // varied within a list. Overdue is now signalled purely by the
+        // accent-red date text (e.g. red "3 dias atrás"), keeping every
+        // cell exactly one line tall.
         let overdue = due < Date() && !task.isCompleted
-        return VStack(alignment: .leading, spacing: 1) {
-            Text(relativeDateText(for: due))
-                .font(Editorial.sans(12, .medium))
-                .foregroundStyle(overdue ? Editorial.accent : Editorial.inkSoft)
-                .monospacedDigit()
-            if overdue {
-                Text("atrasada")
-                    .font(Editorial.serif(10.5).italic())
-                    .foregroundStyle(Editorial.accent)
-            }
-        }
+        return Text(relativeDateText(for: due))
+            // 10 = 8 × 1.25 (+25% over the trimmed size); opacity 0.70.
+            .font(Editorial.sans(10, .medium))
+            .foregroundStyle(overdue ? Editorial.accent : Editorial.inkSoft)
+            .opacity(0.70)
+            .monospacedDigit()
+            .lineLimit(1)
     }
 
     private func relativeDateText(for date: Date) -> String {
@@ -1129,8 +1205,10 @@ struct TaskRowView: View, Equatable {
         Group {
             if task.priority > 0 {
                 Image(systemName: "flag.fill")
-                    .font(.system(size: 11, weight: .semibold))
+                    // 9 = 7 × 1.25 (+25% over the trimmed size); opacity 0.70.
+                    .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(Color(hex: task.priorityHex))
+                    .opacity(0.70)
             }
         }
         .frame(width: 14, height: 14, alignment: .center)

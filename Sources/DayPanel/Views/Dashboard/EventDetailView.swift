@@ -431,11 +431,10 @@ struct EventDetailView: View {
                 .foregroundStyle(isCurrent ? Editorial.page : Editorial.ink)
                 .padding(.horizontal, 13)
                 .padding(.vertical, 5)
-                .background(
-                    isCurrent ? AnyShapeStyle(Editorial.ink)
-                              : AnyShapeStyle(Editorial.page),
-                    in: Capsule()
-                )
+                // Liquid Glass pill — ink-tinted when selected, neutral
+                // page glass at rest.
+                .liquidGlassCapsule(tint: isCurrent ? Editorial.ink : Editorial.page,
+                                    tintOpacity: isCurrent ? 0.85 : 0.55)
                 .overlay(
                     Capsule().strokeBorder(
                         isCurrent ? Color.clear : Editorial.rule,
@@ -445,6 +444,7 @@ struct EventDetailView: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .glassHover()
         .animation(settle, value: isCurrent)
     }
 

@@ -133,9 +133,13 @@ struct NotificationsCenterView: View {
                 Text("Marcar lidas")
                     .font(Editorial.sans(12, .medium))
                     .foregroundStyle(appState.unreadNotifications == 0
-                                     ? Editorial.inkMute : Editorial.accent)
+                                     ? Editorial.inkMute : Editorial.ink)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .liquidGlassCapsule(tint: Editorial.ink, tintOpacity: 0.07)
             }
             .buttonStyle(.plain).focusEffectDisabled()
+            .glassHover()
             .disabled(appState.unreadNotifications == 0)
 
             Button { onClose() } label: {
@@ -177,9 +181,13 @@ struct NotificationsCenterView: View {
                 Text("Marcar como lidas")
                     .font(Editorial.sans(12, .medium))
                     .foregroundStyle(appState.unreadNotifications == 0
-                                     ? Editorial.inkMute : Editorial.accent)
+                                     ? Editorial.inkMute : Editorial.ink)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .liquidGlassCapsule(tint: Editorial.ink, tintOpacity: 0.07)
             }
             .buttonStyle(.plain).focusEffectDisabled()
+            .glassHover()
             .disabled(appState.unreadNotifications == 0)
 
             Spacer(minLength: 0)
@@ -189,9 +197,13 @@ struct NotificationsCenterView: View {
             } label: {
                 Text("Limpar tudo")
                     .font(Editorial.sans(12, .medium))
-                    .foregroundStyle(Editorial.accent)
+                    .foregroundStyle(Editorial.ink)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .liquidGlassCapsule(tint: Editorial.ink, tintOpacity: 0.07)
             }
             .buttonStyle(.plain).focusEffectDisabled()
+            .glassHover()
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
@@ -265,7 +277,8 @@ private struct NotificationRow: View, Equatable {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(notification.title)
-                        .font(Editorial.serif(13.5, .medium))
+                        // Sans (no serif) for the notification title.
+                        .font(Editorial.sans(13.5, .semibold))
                         .foregroundStyle(notification.read
                                          ? Editorial.inkSoft : Editorial.ink)
                         .tracking(-0.1)
