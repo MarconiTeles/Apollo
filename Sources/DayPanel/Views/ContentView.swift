@@ -868,8 +868,8 @@ struct ContentView: View {
                                           title: p.mediaTitle, taskId: p.taskId,
                                           listId: p.listId, uploaderId: p.uploaderId) }
         }
-        let liveSave: ((Data) -> Void)? = (req.params != nil)
-            ? { data in Task { await ReviewBackend.save(payloadData: data) } }
+        let liveSave: ((Data) async -> Bool)? = (req.params != nil)
+            ? { data in await ReviewBackend.save(payloadData: data) }
             : nil
         let onSubmit: (ReviewResult) -> Void = { result in
             // Final flush to KV (covers edits within the autosave debounce).
@@ -886,7 +886,6 @@ struct ContentView: View {
                         reviewJSON: result.json)
                 }
             }
-            reviewPresenter.request = nil
         }
         return ReviewView(
             params: req.params,

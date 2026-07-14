@@ -431,6 +431,7 @@ private struct SidebarSection<Content: View>: View {
 }
 
 private struct SidebarNavRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let label: String
     var count: Int? = nil
     var isActive: Bool
@@ -487,12 +488,28 @@ private struct SidebarNavRow: View {
                           ? Editorial.ink.opacity(0.03)
                           : Color.clear)
             )
-            // Selected → red (accent) Liquid Glass pill. The LABEL text
-            // stays neutral ink — only the pill carries the colour.
+            // Selected → Liquid Glass rectangle. In light mode a trace of the
+            // app accent helps selection read without returning to a purple
+            // fill; dark mode stays almost colourless.
             .liquidGlassSelected(isActive && !disabled,
-                                 in: RoundedRectangle(cornerRadius: 6,
+                                 in: RoundedRectangle(cornerRadius: 8,
                                                       style: .continuous),
-                                 tint: Editorial.accent)
+                                 tint: colorScheme == .light ? Editorial.accent : .white,
+                                 tintOpacity: colorScheme == .light ? 0.055 : 0.025)
+            .overlay {
+                if isActive && !disabled {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Editorial.ink.opacity(0.09), lineWidth: 0.55)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 7.5, style: .continuous)
+                                .inset(by: 0.65)
+                                .strokeBorder(Color.white.opacity(0.42), lineWidth: 0.55)
+                        }
+                        .allowsHitTesting(false)
+                }
+            }
+            .shadow(color: isActive && !disabled ? .black.opacity(0.12) : .clear,
+                    radius: 5, y: 2.5)
         }
         .buttonStyle(.plain)
         .disabled(disabled)
@@ -502,6 +519,7 @@ private struct SidebarNavRow: View {
 }
 
 private struct SidebarDotRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let color: Color
     let label: String
     var count: Int? = nil
@@ -539,12 +557,28 @@ private struct SidebarDotRow: View {
                     .fill(!isActive && hover ? Editorial.ink.opacity(0.03)
                           : Color.clear)
             )
-            // Selected list → red (accent) Liquid Glass pill. The LABEL
-            // text stays neutral ink — only the pill carries the colour.
+            // Selected list → subtly accent-tinted glass in light mode and
+            // nearly colourless glass in dark mode. The dot remains the
+            // strongest list-colour signal.
             .liquidGlassSelected(isActive,
-                                 in: RoundedRectangle(cornerRadius: 6,
+                                 in: RoundedRectangle(cornerRadius: 8,
                                                       style: .continuous),
-                                 tint: Editorial.accent)
+                                 tint: colorScheme == .light ? Editorial.accent : .white,
+                                 tintOpacity: colorScheme == .light ? 0.055 : 0.025)
+            .overlay {
+                if isActive {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Editorial.ink.opacity(0.09), lineWidth: 0.55)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 7.5, style: .continuous)
+                                .inset(by: 0.65)
+                                .strokeBorder(Color.white.opacity(0.42), lineWidth: 0.55)
+                        }
+                        .allowsHitTesting(false)
+                }
+            }
+            .shadow(color: isActive ? .black.opacity(0.12) : .clear,
+                    radius: 5, y: 2.5)
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
