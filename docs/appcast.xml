@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.8.11</title>
-      <pubDate>Fri, 12 Jun 2026 22:47:13 +0000</pubDate>
-      <sparkle:version>79</sparkle:version>
-      <sparkle:shortVersionString>1.8.11</sparkle:shortVersionString>
+      <title>Apollo 1.8.12</title>
+      <pubDate>Tue, 14 Jul 2026 03:44:44 +0000</pubDate>
+      <sparkle:version>80</sparkle:version>
+      <sparkle:shortVersionString>1.8.12</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[<h2>Apollo 1.8.11</h2><ul><li><b>Novo ícone.</b></li><li><b>Desempenho geral muito mais rápido:</b> sincronização otimizada (até 90% menos requisições), listas estáveis — tarefas não trocam mais de posição sozinhas — e fim dos travamentos de interface durante o sync.</li><li><b>Correção importante:</b> concluir tarefa (Done) ou trocar status não reverte mais para o estado anterior.</li><li><b>Confiabilidade:</b> falhas de rede não apagam mais a lista; fim das notificações fantasma de 'nova tarefa'; limite de requisições do ClickUp tratado com retry automático.</li></ul>]]></description>
+      <description><![CDATA[<h2>Apollo 1.8.12</h2><ul><li><b>Novo visual editorial:</b> identidade roxa, hierarquia mais clara e superfícies mais leves.</li><li><b>Navegação refinada:</b> sidebar, cabeçalho e listas reorganizados para leitura mais rápida.</li><li><b>Tarefas mais legíveis:</b> linhas, estados e detalhes com espaçamento e contraste consistentes.</li><li><b>Review aprimorado:</b> composer de comentários melhor, resolução de feedback e ajustes nas anotações.</li><li><b>Interações mais fluidas:</b> melhorias de rolagem, materiais e resposta visual dos controles.</li></ul>]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.11/Apollo-1.8.11.zip"
-        sparkle:edSignature="RzJM8Y4k9xgltMFIRVsqUem3n98oULozRB98FNdkD9RxbmZwlx7z4b+c+c9rkQhXhtvtyv1daMd7KrXB+rJeBg=="
-        length="41464996"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.12/Apollo-1.8.12.zip"
+        sparkle:edSignature="TNV8vnw/Mjmsgk9KrkrqBy/Lv4dfmGPLqC2M57pIENMyndsMeC2GeaCeH4mc4m8+7vP+/ugF6OXZpl1zzF63DQ=="
+        length="41521388"
         type="application/octet-stream" />
     </item>
   </channel>
