@@ -130,9 +130,8 @@ struct RichTextEditor: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.textContainerInset = NSSize(width: 5, height: 8)
         textView.linkTextAttributes = [
-            // Editorial cinnabar instead of system blue (brighter
-            // in dark so links stay legible on the warm-black body).
-            .foregroundColor: NSColor.editorial(light: "#C7321B", dark: "#E04A2E"),
+            // Studio Glass accent (roxo) no lugar do azul de sistema.
+            .foregroundColor: Editorial.tokenNS,
             .cursor:          NSCursor.pointingHand,
         ]
 
@@ -352,10 +351,9 @@ struct RichTextEditor: NSViewRepresentable {
         let full = NSRange(location: 0, length: ns.length)
         guard full.length > 0 else { return }
 
-        let defaultColor = textView.textColor
-            ?? NSColor.editorial(light: "#14130F", dark: "#F3EFE6")
+        let defaultColor = textView.textColor ?? Editorial.inkNS
         let defaultFont = textView.font ?? NSFont.systemFont(ofSize: 13)
-        let mentionColor = NSColor.editorial(light: "#C7321B", dark: "#E04A2E")
+        let mentionColor = Editorial.tokenNS
         let mentionFont = NSFont.systemFont(ofSize: defaultFont.pointSize,
                                             weight: .semibold)
 

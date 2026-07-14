@@ -634,7 +634,7 @@ struct CreateTaskSheet: View {
                 .frame(width: 16)
 
             Text(url.lastPathComponent)
-                .font(.system(size: 13, design: .serif).italic())
+                .font(.system(size: 13).italic())
                 .foregroundStyle(Editorial.accent)
                 .lineLimit(1)
                 .truncationMode(.middle)

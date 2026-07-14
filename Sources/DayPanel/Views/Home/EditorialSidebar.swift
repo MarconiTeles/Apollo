@@ -40,13 +40,16 @@ struct EditorialSidebar: View {
     @State private var pinnedLists: [PinnedLists.Entry] = PinnedLists.load()
 
     var body: some View {
-        // 220pt Liquid Glass column — the WHOLE sidebar is the
-        // glass surface (no floating rounded pane, no paper
-        // gutter). `.regularMaterial` carries the system blur;
-        // a thin white wash on top warms it to the milk-glass
-        // tint the rest of the Editorial palette expects, and a
-        // hairline rule on the trailing edge separates the
-        // column from the chrome behind / right of it.
+        // PANE FLUTUANTE de Liquid Glass — a mesma implementação
+        // do painel do MINIMAL TP: card arredondado inset das
+        // bordas, vidro REAL (glassEffect) no macOS 26 sobre o
+        // conteúdo vivo, e o conteúdo do quadro rola POR TRÁS
+        // (o board ScrollView é full-width; os cards passam sob
+        // o pane e refratam através do vidro). Tiers:
+        //   A  glassEffect .regular tintado accent@0.08
+        //   B  ultraThinMaterial + fio de luz
+        //   C  panelDeep sólido + hairline (Reduce Transparency)
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
         VStack(spacing: 0) {
             Color.clear.frame(height: 44)   // traffic-light inset
             searchBar
@@ -54,35 +57,26 @@ struct EditorialSidebar: View {
             userFooter
         }
         .frame(width: 220)
-        .background(
-            ZStack {
-                // `.ultraThinMaterial` — the lightest blur on
-                // macOS. `.regularMaterial` was reading too solid;
-                // ultra-thin keeps the warmth (cream wash sits on
-                // top) while letting the chrome / desktop behind
-                // come through clearly.
-                Rectangle().fill(.ultraThinMaterial)
-                // Adaptive milk-glass tint:
-                //   • Light: warm white at 70% → cream milk glass
-                //     matching Editorial.paper.
-                //   • Dark : near-black at 55% → tinted dark glass
-                //     so the panel doesn't read pale/washed in
-                //     dark mode (the hardcoded white was the
-                //     dominant pixel and made the column glow).
-                Rectangle().fill(
-                    colorScheme == .dark
-                    ? Color.black.opacity(0.55)
-                    : Color.white.opacity(0.70)
-                )
+        .background {
+            if Materials.tier == .solid {
+                shape.fill(Editorial.panelDeep)
             }
-        )
-        .overlay(alignment: .trailing) {
-            // Trailing hairline separator so the glass column
-            // reads as a discrete surface against the chrome.
-            Rectangle()
-                .fill(Editorial.rule)
-                .frame(width: 0.5)
         }
+        .modifier(SidebarGlassSurface(shape: shape))
+        .clipShape(shape)
+        .overlay {
+            if Materials.tier != .solid {
+                shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                    .allowsHitTesting(false)   // fio de luz
+            } else {
+                shape.strokeBorder(Editorial.rule, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+        }
+        // Elevação de pane flutuante (mesma família do floatingPanel).
+        .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
+        .padding(.leading, 10)
+        .padding(.vertical, 10)
         // Re-read the pinned-lists store whenever any UserDefaults
         // key changes (cheap — ~5 entries, JSON-decoded). Covers
         // pin/unpin from the list selector or settings.
@@ -113,9 +107,11 @@ struct EditorialSidebar: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
+            // Studio Glass: campo de busca usa o token `field`
+            // (poço mais fundo que o panelDeep da coluna).
             .background(
                 Capsule()
-                    .fill(Editorial.page)
+                    .fill(Editorial.field)
                     .overlay(Capsule().strokeBorder(Editorial.rule, lineWidth: 1))
             )
         }
@@ -553,5 +549,27 @@ private struct SidebarDotRow: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: hover)
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// MARK: - Sidebar glass surface (receita do MINIMAL TP)
+// ────────────────────────────────────────────────────────────────────────
+
+/// Vidro do pane flutuante da sidebar — port do `MTSurfaceModifier`
+/// do MINIMAL TP: Liquid Glass REAL (`glassEffect`) no macOS 26 SEM
+/// tint (vidro neutro), `ultraThinMaterial` como fallback, e nada no
+/// Tier C (o caller pinta `panelDeep` sólido no background).
+private struct SidebarGlassSurface: ViewModifier {
+    let shape: RoundedRectangle
+
+    func body(content: Content) -> some View {
+        if Materials.tier == .solid {
+            content   // sólido já pintado pelo caller
+        } else if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
     }
 }

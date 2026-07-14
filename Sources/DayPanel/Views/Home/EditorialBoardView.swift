@@ -81,6 +81,10 @@ struct EditorialBoardView: View {
             // Subtarefas on/off — collapse the board to top-level cards.
             subtaskToggle
         }
+        // O board é FULL-WIDTH agora (o pane da sidebar flutua por
+        // cima); o header precisa do próprio recuo de 230pt pra não
+        // ficar embaixo do vidro.
+        .padding(.leading, 230)
         .padding(.horizontal, 28)
         .padding(.top, 22)
         .padding(.bottom, 14)
@@ -172,10 +176,17 @@ struct EditorialBoardView: View {
                         .frame(maxHeight: .infinity, alignment: .top)
                 }
             }
-            .padding(.horizontal, 28)
             .padding(.top, 22)
             .padding(.bottom, 24)
         }
+        // FULL-WIDTH + contentMargins (não padding): o viewport do
+        // scroll alcança x=0, então colunas roladas pra esquerda
+        // DESENHAM sob o pane de vidro flutuante da sidebar — o
+        // efeito "cards passando por trás do vidro" do MINIMAL TP.
+        // Em repouso o conteúdo começa depois do pane (230pt do
+        // pane + 28 de respiro).
+        .contentMargins(.leading, 258, for: .scrollContent)
+        .contentMargins(.trailing, 28, for: .scrollContent)
         .frame(maxHeight: .infinity)
         // Catch-all: any drop that falls through the columns/cards (e.g.
         // released over board chrome) still clears the drag state so a
@@ -585,7 +596,11 @@ struct BoardCard: View {
     }
 
     private var assigneeColorHex: String {
-        let palette = ["#8B5CF6", "#C7321B", "#3F6B4A", "#4F8EF7",
+        // Studio Glass: o cinabre saiu da paleta de avatar (era a
+        // cor de marca antiga). Entrou o teal dos role-tints do
+        // Galileo — NÃO o roxo accent, que já tem um violeta
+        // (#8B5CF6) aqui e criaria dois avatares quase iguais.
+        let palette = ["#8B5CF6", "#2E6E6A", "#3F6B4A", "#4F8EF7",
                        "#9A7B1F", "#7A6597", "#B0612E", "#54577E"]
         let key = task.assignees.first?.username ?? task.id
         var h = 0

@@ -121,9 +121,13 @@ struct ContentView: View {
                 // window y=0 down (covering the transparent title
                 // bar) and prevents the desktop wallpaper from
                 // bleeding through as a coloured aurora.
+                // Cobre a JANELA INTEIRA agora (sem o recorte de
+                // 220pt): a sidebar virou um pane FLUTUANTE de
+                // Liquid Glass (estilo MINIMAL TP) e o vidro
+                // amostra o conteúdo SwiftUI atrás — paper + cards
+                // do quadro passando por baixo — não o desktop.
                 Rectangle()
                     .fill(Editorial.paper)
-                    .padding(.leading, 220)
                     .ignoresSafeArea()
 
                 // Editorial+ redesign: the sidebar floats on TOP of
@@ -793,17 +797,10 @@ struct ContentView: View {
         )
         // Push the toolbar up into the macOS title bar (alongside traffic lights)
         .ignoresSafeArea(.container, edges: .top)
-        // Specular highlight: subtle white sheen at top (light hitting glass edge)
-        .overlay(alignment: .top) {
-            LinearGradient(
-                colors: [.white.opacity(0.12), .clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 80)
-            .allowsHitTesting(false)
-            .ignoresSafeArea()
-        }
+        // (Specular branco no topo REMOVIDO — era resquício do
+        // Liquid Glass antigo e lia como uma "sombra branca" sobre
+        // o canvas escuro do Studio Glass. Profundidade agora vem
+        // de material e sombra, não de sheen pintado.)
         // Onboarding: every time the app is opened (launch or window
         // reopen), check if any required connection is missing. If yes,
         // surface the wizard. The check also reruns whenever a connection
@@ -975,6 +972,20 @@ struct ContentView: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .strokeBorder(Editorial.rule, lineWidth: 1)
                 )
+                // AGENT GLOW (Studio Glass): a borda multicolor
+                // girando estilo Apple Intelligence enquanto o
+                // agente pensa/trabalha — identidade de "IA viva".
+                // Gate automático dentro do AgentGlow (Reduce
+                // Motion / Tier C / Low Power → borda accent
+                // estática). Fora do isThinking, nada é montado.
+                .overlay {
+                    if appState.aiAgent.isThinking {
+                        AgentGlow(cornerRadius: 6)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(Motion.standard, value: appState.aiAgent.isThinking)
                 .shadow(color: .black.opacity(0.22), radius: 50, y: 40)
                 .shadow(color: .black.opacity(0.08), radius: 24, y: 8)
                 .padding(.top,        max(28, windowSize.height * 0.05))
@@ -1535,17 +1546,15 @@ struct ContentView: View {
             case .board:
                 EditorialBoardView()
                     .environmentObject(appState)
-                    // Leading inset → first column lines up where
-                    // the legacy dashboard split started (right of
-                    // the sidebar's column). Top inset → board
-                    // header (crumb + tagline) sits BELOW the
-                    // toolbar pills instead of colliding at y=0.
-                    // (The legacy dashboard's scroll views carry
-                    // their own 52pt topContentInset internally;
-                    // the board renders a plain VStack so we have
-                    // to add the inset here.)
+                    // SEM leading inset: o board agora é full-width
+                    // e o ScrollView horizontal desenha até x=0 —
+                    // os cards arrastados/rolados pra esquerda
+                    // passam POR TRÁS do pane flutuante de vidro
+                    // da sidebar. O recuo visual do conteúdo em
+                    // repouso vem do `contentMargins` interno do
+                    // EditorialBoardView. Top inset mantém o
+                    // header abaixo dos pills da toolbar.
                     .padding(.top, 52)
-                    .padding(.leading, 220)
             case .tasks:
                 EditorialMyTasksView()
                     .environmentObject(appState)
@@ -1690,106 +1699,60 @@ extension View {
             .shadow(color: .black.opacity(0.04), radius: 1, x: 0, y: 1)
     }
 
-    /// "Control Center"–style glass treatment, used for floating popups.
-    /// Light blur lets ambient color bleed through, a pronounced specular
-    /// top edge gives the bevel, and layered drop shadows add depth.
+    /// Card flutuante Studio Glass — receita `floatingPanel` do
+    /// Galileo (vidro espesso por tier + UMA sombra de elevação),
+    /// substituindo o specular gradient pintado à mão + stack de 3
+    /// sombras do Control Center antigo. Mantém o nome/assinatura
+    /// pros 10 call sites.
     func popupGlass<S: InsettableShape>(_ shape: S) -> some View {
-        self
-            // 1. Light frosted blur — like Control Center, mostly transparent
-            .background(.ultraThinMaterial, in: shape)
-            .clipShape(shape)
-            // 2. Soft inner gradient — bright top → subtle darken at bottom
-            .overlay {
-                shape
-                    .fill(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .white.opacity(0.06), location: 0.00),
-                                .init(color: .clear,                location: 0.40),
-                                .init(color: .clear,                location: 0.70),
-                                .init(color: .black.opacity(0.03), location: 1.00),
-                            ],
-                            startPoint: .top,
-                            endPoint:   .bottom
-                        )
-                    )
-                    .allowsHitTesting(false)
+        Group {
+            switch Materials.tier {
+            case .solid:
+                self.background(shape.fill(Editorial.popup))
+                    .clipShape(shape)
+                    .overlay(shape.strokeBorder(Editorial.rule, lineWidth: 1)
+                        .allowsHitTesting(false))
+                    .shadow(color: .black.opacity(0.30), radius: 26, y: 12)
+            case .liquidGlass:
+                self.glassControl(shape)
+                    .clipShape(shape)
+                    .shadow(color: .black.opacity(0.35), radius: 30, y: 14)
+            case .vibrancy:
+                self.background(.regularMaterial, in: shape)
+                    .clipShape(shape)
+                    .overlay(shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                        .allowsHitTesting(false))   // fio de luz
+                    .shadow(color: .black.opacity(0.35), radius: 30, y: 14)
             }
-            // 3. Specular top highlight — bright bevel that catches light
-            .overlay {
-                shape.strokeBorder(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .white.opacity(0.90), location: 0.00),
-                            .init(color: .white.opacity(0.45), location: 0.10),
-                            .init(color: .white.opacity(0.18), location: 0.35),
-                            .init(color: .white.opacity(0.08), location: 0.65),
-                            .init(color: .white.opacity(0.18), location: 1.00),
-                        ],
-                        startPoint: .top,
-                        endPoint:   .bottom
-                    ),
-                    lineWidth: 1.0
-                )
-                .allowsHitTesting(false)
-            }
-            // 4. Layered drop shadows — close definition + deep ambient
-            .shadow(color: .black.opacity(0.30), radius: 32, x: 0, y: 18)
-            .shadow(color: .black.opacity(0.14), radius: 8,  x: 0, y: 4)
-            .shadow(color: .black.opacity(0.08), radius: 1,  x: 0, y: 1)
+        }
     }
 
     /// Same chrome as `popupGlass` but **without** the outer
     /// `clipShape`. On macOS 26 the combination of `.clipShape(_)` +
     /// a nested `NSScrollView` (used by SwiftUI `ScrollView`) crashes
     /// inside `computed_effectiveCornerRadii` the moment the scroll
-    /// view's host first joins the window — `NSViewGetTransformToDescendant`
-    /// asserts because the corner-config lookup walks across views
-    /// that aren't direct descendants in the rendering order it
-    /// expects. The `.background(_, in: shape)` already paints the
-    /// material in the rounded shape, so dropping the clip preserves
-    /// the visual look as long as the popover's content respects its
-    /// own padding (it does — header/footer/sections live inside the
-    /// rounded area thanks to the inner padding).
+    /// view's host first joins the window — the corner-config lookup
+    /// asserts. The backgrounds already paint in the rounded shape,
+    /// so dropping the clip preserves the visual as long as the
+    /// content respects its own padding (it does).
     func popupGlassUnclipped<S: InsettableShape>(_ shape: S) -> some View {
-        self
-            .background(.ultraThinMaterial, in: shape)
-            .overlay {
-                shape
-                    .fill(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .white.opacity(0.06), location: 0.00),
-                                .init(color: .clear,                location: 0.40),
-                                .init(color: .clear,                location: 0.70),
-                                .init(color: .black.opacity(0.03), location: 1.00),
-                            ],
-                            startPoint: .top,
-                            endPoint:   .bottom
-                        )
-                    )
-                    .allowsHitTesting(false)
+        Group {
+            switch Materials.tier {
+            case .solid:
+                self.background(shape.fill(Editorial.popup))
+                    .overlay(shape.strokeBorder(Editorial.rule, lineWidth: 1)
+                        .allowsHitTesting(false))
+                    .shadow(color: .black.opacity(0.30), radius: 26, y: 12)
+            case .liquidGlass:
+                self.glassControl(shape)
+                    .shadow(color: .black.opacity(0.35), radius: 30, y: 14)
+            case .vibrancy:
+                self.background(.regularMaterial, in: shape)
+                    .overlay(shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                        .allowsHitTesting(false))
+                    .shadow(color: .black.opacity(0.35), radius: 30, y: 14)
             }
-            .overlay {
-                shape.strokeBorder(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .white.opacity(0.90), location: 0.00),
-                            .init(color: .white.opacity(0.45), location: 0.10),
-                            .init(color: .white.opacity(0.18), location: 0.35),
-                            .init(color: .white.opacity(0.08), location: 0.65),
-                            .init(color: .white.opacity(0.18), location: 1.00),
-                        ],
-                        startPoint: .top,
-                        endPoint:   .bottom
-                    ),
-                    lineWidth: 1.0
-                )
-                .allowsHitTesting(false)
-            }
-            .shadow(color: .black.opacity(0.30), radius: 32, x: 0, y: 18)
-            .shadow(color: .black.opacity(0.14), radius: 8,  x: 0, y: 4)
-            .shadow(color: .black.opacity(0.08), radius: 1,  x: 0, y: 1)
+        }
     }
 }
 
@@ -1825,7 +1788,7 @@ struct FrostedStrip: View {
         // costs a hair more per frame but always matches the
         // active appearance.
         let bg: Color = colorScheme == .dark
-            ? Color(hex: "#1F1F1E")   // matches Editorial.paper dark
+            ? Color(hex: "#141415")   // matches Editorial.paper dark (Studio Glass)
             : Color(hex: "#F8F6F3")   // matches Editorial.paper light
         let total = barHeight + fadeExtent
         let solidStop = barHeight / total

@@ -421,9 +421,9 @@ struct CommentBodyView: View, Equatable {
         // Style applied to whichever range a `@` consumes.
         func styled(_ range: Range<String.Index>) -> AttributedString {
             var a = AttributedString(String(s[range]))
-            // New York italic in the app's cinnabar accent.
+            // SF Pro itálico no accent (Studio Glass).
             a.foregroundColor = Editorial.accent
-            a.font = .system(.body, design: .serif).italic()
+            a.font = .system(.body).italic()
             return a
         }
 

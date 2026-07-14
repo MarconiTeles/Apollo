@@ -414,7 +414,7 @@ struct SettingsView: View {
                     .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .strokeBorder(Editorial.rule, lineWidth: 1))
                 Text("a")
-                    .font(.system(size: 64, weight: .regular, design: .serif))
+                    .font(.system(size: 64, weight: .regular))
                     .italic()
                     .foregroundStyle(Editorial.accent)
             }

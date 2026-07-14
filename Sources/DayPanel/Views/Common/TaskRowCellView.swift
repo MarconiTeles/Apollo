@@ -708,19 +708,15 @@ final class TaskRowContentView: NSView {
         NotificationCenter.default.removeObserver(self)
     }
 
-    /// Editorial serif (New York) NSFont — the AppKit twin of
-    /// `Editorial.serif`. macOS exposes New York via the
-    /// `.serif` system-font design.
+    /// AppKit twin of `Editorial.serif` — Studio Glass matou o serif:
+    /// resolve pra SF Pro (mesmo alias do lado SwiftUI). O nome fica
+    /// pra não tocar os call sites.
     static func editorialSerif(_ size: CGFloat,
                                _ weight: NSFont.Weight = .regular) -> NSFont {
         // Same global −15% scale as the SwiftUI `Editorial.*`
         // type helpers, so AppKit rows shrink in lockstep.
         let s = size * Editorial.typeScale
-        let base = NSFont.systemFont(ofSize: s, weight: weight)
-        if let d = base.fontDescriptor.withDesign(.serif) {
-            return NSFont(descriptor: d, size: s) ?? base
-        }
-        return base
+        return NSFont.systemFont(ofSize: s, weight: weight)
     }
 
     /// Editorial sans NSFont — AppKit twin of `Editorial.sans`.
@@ -732,14 +728,12 @@ final class TaskRowContentView: NSView {
         return NSFont.systemFont(ofSize: s, weight: weight)
     }
 
-    /// Italic New York — the prototype's `Caption` (serif italic
-    /// inkSoft) used for the assignee + any editorial aside.
+    /// Itálico do "serif" — agora SF Pro oblíquo (Studio Glass).
+    /// Usado no assignee + apartes editoriais.
     static func editorialSerifItalic(_ size: CGFloat) -> NSFont {
         let s = size * Editorial.typeScale
         let base = NSFont.systemFont(ofSize: s, weight: .regular)
-        var d = base.fontDescriptor
-        if let serif = d.withDesign(.serif) { d = serif }
-        d = d.withSymbolicTraits(.italic)
+        let d = base.fontDescriptor.withSymbolicTraits(.italic)
         return NSFont(descriptor: d, size: s) ?? base
     }
 

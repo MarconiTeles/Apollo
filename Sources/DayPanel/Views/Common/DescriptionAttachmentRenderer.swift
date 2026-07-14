@@ -248,23 +248,19 @@ enum DescriptionAttachmentRenderer {
         // measured. Long names that survive that cap still fit
         // because the text is drawn into a rect clipped at
         // `maxWidth` minus padding.
-        // Editorial: New York italic in the app's cinnabar accent
-        // on a paper chip — not white on a saturated emerald fill.
-        // Colours are baked into the bitmap (NSImage), so they're
-        // resolved here per the cached `isDark` flag rather than via
-        // a dynamic NSColor.
-        let editorialAccent = NSColor(hexString: isDark ? "#E04A2E" : "#C7321B")
-        let editorialCard   = NSColor(hexString: isDark ? "#2B2820" : "#FCFAF5")
+        // Studio Glass: accent roxo, chip nos neutros novos. Cores
+        // são cozidas no bitmap (NSImage), então resolvem aqui pelo
+        // flag `isDark` cacheado em vez de NSColor dinâmico.
+        let editorialAccent = NSColor(hexString: isDark ? "#7C5CFF" : "#6A4DF0")
+        let editorialCard   = NSColor(hexString: isDark ? "#1C1C1D" : "#FCFAF5")
         let editorialRule   = isDark
-            ? NSColor(hexString: "#F3EFE6").withAlphaComponent(0.14)
+            ? NSColor(hexString: "#FFFFFF").withAlphaComponent(0.07)
             : NSColor(hexString: "#14130F").withAlphaComponent(0.10)
-        // New York (system serif) italic.
+        // SF Pro itálico (serif morreu no Studio Glass).
         let cardFont: NSFont = {
             let size = font.pointSize - 1
             let base = NSFont.systemFont(ofSize: size)
-            var d = base.fontDescriptor
-            if let serif = d.withDesign(.serif) { d = serif }
-            d = d.withSymbolicTraits(.italic)
+            let d = base.fontDescriptor.withSymbolicTraits(.italic)
             return NSFont(descriptor: d, size: size) ?? base
         }()
         let truncated = truncateMiddle(filename, maxChars: 36)

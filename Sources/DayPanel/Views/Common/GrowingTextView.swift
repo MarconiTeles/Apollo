@@ -19,15 +19,11 @@ struct GrowingTextView: NSViewRepresentable {
     var minHeight: CGFloat = 20
     var maxHeight: CGFloat = 150
 
-    /// AppKit twin of `Editorial.serif(13)` — system serif (New York)
-    /// at the same global −15% type scale.
+    /// AppKit twin of `Editorial.serif(13)` — Studio Glass: SF Pro
+    /// (serif morreu) no mesmo −15% de type scale global.
     private var nsFont: NSFont {
         let s = 13 * Editorial.typeScale
-        let base = NSFont.systemFont(ofSize: s)
-        if let d = base.fontDescriptor.withDesign(.serif) {
-            return NSFont(descriptor: d, size: s) ?? base
-        }
-        return base
+        return NSFont.systemFont(ofSize: s)
     }
 
     func makeNSView(context: Context) -> NSScrollView {

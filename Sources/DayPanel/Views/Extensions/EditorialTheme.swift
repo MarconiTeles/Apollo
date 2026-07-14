@@ -35,51 +35,60 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
-// Apollo "Editorial Calm" design language — the SwiftUI port of
-// `editorial-tokens.jsx` from the navigable prototype
-// (/Apollo UI Redesign). Voice: NYT meets Linear. Type IS the
-// chrome; cinnabar (#C7321B) is the single accent; status is a
-// dot + word, never a filled pill.
+// Apollo — STUDIO GLASS (a filosofia de design do Galileo, portada).
+// Substitui o "Editorial Calm". Tese: neutros verdadeiros; UM accent
+// (#7C5CFF) p/ ação/marca; profundidade por MATERIAL e sombra (tiers
+// em Materials.swift), não por bordas; SF Pro em tudo (serif morreu —
+// o nome `serif` fica por compat de API, resolve pra SF Pro); status
+// segue como dot + word, nunca pill preenchida.
 //
-// This file is the FOUNDATION (redesign Stage 0). It defines
-// tokens + the reusable primitives every redesigned screen
-// composes from. It deliberately touches no existing view —
-// later stages migrate screens onto it one at a time. Do not
-// reintroduce the old Liquid Glass materials/capsules here.
+// O enum continua `Editorial` por compat com as 43 views (1.520 refs).
 
 // MARK: - Tokens
 
 enum Editorial {
 
-    // ── Surface (light / dark). Light is the original "Editorial
-    //    Calm" cream-and-ink palette; dark is a neutral charcoal
-    //    scale anchored on Claude's app canvas (#1F1F1E) so the two
-    //    apps share the same dark tone. Surfaces step up in
-    //    luminance for elevation; the warm-white ink + cinnabar
-    //    accent keep the editorial character on top.
-    static let paper    = Color(nsColor: .editorial(light: "#F8F6F3", dark: "#1F1F1E"))  // outer canvas (= Claude bg)
-    static let page     = Color(nsColor: .editorial(light: "#FFFFFF", dark: "#2A2A29"))  // primary surface
-    static let card     = Color(nsColor: .editorial(light: "#FCFAF5", dark: "#242423"))  // secondary surface
-    static let ink      = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6"))  // body type
+    // ── Surface (light / dark). Light mantém o creme original
+    //    Light e dark são AMBOS neutros frios (o creme editorial
+    //    morreu junto com o serif): light é uma escala cinza-clara
+    //    neutra, dark é a escala do Studio Dark ancorada em #141415.
+    static let paper    = Color(nsColor: .editorial(light: "#F5F5F6", dark: "#141415"))  // janela / raiz
+    static let page     = Color(nsColor: .editorial(light: "#FFFFFF", dark: "#1B1B1C"))  // painéis
+    static let card     = Color(nsColor: .editorial(light: "#FAFAFB", dark: "#1C1C1D"))  // barras/chips
+    static let ink      = Color(nsColor: .editorial(light: "#141416", dark: "#E8E8EA"))  // body type (frio)
 
     /// Surface for the redesigned popup windows (detail / create /
     /// settings / filters / notifications / command palette).
-    static let popup    = Color(nsColor: .editorial(light: "#FCFCFC", dark: "#262625"))
+    static let popup    = Color(nsColor: .editorial(light: "#FCFCFD", dark: "#1B1B1C"))
 
-    // Translucent ink steps — alpha baked per mode so dark mode
-    // reads off a warm-white ink instead of warm-black.
-    static let inkSoft  = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6", lightAlpha: 0.62, darkAlpha: 0.64))
-    static let inkMute  = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6", lightAlpha: 0.42, darkAlpha: 0.46))
-    static let inkFaint = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6", lightAlpha: 0.22, darkAlpha: 0.28))
-    static let rule     = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6", lightAlpha: 0.10, darkAlpha: 0.13))
-    static let ruleSoft = Color(nsColor: .editorial(light: "#14130F", dark: "#F3EFE6", lightAlpha: 0.06, darkAlpha: 0.08))
+    /// Sub-áreas / sidebar (Studio Glass panelDeep).
+    static let panelDeep = Color(nsColor: .editorial(light: "#EFEFF1", dark: "#171718"))
+    /// Campos de busca / inputs.
+    static let field     = Color(nsColor: .editorial(light: "#EDEDEF", dark: "#121213"))
 
-    // ── Single accent — cinnabar (newsroom red), nudged brighter
-    //    in dark so it keeps punching against the warm-black canvas.
-    // Dark hex bumped 35% brighter (#E04A2E → #FF643E) so the cinnabar
-    // accent reads as vividly in dark mode as the status colours now do.
-    static let accent     = Color(nsColor: .editorial(light: "#C7321B", dark: "#FF643E"))
-    static let accentSoft = Color(nsColor: .editorial(light: "#C7321B", dark: "#FF643E", lightAlpha: 0.10, darkAlpha: 0.18))
+    // Ink steps — no dark são CINZAS SÓLIDOS (Studio Glass), não
+    // alphas de warm-white; no light seguem como alpha do ink
+    // (agora neutro, sem o warm-black #14130F antigo).
+    static let inkSoft  = Color(nsColor: .editorial(light: "#141416", dark: "#A0A0A6", lightAlpha: 0.70, darkAlpha: 1.0))
+    static let inkMute  = Color(nsColor: .editorial(light: "#141416", dark: "#7A7A80", lightAlpha: 0.42, darkAlpha: 1.0))
+    static let inkFaint = Color(nsColor: .editorial(light: "#141416", dark: "#56565B", lightAlpha: 0.22, darkAlpha: 1.0))
+    static let rule     = Color(nsColor: .editorial(light: "#141416", dark: "#FFFFFF", lightAlpha: 0.10, darkAlpha: 0.07))
+    static let ruleSoft = Color(nsColor: .editorial(light: "#141416", dark: "#FFFFFF", lightAlpha: 0.06, darkAlpha: 0.045))
+
+    // ── Single accent — roxo Studio Glass (marca unificada com o
+    //    Galileo / Apollo Review). Vivo sobre vidro.
+    static let accent     = Color(nsColor: .editorial(light: "#6A4DF0", dark: "#7C5CFF"))
+    static let accentSoft = Color(nsColor: .editorial(light: "#6A4DF0", dark: "#7C5CFF", lightAlpha: 0.10, darkAlpha: 0.18))
+    /// Glyph selecionado/hover (um passo mais claro que o accent).
+    static let accent2    = Color(nsColor: .editorial(light: "#7C5CFF", dark: "#9B7FFF"))
+    /// Pressed/borda.
+    static let accentDim  = Color(nsColor: .editorial(light: "#43269E", dark: "#43269E"))
+    /// Texto/tokens sobre fills de accent.
+    static let tokenOnAccent = Color(nsColor: .editorial(light: "#FFFFFF", dark: "#F0EAFF"))
+
+    // Twins NSColor p/ superfícies AppKit (RichTextEditor etc.).
+    static let inkNS:   NSColor = .editorial(light: "#141416", dark: "#E8E8EA")
+    static let tokenNS: NSColor = .editorial(light: "#6A4DF0", dark: "#7C5CFF")
 
     /// Status colors — used ONLY as dots + caption text, never
     /// as a filled pill (that's the whole point of the redesign).
@@ -102,19 +111,18 @@ enum Editorial {
         }
     }
 
-    // ── Type. macOS ships "New York" as the system serif via the
-    // `.serif` design; SF Pro is the default sans; SF Mono via
-    // `.monospaced`. Matching the prototype's serif/sans/mono mix.
+    // ── Type. Studio Glass: SF Pro em TUDO; SF Mono só pra dados
+    // tabulares/atalhos. "serif" agora resolve pra SF Pro — a voz
+    // editorial saiu da FONTE e foi pro comportamento (materiais,
+    // glow). O nome fica pra não tocar 149 call sites.
     //
-    // `typeScale` is a single global multiplier on every editorial
-    // font size. Set to 0.85 → the whole app's type is 15% smaller
-    // in one place (every screen funnels through serif/sans/mono,
-    // and the AppKit twins `editorialSerif`/`editorialSerifItalic`
-    // apply the same factor).
+    // `typeScale` mantém o 0.85 do Apollo (o app inteiro foi
+    // calibrado nele; o 0.90 do Galileo mudaria todo layout).
+    // TODO: avaliar 0.90 depois que a migração estabilizar.
     static let typeScale: CGFloat = 0.85
 
     static func serif(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size * typeScale, weight: weight, design: .serif)
+        .system(size: size * typeScale, weight: weight)
     }
     static func sans(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .system(size: size * typeScale, weight: weight)
@@ -277,30 +285,113 @@ struct AIMark: View {
     }
 }
 
+// MARK: - Hover primitives (Studio Glass)
+
+/// A INTERAÇÃO do "Exportar" como modificador reutilizável: bounce de
+/// mola no hover. Pra botões construídos fora dos ButtonStyles
+/// compartilhados (chips locais, menus).
+struct HoverBounce: ViewModifier {
+    var scale: CGFloat
+    @State private var hover = false
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(hover ? scale : 1.0)
+            .onHover { hover = ScrollGate.shared.active ? false : $0 }
+            .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hover)
+    }
+}
+
+/// Vidro SÓ no hover/seleção (botões de ícone): em repouso o glyph
+/// fica limpo; hover acende o chip de vidro + bounce; ativo = vidro
+/// fixo.
+struct HoverGlass: ViewModifier {
+    var active: Bool
+    var scale: CGFloat
+    @State private var hover = false
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if hover || active {
+                    Color.clear.glassControl(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .transition(.opacity)
+                }
+            }
+            .overlay(RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(Color.clear, lineWidth: 1))
+            .scaleEffect(hover ? scale : 1.0)
+            .onHover { hover = ScrollGate.shared.active ? false : $0 }
+            .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hover)
+    }
+}
+
+extension View {
+    func hoverBounce(_ scale: CGFloat = 1.02) -> some View { modifier(HoverBounce(scale: scale)) }
+    func hoverGlass(active: Bool = false, scale: CGFloat = 1.04) -> some View {
+        modifier(HoverGlass(active: active, scale: scale))
+    }
+}
+
 // MARK: - Buttons
 
-/// Paper button: white surface, hairline border, no fill;
-/// inverts to solid ink when `active`.
+/// Studio Glass: chip de VIDRO + a INTERAÇÃO do Exportar — bounce de
+/// mola no hover (response 0.32 / damping 0.55), dip no press.
+/// Linguagem única em todo botão-chip do app.
 struct PaperButtonStyle: ButtonStyle {
     var active: Bool = false
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Editorial.sans(12.5, .medium))
-            .foregroundStyle(active ? Editorial.page : Editorial.ink)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            // Liquid Glass material — ink-tinted for the primary
-            // (active) action, neutral page glass for the secondary.
-            .liquidGlass(in: RoundedRectangle(cornerRadius: 4,
-                                              style: .continuous),
-                         tint: active ? Editorial.ink : Editorial.page,
-                         tintOpacity: active ? 0.85 : 0.55)
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(active ? Editorial.ink : Editorial.rule,
-                                  lineWidth: 1)
-            )
-            .opacity(configuration.isPressed ? 0.7 : 1)
+        Chip(configuration: configuration, active: active)
+    }
+    private struct Chip: View {
+        let configuration: Configuration
+        let active: Bool
+        @State private var hover = false
+        var body: some View {
+            configuration.label
+                .font(Editorial.sans(12, .medium))
+                .foregroundStyle(active ? Editorial.accent2 : Editorial.ink)
+                .padding(.horizontal, 11).padding(.vertical, 4.5)
+                .glassControl(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.clear, lineWidth: 1))
+                // HITBOX = o chip INTEIRO (padding + vidro), não só os
+                // glifos do label.
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .scaleEffect(configuration.isPressed ? 0.96 : (hover ? 1.02 : 1.0))
+                .opacity(configuration.isPressed ? 0.85 : 1)
+                .onHover { hover = ScrollGate.shared.active ? false : $0 }
+                .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hover)
+                .animation(.spring(response: 0.22, dampingFraction: 0.7), value: configuration.isPressed)
+        }
+    }
+}
+
+/// CTA em Liquid Glass com tint accent + bounce do Exportar (só quando
+/// habilitado). O botão de ação primária do Studio Glass.
+struct AccentButtonStyle: ButtonStyle {
+    var enabled: Bool = true
+    var cornerRadius: CGFloat = 5
+    func makeBody(configuration: Configuration) -> some View {
+        CTA(configuration: configuration, enabled: enabled, cornerRadius: cornerRadius)
+    }
+    private struct CTA: View {
+        let configuration: Configuration
+        let enabled: Bool
+        let cornerRadius: CGFloat
+        @State private var hover = false
+        var body: some View {
+            configuration.label
+                .font(Editorial.sans(12, .semibold))
+                .foregroundStyle(enabled ? Color.white : Editorial.inkMute)
+                .padding(.horizontal, 12).padding(.vertical, 5)
+                .glassControl(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
+                              tint: enabled ? Editorial.accent : nil)
+                .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .scaleEffect(configuration.isPressed ? 0.96 : (hover && enabled ? 1.02 : 1.0))
+                .opacity(configuration.isPressed ? 0.85 : 1)
+                .onHover { hover = ScrollGate.shared.active ? false : $0 }
+                .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hover)
+                .animation(.spring(response: 0.22, dampingFraction: 0.7), value: configuration.isPressed)
+        }
     }
 }
 
@@ -332,7 +423,6 @@ struct TBButtonStyle: ButtonStyle {
     private struct TBLabel: View {
         let configuration: Configuration
         let accent: Bool
-        @State private var hover = false
         var body: some View {
             configuration.label
                 .font(Editorial.sans(13.5, .medium))
@@ -340,42 +430,37 @@ struct TBButtonStyle: ButtonStyle {
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
                 .padding(.vertical, 4)
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(hover ? Editorial.ink : Color.clear)
-                        .frame(height: 1)
-                        .offset(y: 1)
-                }
-                .opacity(configuration.isPressed ? 0.6 : 1)
+                .padding(.horizontal, 7)
+                .opacity(configuration.isPressed ? 0.7 : 1)
                 .contentShape(Rectangle())
-                .onHover { hover = $0 }
-                .animation(.easeOut(duration: 0.12), value: hover)
+                // Studio Glass: chip de vidro no hover no lugar do
+                // underline de tipo-jornal.
+                .hoverGlass()
+                .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+                .animation(.spring(response: 0.22, dampingFraction: 0.7),
+                           value: configuration.isPressed)
         }
     }
 }
 
-/// `TBIconBtn` from the prototype: a square icon hit-target with
-/// 6pt padding, a 6pt-radius background that washes to `E.rule`
-/// on hover, and ink-colored glyph.
+/// Botão de ícone quadrado — Studio Glass: glyph limpo em repouso,
+/// chip de vidro acende no hover (hoverGlass), dip no press.
 struct TBIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         TBIcon(configuration: configuration)
     }
     private struct TBIcon: View {
         let configuration: Configuration
-        @State private var hover = false
         var body: some View {
             configuration.label
                 .foregroundStyle(Editorial.ink)
                 .padding(6)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(hover ? Editorial.rule : Color.clear)
-                )
-                .opacity(configuration.isPressed ? 0.6 : 1)
+                .scaleEffect(configuration.isPressed ? 0.90 : 1.0)
+                .opacity(configuration.isPressed ? 0.7 : 1)
                 .contentShape(Rectangle())
-                .onHover { hover = $0 }
-                .animation(.easeOut(duration: 0.12), value: hover)
+                .animation(.spring(response: 0.22, dampingFraction: 0.7),
+                           value: configuration.isPressed)
+                .hoverGlass()
         }
     }
 }

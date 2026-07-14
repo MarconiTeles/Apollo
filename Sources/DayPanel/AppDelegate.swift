@@ -160,6 +160,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //    `.system` can actually take effect.
         appState.applyAppearanceMode()
 
+        // Studio Glass: gate global de scroll — suspende todo hover
+        // durante rolagem/pinça (os modifiers hoverGlass/hoverBounce/
+        // hoverRow consultam ScrollGate.shared.active).
+        ScrollGate.shared.install()
+
         // Take ownership of UNUserNotificationCenter delivery + click
         // handling so foreground banners show up and notification
         // taps deep-link into the matching task / event popup.

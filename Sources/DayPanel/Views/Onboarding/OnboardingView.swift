@@ -1389,7 +1389,7 @@ private struct WelcomeStepView: View {
                         .strokeBorder(Editorial.rule, lineWidth: 1)
                 )
             Text("a")
-                .font(.system(size: 60, weight: .regular, design: .serif))
+                .font(.system(size: 60, weight: .regular))
                 .italic()
                 .foregroundStyle(Editorial.accent)
         }
