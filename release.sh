@@ -268,6 +268,18 @@ hdiutil create \
 rm -rf "$STAGE_DIR"
 echo "✓ DMG rebuilt at $DMG_PATH (stapled bundle preserved)"
 
+# Notarize and staple the DMG container too. The app inside already carries
+# its own ticket, but stapling the outer image lets Gatekeeper validate the
+# downloaded installer offline before it is mounted.
+echo "→ Submitting rebuilt DMG to Apple notary…"
+xcrun notarytool submit "$DMG_PATH" \
+    --keychain-profile "$NOTARY_PROFILE" \
+    --wait
+echo "→ Stapling ticket onto the DMG…"
+xcrun stapler staple "$DMG_PATH"
+xcrun stapler validate "$DMG_PATH" > /dev/null
+echo "✓ DMG notarized and stapled"
+
 # ── ZIP for Sparkle ───────────────────────────────────────────────────────
 # Sparkle expects a ZIP that, when unzipped, contains Apollo.app
 # at the top level. `ditto` preserves resource forks, symlinks,
