@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.8.11</title>
-      <pubDate>Fri, 12 Jun 2026 22:47:13 +0000</pubDate>
-      <sparkle:version>79</sparkle:version>
-      <sparkle:shortVersionString>1.8.11</sparkle:shortVersionString>
+      <title>Apollo 1.8.14</title>
+      <pubDate>Tue, 14 Jul 2026 21:10:03 +0000</pubDate>
+      <sparkle:version>84</sparkle:version>
+      <sparkle:shortVersionString>1.8.14</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[<h2>Apollo 1.8.11</h2><ul><li><b>Novo ícone.</b></li><li><b>Desempenho geral muito mais rápido:</b> sincronização otimizada (até 90% menos requisições), listas estáveis — tarefas não trocam mais de posição sozinhas — e fim dos travamentos de interface durante o sync.</li><li><b>Correção importante:</b> concluir tarefa (Done) ou trocar status não reverte mais para o estado anterior.</li><li><b>Confiabilidade:</b> falhas de rede não apagam mais a lista; fim das notificações fantasma de 'nova tarefa'; limite de requisições do ClickUp tratado com retry automático.</li></ul>]]></description>
+      <description><![CDATA[Novo design nativo com Liquid Glass mais leve; Inbox e notificações otimizados; comentários atribuídos; seleção e drag and drop mais previsíveis; animações de tarefas restauradas; progresso real de uploads; novo ícone do Apollo; correções gerais de desempenho, sombras e interação.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.11/Apollo-1.8.11.zip"
-        sparkle:edSignature="RzJM8Y4k9xgltMFIRVsqUem3n98oULozRB98FNdkD9RxbmZwlx7z4b+c+c9rkQhXhtvtyv1daMd7KrXB+rJeBg=="
-        length="41464996"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.14/Apollo-1.8.14.zip"
+        sparkle:edSignature="/Fjv4wxNCQoUY6PoJ6kHPQcj2ltF467npaGCGCRvclJ9k2ut3stvavGXLdfs4oqIbA3IJb3ptWLoXYGTlsewDA=="
+        length="43057603"
         type="application/octet-stream" />
     </item>
   </channel>
