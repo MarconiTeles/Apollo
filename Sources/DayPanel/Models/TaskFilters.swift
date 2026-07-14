@@ -1,5 +1,18 @@
 import Foundation
 
+/// Canonical operational universe shared by the list and kanban surfaces.
+/// Keeping this separate from dimension filters prevents Quadro and Minhas
+/// tarefas from silently disagreeing about totals (for example, one including
+/// closed history while the other shows only actionable work).
+enum TaskSurfaceScope {
+    static func openTasks(in tasks: [CUTask], activeListId: String) -> [CUTask] {
+        tasks.filter { task in
+            !task.archived && !task.isCompleted &&
+            (activeListId.isEmpty || task.listId == activeListId)
+        }
+    }
+}
+
 /// Which dimension drives the horizontal pill bar above the task list.
 /// Lets the user pivot the same view between "filter by status",
 /// "filter by priority", etc. without leaving the dashboard.
@@ -92,6 +105,14 @@ struct TaskFilters: Equatable {
         if let r = createdRange, !r.contains(task.dateCreated) { return false }
         if let r = closedRange,  !r.contains(task.dateClosed)  { return false }
         return true
+    }
+
+    /// Canonical dimension-filter stage shared by Hoje, Quadro and Minhas
+    /// tarefas. Keeping the empty fast path here prevents the three surfaces
+    /// from drifting into subtly different implementations as dimensions are
+    /// added to the filter popover.
+    func applying(to tasks: [CUTask]) -> [CUTask] {
+        isEmpty ? tasks : tasks.filter(matches)
     }
 }
 

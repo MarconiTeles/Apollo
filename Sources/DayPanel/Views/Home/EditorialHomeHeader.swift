@@ -22,13 +22,9 @@ struct EditorialHomeHeader: View {
         // live here, but was moved up into the toolbar as a
         // single compact serif badge — see ContentView's
         // `toolbarPageTitle`. The header now starts directly at
-        // the stats row.
+        // the next event; the numeric summary strip was removed to
+        // keep the top of Today focused on actionable content.
         VStack(alignment: .leading, spacing: 0) {
-            statsRow
-                .padding(.top, 22)
-            Rectangle().fill(Editorial.rule).frame(height: 1)
-                .padding(.top, 18)
-                .padding(.horizontal, -28)
             if let next = nextEvent {
                 nextEventCard(next)
                     .padding(.top, 22)
@@ -38,48 +34,6 @@ struct EditorialHomeHeader: View {
                 .padding(.bottom, 12)
         }
         .padding(.horizontal, 28)
-    }
-
-    // ────────────────────────────────────────────────────────────────────
-    // MARK: Stats row
-    // ────────────────────────────────────────────────────────────────────
-
-    private var statsRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 36) {
-            // Date — folio + giant serif day + small italic month
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Folio(weekdayShort)
-                Text("\(dayOfMonth)")
-                    .font(Editorial.serif(34, .medium))
-                    .foregroundStyle(Editorial.ink)
-                    .monospacedDigit()
-                Text(monthShort)
-                    .font(Editorial.serif(15).italic())
-                    .foregroundStyle(Editorial.inkSoft)
-            }
-            stat(value: overdueCount,  label: "ATRASADAS", accent: true)
-            stat(value: tasksCount,    label: "TAREFAS")
-            stat(value: eventsCount,   label: "EVENTOS")
-            stat(valueText: freeHoursLabel, label: "LIVRES")
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func stat(value: Int, label: String, accent: Bool = false) -> some View {
-        stat(valueText: "\(value)", label: label, accent: accent)
-    }
-
-    private func stat(valueText: String, label: String, accent: Bool = false) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(valueText)
-                .font(Editorial.serif(34, .medium))
-                .foregroundStyle(accent ? Editorial.accent : Editorial.ink)
-                .monospacedDigit()
-            Text(label)
-                .font(Editorial.sans(10.5, .semibold))
-                .tracking(1.2)
-                .foregroundStyle(accent ? Editorial.accent : Editorial.inkMute)
-        }
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -158,9 +112,10 @@ struct EditorialHomeHeader: View {
         // reduction; the card stays balanced because the inner spacings
         // and type sizes were scaled down proportionally.
         .padding(.vertical, 14)
-        // Liquid Glass surface with a white accent + a soft drop shadow
-        // (corner radius bumped 8 → 11, +35%).
-        .modifier(LiquidGlassHeroCard(cornerRadius: 11))
+        // The next-event card uses the exact same material recipe as the
+        // floating sidebar, only with its own geometry.
+        .floatingPanelGlass(in: RoundedRectangle(cornerRadius: 11,
+                                                  style: .continuous))
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -229,16 +184,17 @@ struct EditorialHomeHeader: View {
     // ────────────────────────────────────────────────────────────────────
 
     private var sectionLabels: some View {
-        // Two-column section header: AGENDA on the left,
-        // TAREFAS on the right. The horizontal status pills
-        // strip that used to live under TAREFAS was removed —
-        // the right column now renders tasks GROUPED by
-        // status (see `EditorialHomeTasksColumn`), so the
-        // pills became redundant.
+        // Two-column section header: agenda on the left and the
+        // unified ClickUp + Apollo inbox on the right.
         HStack(alignment: .firstTextBaseline, spacing: 0) {
             sectionLabel("Agenda", count: agendaCount)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            sectionLabel("Tarefas", count: tasksCount)
+            sectionLabel(
+                "Inbox",
+                count: appState.notifications.filter {
+                    !$0.read && $0.isHomeInboxEligible
+                }.count
+            )
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -360,11 +316,6 @@ struct EditorialHomeHeader: View {
     // MARK: Data helpers
     // ────────────────────────────────────────────────────────────────────
 
-    private var todayStart: Date { Calendar.current.startOfDay(for: Date()) }
-    private var todayEnd:   Date {
-        Calendar.current.date(byAdding: .day, value: 1, to: todayStart)!
-    }
-
     private var todaysEvents: [CalendarEvent] {
         appState.eventsForToday
     }
@@ -381,61 +332,9 @@ struct EditorialHomeHeader: View {
             .first
     }
 
-    private var overdueCount: Int {
-        let now = Date()
-        return appState.pendingTasks.filter { t in
-            guard let d = t.dueDate else { return false }
-            return d < now
-        }.count
-    }
-
-    private var tasksCount: Int {
-        appState.pendingTasks.filter { t in
-            guard let d = t.dueDate else { return false }
-            return d >= todayStart && d < todayEnd
-        }.count
-    }
-
     private var eventsCount: Int { todaysEvents.count }
     private var agendaCount: Int { eventsCount }
 
-    /// Free hours = (work window 9–18 = 9h) − sum of event durations
-    /// clamped to that window, rounded to hours. Rough but useful at
-    /// a glance.
-    private var freeHoursLabel: String {
-        let cal = Calendar.current
-        let dayStart = cal.date(bySettingHour: 9,  minute: 0, second: 0, of: todayStart)!
-        let dayEnd   = cal.date(bySettingHour: 18, minute: 0, second: 0, of: todayStart)!
-        let windowSecs = dayEnd.timeIntervalSince(dayStart)
-        let busy = todaysEvents.reduce(0.0) { acc, ev in
-            let s = max(ev.startDate, dayStart)
-            let e = min(ev.endDate,   dayEnd)
-            return acc + max(0, e.timeIntervalSince(s))
-        }
-        let freeHours = max(0, (windowSecs - busy) / 3600)
-        return "\(Int(freeHours.rounded()))h"
-    }
-
-    // ── Date formatters ────────────────────────────────────────────────
-
-    // All shared instances — these computed vars run on every
-    // header render; allocating+configuring a DateFormatter per
-    // call was pure churn (5 allocations per render).
-    private var weekdayName: String {
-        SharedDateFormatters.weekdayFullPTBR.string(from: Date())
-    }
-    private var weekdayShort: String {
-        SharedDateFormatters.weekdayShortPTBR.string(from: Date())
-            .replacingOccurrences(of: ".", with: "")
-    }
-    private var dayMonth: String {
-        SharedDateFormatters.dayMonthFullPTBR.string(from: Date())
-    }
-    private var dayOfMonth: Int { Calendar.current.component(.day, from: Date()) }
-    private var monthShort: String {
-        SharedDateFormatters.monthAbbrevPTBR.string(from: Date())
-            .replacingOccurrences(of: ".", with: "")
-    }
     private func timeFmt(_ d: Date) -> String {
         SharedDateFormatters.shortTime24h.string(from: d)
     }
@@ -466,33 +365,6 @@ struct EditorialHomeHeader: View {
             }
         }
         return nil
-    }
-}
-
-/// Liquid Glass surface for the "next event" hero card. On macOS 26+
-/// it paints a real Liquid Glass material tinted toward white (the
-/// requested white accent); older systems fall back to a frosted
-/// `.regularMaterial`. Both carry a hairline white edge and a soft
-/// drop shadow so the card reads as a lifted glass panel.
-private struct LiquidGlassHeroCard: ViewModifier {
-    let cornerRadius: CGFloat
-
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if #available(macOS 26.0, *) {
-            content
-                .background(shape.fill(.thinMaterial))
-                .glassEffect(.regular.tint(Color.white.opacity(0.40)), in: shape)
-                .clipShape(shape)
-                .overlay(shape.strokeBorder(Color.white.opacity(0.55), lineWidth: 0.7))
-                .shadow(color: .black.opacity(0.12), radius: 9, x: 0, y: 4)
-        } else {
-            content
-                .background(shape.fill(.regularMaterial))
-                .clipShape(shape)
-                .overlay(shape.strokeBorder(Color.white.opacity(0.50), lineWidth: 0.7))
-                .shadow(color: .black.opacity(0.12), radius: 9, x: 0, y: 4)
-        }
     }
 }
 

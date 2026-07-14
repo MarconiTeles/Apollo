@@ -2295,13 +2295,7 @@ struct CUListPickerSheet: View {
     /// cached id+name, not a full CUList / its parent space).
     private func pickById(id: String, name: String) {
         selectedListId = id
-        KeychainHelper.save(id,   for: KeychainHelper.Keys.clickupListId)
-        KeychainHelper.save(name, for: KeychainHelper.Keys.clickupListName)
-        // Flipping to a specific list implies leaving the
-        // cross-list "Meu trabalho" mode — otherwise picking a
-        // list would appear to do nothing.
-        appState.taskViewMode = .activeList
-        Task { await appState.sync() }
+        appState.activateList(id: id, name: name)
         close()
     }
 

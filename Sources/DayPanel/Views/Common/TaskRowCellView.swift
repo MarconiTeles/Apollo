@@ -34,7 +34,7 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
     /// bottom; the inner `rowView` is inset by this padding so
     /// the rounded card itself stays at its original 78pt
     /// height regardless of the cell's outer height.
-    static let bakedVerticalGap: CGFloat = 17.79768470
+    static let bakedVerticalGap: CGFloat = 4
     static var halfGap: CGFloat { bakedVerticalGap * 0.5 }
 
     private(set) var rowView: TaskRowContentView!
@@ -45,6 +45,9 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
     var onSwipeEnd:      ((CGFloat) -> Void)?
     var onRowClick: ((CUTask, CGRect) -> Void)?
     var onStatusPillClick: ((CUTask, NSView) -> Void)?
+    var contextActionsProvider: ((CUTask) -> [TaskContextAction]?)? {
+        didSet { rowView?.contextActionsProvider = contextActionsProvider }
+    }
     /// Called when the user clicks the expand chevron at
     /// the top-right of the row. Wired up by the data source
     /// in `TaskCollectionView.configure(cell:with:)`.
@@ -77,19 +80,15 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
         view.wantsLayer = true
         view.layer?.backgroundColor = .clear
 
-        // Editorial: rows are FLUSH, separated by a 1px
-        // hairline rule (drawn at the bottom of `rowView`) —
-        // not by a gap around a rounded card. So `rowView` and
-        // the swipe panels fill the ENTIRE cell (pad = 0); the
-        // hover wash then covers the whole visible row and the
-        // content centers within it. (Was inset by `halfGap`
-        // for the old Liquid-Glass card spacing.)
+        // Compact list rows keep a 16pt horizontal gutter so the
+        // hover/selection surface reads as a rounded single-line
+        // item instead of an edge-to-edge table stripe.
         let pad: CGFloat = 0
         for panel in [leftPanel, rightPanel] {
             panel.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(panel)
-            let lead  = panel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 0)
-            let trail = panel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 0)
+            let lead  = panel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16)
+            let trail = panel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)
             NSLayoutConstraint.activate([
                 lead,
                 trail,
@@ -110,8 +109,8 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
         rowView = TaskRowContentView(frame: .zero)
         rowView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(rowView)
-        let rowLead  = rowView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 0)
-        let rowTrail = rowView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 0)
+        let rowLead  = rowView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16)
+        let rowTrail = rowView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)
         NSLayoutConstraint.activate([
             rowLead,
             rowTrail,
@@ -176,6 +175,7 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
         onSwipeEnd         = nil
         onRowClick         = nil
         onStatusPillClick  = nil
+        contextActionsProvider = nil
         boundTask          = nil
         leftPanel.alphaValue  = 0
         rightPanel.alphaValue = 0
@@ -194,16 +194,21 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
               hasChildren: Bool = false,
               isExpanded: Bool = false) {
         boundTask = task
+        let baseInset: CGFloat = 16
         let extraLead = CGFloat(depth) * subtaskCardLeadingExtra
-        rowLeadingConstraint?.constant   =  extraLead
-        leftPanelLeading?.constant       =  extraLead
-        rightPanelLeading?.constant      =  extraLead
+        rowLeadingConstraint?.constant   =  baseInset + extraLead
+        rowTrailingConstraint?.constant  = -baseInset
+        leftPanelLeading?.constant       =  baseInset + extraLead
+        leftPanelTrailing?.constant      = -baseInset
+        rightPanelLeading?.constant      =  baseInset + extraLead
+        rightPanelTrailing?.constant     = -baseInset
 
         rowView.bind(task: task,
                      appState: appState,
                      depth: depth,
                      hasChildren: hasChildren,
                      isExpanded: isExpanded)
+        rowView.contextActionsProvider = contextActionsProvider
 
         // Configure the action panels for this task's neighbours
         // in the workflow.
@@ -241,6 +246,10 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
         leftPanel.alphaValue  = 0
         rightPanel.alphaValue = 0
     }
+
+    func setBulkSelected(_ selected: Bool) {
+        rowView.setBulkSelected(selected)
+    }
 }
 
 // MARK: - Row content view
@@ -268,6 +277,7 @@ final class TaskRowContentView: NSView {
     /// bounds at release). Used by `TaskRowCellItem` to route
     /// to the detail-popup open path.
     var onClick: (() -> Void)?
+    var contextActionsProvider: ((CUTask) -> [TaskContextAction]?)?
 
     override func mouseDown(with event: NSEvent) {
         // Status pill / DONE pill have their own `mouseDown`
@@ -306,8 +316,10 @@ final class TaskRowContentView: NSView {
         guard let task = self.task,
               let appState = self.appState
         else { return nil }
-        return TaskContextMenu.makeNSMenu(task: task,
-                                           appState: appState)
+        if let actions = contextActionsProvider?(task) {
+            return TaskContextMenu.makeNSMenu(actions: actions)
+        }
+        return TaskContextMenu.makeNSMenu(task: task, appState: appState)
     }
 
     // MARK: Two-finger trackpad swipe
@@ -538,6 +550,13 @@ final class TaskRowContentView: NSView {
     /// True between mouseDown and mouseUp. Drives the press
     /// scale-down feedback.
     private var isPressed = false
+    private var isBulkSelected = false
+
+    func setBulkSelected(_ selected: Bool) {
+        guard selected != isBulkSelected else { return }
+        isBulkSelected = selected
+        applyRowBackground(animated: true)
+    }
 
     // MARK: Swipe state
 
@@ -1278,7 +1297,9 @@ final class TaskRowContentView: NSView {
         // `commonInit` + `refreshTintLayer`) so it persists
         // regardless of what this method paints on `backgroundColor`.
         let target: CGColor
-        if swipeOffset != 0 {
+        if isBulkSelected {
+            target = editorialCG(Editorial.accent.opacity(0.09))
+        } else if swipeOffset != 0 {
             target = editorialCG(Editorial.paper)
         } else if isHovered {
             target = editorialCG(Editorial.card)     // warm hover wash
@@ -1381,6 +1402,7 @@ final class TaskRowContentView: NSView {
         // Dot-mode in compact rows — colour-only badge, no
         // status name. Top-level rows keep the textual pill.
         statusPill.dotMode     = compact
+        statusPill.isHidden    = !compact
         // Subtask rows REPLACE the DONE checkbox with the
         // status-colour dot (the dot lives on the LEFT
         // where the checkbox normally sits). Hide the
@@ -1593,9 +1615,11 @@ final class TaskRowContentView: NSView {
         // Date — relative ("Hoje", "Amanhã", "em N dias",
         // "N dias atrás", or short formatted date)
         if let due = task.dueDate {
-            let overdue = due < Date() && !task.isCompleted
-            let color: NSColor = overdue
-                ? NSColor(Editorial.accent) : NSColor(Editorial.inkSoft)
+            let today = Calendar.current.isDateInToday(due)
+            let overdue = due < Calendar.current.startOfDay(for: Date())
+                && !task.isCompleted
+            let color: NSColor = today ? .controlAccentColor
+                : (overdue ? .systemRed : NSColor(Editorial.inkSoft))
             dateLabel.stringValue       = Self.relativeDateText(for: due)
             dateLabel.textColor         = color
             // Editorial drops the calendar glyph — the date text
@@ -1793,15 +1817,12 @@ final class TaskRowContentView: NSView {
             return
         }
 
-        // ── Subtask toggle — stacked BELOW the checkbox ──────
-        // The editorial chevron lives in the left gutter,
-        // directly under the DONE circle and centred on the
-        // same column, so a parent task reads as
-        // "[done] / [⌄]" vertically. (Hidden in `bind` when
-        // the task has no children.)
+        // ── Compact top-level row ────────────────────────────
+        // checkbox | optional subtask toggle | title | priority |
+        // assignee | due date — all aligned on one line.
         let subPillSize = SubtaskExpandPill.intrinsicSize
-        let subPillX = checkX + (checkSize - subPillSize.width) / 2
-        let subPillY = checkY + checkSize + 6
+        let subPillX = checkX + checkSize + 4
+        let subPillY = (bounds.height - subPillSize.height) / 2
         let subPillFrame = NSRect(
             x: subPillX, y: subPillY,
             width:  subPillSize.width,
@@ -1810,84 +1831,69 @@ final class TaskRowContentView: NSView {
         expandPill.frame    = subPillFrame
         expandHitZone.frame = subPillFrame
 
-        // Both title AND meta row share the same leading edge —
-        // mirrors the SwiftUI structure where `.padding(.leading, 10)`
-        // is applied to the VStack that wraps both, indenting them
-        // together by `metaNudge` past the checkbox+spacing.
-        let titleX = leadingPad + indent + checkSize + titleGroupSpacing + metaNudge
-        let titleAvailable = max(0, w - titleX - leadingPad)
-        // `blockTopY` was computed near the top of layout() so
-        // the checkbox could align to the title line.
-        titleLabel.frame = NSRect(
-            x: titleX,
-            y: blockTopY,
-            width:  titleAvailable,
-            height: titleHeight
-        )
+        let titleX = hasChildren
+            ? subPillX + subPillSize.width + 8
+            : checkX + checkSize + titleGroupSpacing
+        let centerY = bounds.height / 2
+        let columnGap: CGFloat = 14
+        let priorityColumnWidth: CGFloat = 34
+        let assigneeColumnWidth: CGFloat = 132
+        let dateColumnWidth: CGFloat = 92
+        let dateColumnX = w - leadingPad - dateColumnWidth
+        let assigneeColumnX = dateColumnX - columnGap - assigneeColumnWidth
+        let priorityColumnX = assigneeColumnX - columnGap - priorityColumnWidth
 
-        // ── Meta row (below title) ───────────────────────────
-        // statusPill (in a 168pt slot) | assignee | …spacer… | date | priority
-        let metaY = blockTopY + titleHeight + titleMetaGap
-        // Same X as the title — the SwiftUI VStack's leading
-        // padding applies to both rows.
-        let metaLeading = titleX
-
-        // Status pill — sized to its content but positioned at
-        // the slot's leading edge. The slot itself is 168pt
-        // wide; the assignee is positioned RELATIVE TO THE SLOT
-        // (not the pill), matching SwiftUI's `.frame(width:168)`.
-        statusPill.sizeToFitContent()
-        let pillSize = statusPill.frame.size
-        statusPill.frame = NSRect(
-            x: metaLeading,
-            y: metaY + (metaHeight - pillSize.height) / 2,
-            width:  pillSize.width,
-            height: pillSize.height
-        )
-
-        // Assignee — pinned 20pt to the right of the WIDEST
-        // status pill across `appState.availableStatuses` (see
-        // `widestStatusPillWidth`, computed in `applyAppearance`).
-        // Guarantees every row's assignee lines up regardless of
-        // which status the current row happens to display.
-        assigneeLabel.sizeToFit()
-        let assigneeSize = assigneeLabel.frame.size
-        let assigneeX = metaLeading + widestStatusPillWidth + assigneeGap
-        assigneeLabel.frame = NSRect(
-            x: assigneeX,
-            y: metaY + (metaHeight - assigneeSize.height) / 2,
-            width:  assigneeSize.width,
-            height: assigneeSize.height
-        )
-
-        // Priority flag (right-anchored)
-        priorityIcon.frame = NSRect(
-            x: w - leadingPad - prioritySlot,
-            y: metaY + (metaHeight - prioritySlot) / 2,
-            width:  prioritySlot,
-            height: prioritySlot
-        )
-
-        // Date (left of priority): calendar icon + label, spacing 3pt
+        // Reserve every column even when its value is empty. This keeps
+        // priority, assignee and due date perfectly aligned across rows.
         if !dateLabel.isHidden {
             dateLabel.sizeToFit()
             let dateSize = dateLabel.frame.size
-            let iconSize: CGFloat = 9   // matches SwiftUI 9pt size
+            let iconSize: CGFloat = 9
             let totalDateWidth = iconSize + 3 + dateSize.width
-            let dateGroupX = (w - leadingPad - prioritySlot) - 8 - totalDateWidth
+            let dateGroupX = dateColumnX + max(0, dateColumnWidth - totalDateWidth)
             dateIcon.frame = NSRect(
                 x: dateGroupX,
-                y: metaY + (metaHeight - iconSize) / 2,
+                y: centerY - iconSize / 2,
                 width:  iconSize,
                 height: iconSize
             )
             dateLabel.frame = NSRect(
                 x: dateGroupX + iconSize + 3,
-                y: metaY + (metaHeight - dateSize.height) / 2,
+                y: centerY - dateSize.height / 2,
                 width:  dateSize.width,
                 height: dateSize.height
             )
         }
+
+        // Assignee remains visible but no longer creates a second line.
+        assigneeLabel.sizeToFit()
+        let assigneeSize = assigneeLabel.frame.size
+        if !assigneeLabel.stringValue.isEmpty {
+            assigneeLabel.frame = NSRect(
+                x: assigneeColumnX,
+                y: centerY - assigneeSize.height / 2,
+                width: min(assigneeSize.width, assigneeColumnWidth),
+                height: assigneeSize.height
+            )
+        }
+
+        // Keep only the semantic priority flag in the row; the status is
+        // already represented by the surrounding group header.
+        if !priorityIcon.isHidden {
+            priorityIcon.frame = NSRect(
+                x: priorityColumnX,
+                y: centerY - prioritySlot / 2,
+                width: prioritySlot,
+                height: prioritySlot
+            )
+        }
+
+        titleLabel.frame = NSRect(
+            x: titleX,
+            y: centerY - titleHeight / 2,
+            width: max(0, priorityColumnX - columnGap - titleX),
+            height: titleHeight
+        )
 
         // (Hover zone frame already set near the top of
         // layout() — see the `checkX` block — so it's
@@ -2701,4 +2707,3 @@ final class SwipeActionPanelView: NSView {
     }
 
 }
-

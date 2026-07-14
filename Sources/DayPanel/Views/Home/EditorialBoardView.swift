@@ -24,6 +24,13 @@ struct EditorialBoardView: View {
     /// being slotted) and the source card's dimmed placeholder look.
     @State private var draggingTaskId: String? = nil
 
+    /// Board selection mirrors Minhas tarefas: Command toggles individual
+    /// cards, Shift selects the inclusive visible range, and dragging any
+    /// selected card carries the complete ordered selection.
+    @State private var selectedTaskIds: Set<String> = []
+    @State private var selectionAnchorId: String? = nil
+    @State private var draggingTaskIds: [String] = []
+
     /// LOCAL, per-status vertical ordering of cards — purely a viewing
     /// preference, never written back to ClickUp. JSON `[statusKey:
     /// [taskId]]` persisted in AppStorage so the user's hand-arranged
@@ -45,7 +52,27 @@ struct EditorialBoardView: View {
             Rectangle().fill(Editorial.rule).frame(height: 1)
             board
         }
+        .overlay(alignment: .bottom) {
+            if !selectedTasks.isEmpty {
+                TaskBulkToolbar(tasks: selectedTasks,
+                                appState: appState,
+                                onClear: clearSelection)
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 34)
+                    .transition(.move(edge: .bottom)
+                        .combined(with: .opacity)
+                        .combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                    .zIndex(20)
+            }
+        }
         .background(Editorial.paper)
+        .onChange(of: boardTasks.map(\.id)) { _, visibleIds in
+            let visible = Set(visibleIds)
+            selectedTaskIds.formIntersection(visible)
+            if let anchor = selectionAnchorId, !visible.contains(anchor) {
+                selectionAnchorId = nil
+            }
+        }
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -135,28 +162,94 @@ struct EditorialBoardView: View {
     }
 
     private var currentListName: String {
-        KeychainHelper.load(for: KeychainHelper.Keys.clickupListName) ?? ""
+        appState.activeListName
     }
 
     /// All non-completed tasks in the active list — scope mirrors the
     /// other Editorial+ counts so the header total agrees with the
     /// column totals.
     private var boardTasks: [CUTask] {
-        let listId = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId) ?? ""
+        let listId = appState.activeListId
         // By default include EVERY task in the active list (parents AND
         // subtasks) — subtasks render as their own card, the kanban view
         // treats them as independent units of work, and the column totals
         // match the sidebar's list count. When `showSubtasks` is off the
         // user has chosen to collapse the board to top-level cards only;
         // the header total then reflects exactly what's on screen.
-        return appState.tasks.filter { t in
-            !t.archived &&
-            (listId.isEmpty || t.listId == listId) &&
-            (showSubtasks || !t.isSubtask)
-        }
+        let open = TaskSurfaceScope.openTasks(in: appState.tasks,
+                                              activeListId: listId)
+        let scoped = open.filter { showSubtasks || !$0.isSubtask }
+        return appState.taskFilters.applying(to: scoped)
     }
 
     private var cardsTotal: Int { boardTasks.count }
+
+    /// Deterministic visible order spanning columns left-to-right and cards
+    /// top-to-bottom. Shift selection and multi-drag use this same order.
+    private var orderedVisibleBoardTasks: [CUTask] {
+        visibleStatuses.flatMap { status in
+            let key = status.status.lowercased()
+            return orderedCards(columnCards(key), statusKey: key)
+        }
+    }
+
+    private var selectedTasks: [CUTask] {
+        orderedVisibleBoardTasks.filter { selectedTaskIds.contains($0.id) }
+    }
+
+    private func activate(_ task: CUTask,
+                          modifiers: NSEvent.ModifierFlags,
+                          rect: CGRect) {
+        let intent: TaskSelectionIntent
+        if modifiers.contains(.shift) {
+            intent = .range
+        } else if modifiers.contains(.command) {
+            intent = .toggle
+        } else {
+            intent = .plain
+        }
+        let resolution = TaskSelectionResolver.resolve(
+            current: selectedTaskIds,
+            anchor: selectionAnchorId,
+            clicked: task.id,
+            ordered: orderedVisibleBoardTasks.map(\.id),
+            intent: intent
+        )
+        if resolution.shouldOpen {
+            appState.openTaskDetail(
+                task,
+                origin: rect,
+                navigationTasks: orderedVisibleBoardTasks,
+                style: .scaleFromOrigin
+            )
+            return
+        }
+        withAnimation(.easeOut(duration: 0.14)) {
+            selectedTaskIds = resolution.selected
+            selectionAnchorId = resolution.anchor
+        }
+    }
+
+    private func clearSelection() {
+        withAnimation(.easeOut(duration: 0.14)) {
+            selectedTaskIds.removeAll()
+            selectionAnchorId = nil
+        }
+    }
+
+    private func dragProvider(for task: CUTask) -> NSItemProvider {
+        let ids: [String]
+        if selectedTaskIds.contains(task.id) {
+            ids = selectedTasks.map(\.id)
+        } else {
+            ids = [task.id]
+            selectedTaskIds = [task.id]
+            selectionAnchorId = task.id
+        }
+        draggingTaskId = task.id
+        draggingTaskIds = ids
+        return NSItemProvider(object: MyTasksDragPayload.encode(ids) as NSString)
+    }
 
     // ────────────────────────────────────────────────────────────────────
     // MARK: Board body
@@ -193,6 +286,7 @@ struct EditorialBoardView: View {
         // source card never stays stuck in its dimmed ghost look.
         .onDrop(of: [.text], delegate: BoardResetDropDelegate(
             draggingTaskId: $draggingTaskId,
+            draggingTaskIds: $draggingTaskIds,
             dragOverStatus: $dragOverStatus
         ))
     }
@@ -275,12 +369,12 @@ struct EditorialBoardView: View {
     /// card-level drop delegate's `dropEntered` (wrapped in
     /// `withAnimation` so the surrounding cards reflow under the cursor).
     private func reorder(dragInFrontOf targetId: String, statusKey: String) {
-        guard let dragId = draggingTaskId, dragId != targetId else { return }
         var ids = orderedCards(columnCards(statusKey), statusKey: statusKey).map(\.id)
-        guard ids.contains(dragId), ids.contains(targetId) else { return }
-        ids.removeAll { $0 == dragId }
+        let moving = ids.filter { draggingTaskIds.contains($0) }
+        guard !moving.isEmpty, !moving.contains(targetId), ids.contains(targetId) else { return }
+        ids.removeAll { moving.contains($0) }
         guard let insertAt = ids.firstIndex(of: targetId) else { return }
-        ids.insert(dragId, at: insertAt)
+        ids.insert(contentsOf: moving, at: insertAt)
         var dict = cardOrder
         dict[statusKey] = ids
         setCardOrder(dict)
@@ -289,11 +383,11 @@ struct EditorialBoardView: View {
     /// Place `dragId` before `targetId` after a CROSS-column drop (the
     /// task's status was just changed to this column), so it lands where
     /// the user dropped it rather than at the column's tail.
-    private func place(_ dragId: String, before targetId: String, statusKey: String) {
+    private func place(_ dragIds: [String], before targetId: String, statusKey: String) {
         var ids = orderedCards(columnCards(statusKey), statusKey: statusKey).map(\.id)
-        ids.removeAll { $0 == dragId }
+        ids.removeAll { dragIds.contains($0) }
         let insertAt = ids.firstIndex(of: targetId) ?? ids.count
-        ids.insert(dragId, at: insertAt)
+        ids.insert(contentsOf: dragIds, at: insertAt)
         var dict = cardOrder
         dict[statusKey] = ids
         setCardOrder(dict)
@@ -330,12 +424,25 @@ struct EditorialBoardView: View {
                         }
                     }
                     ForEach(cards, id: \.id) { task in
+                        let selected = selectedTaskIds.contains(task.id)
                         BoardCardRow(
                             task: task,
                             appState: appState,
                             status: status,
+                            isSelected: selected,
                             draggingTaskId: $draggingTaskId,
+                            draggingTaskIds: $draggingTaskIds,
                             dragOverStatus: $dragOverStatus,
+                            contextActions: selected
+                                ? TaskBulkActions.actions(for: selectedTasks,
+                                                        appState: appState)
+                                : nil,
+                            onActivate: { modifiers, rect in
+                                activate(task, modifiers: modifiers, rect: rect)
+                            },
+                            onBeginDrag: {
+                                dragProvider(for: task)
+                            },
                             onReorder: { targetId in
                                 // Gentle bouncy reflow — the surrounding
                                 // cards lightly overshoot and settle as
@@ -347,8 +454,8 @@ struct EditorialBoardView: View {
                                             statusKey: statusKey)
                                 }
                             },
-                            onCrossColumnPlace: { dragId, targetId in
-                                place(dragId, before: targetId,
+                            onCrossColumnPlace: { dragIds, targetId in
+                                place(dragIds, before: targetId,
                                       statusKey: statusKey)
                             }
                         )
@@ -384,7 +491,8 @@ struct EditorialBoardView: View {
             targetStatus: status,
             appState: appState,
             dragOverStatus: $dragOverStatus,
-            draggingTaskId: $draggingTaskId
+            draggingTaskId: $draggingTaskId,
+            draggingTaskIds: $draggingTaskIds
         ))
     }
 
@@ -523,11 +631,12 @@ struct BoardCard: View {
                 x: 0,
                 y: hover ? 2 : 0)
         .animation(.easeOut(duration: 0.16), value: hover)
-        .onHover { hover = $0 }
-        // Right-click → the canonical task context menu (Copiar link /
-        // ID, Favoritar, Renomear, Mover, Duplicar, Arquivar, Excluir…),
-        // same spec the dashboard rows and the task popup use.
-        .taskContextMenu(task: task, appState: appState)
+        .onHover { entering in
+            hover = entering && !appState.anyPopupOpen
+        }
+        .onChange(of: appState.anyPopupOpen) { _, open in
+            if open { hover = false }
+        }
     }
 
     // ── Top row: status dot + breadcrumb caps + priority chip ──────────
@@ -611,14 +720,18 @@ struct BoardCard: View {
     @ViewBuilder
     private var dateLabel: some View {
         if let due = task.dueDate {
-            let overdue = due < Date() && !task.isCompleted
+            let today = Calendar.current.isDateInToday(due)
+            let overdue = due < Calendar.current.startOfDay(for: Date())
+                && !task.isCompleted
+            let color = today ? Editorial.accent
+                : (overdue ? Editorial.overdue : Editorial.inkMute)
             HStack(spacing: 3) {
                 Text(relativeDate(due))
                     .font(Editorial.sans(11, .medium))
-                    .foregroundStyle(overdue ? Editorial.accent : Editorial.inkMute)
+                    .foregroundStyle(color)
                 Image(systemName: "arrow.turn.down.right")
                     .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(overdue ? Editorial.accent : Editorial.inkFaint)
+                    .foregroundStyle(today || overdue ? color : Editorial.inkFaint)
             }
         }
     }
@@ -690,22 +803,38 @@ private struct BoardCardRow: View {
     let appState: AppState
     /// The column this card lives in.
     let status: CUStatus
+    let isSelected: Bool
     /// Shared "which card is being dragged" state, owned by the board.
     @Binding var draggingTaskId: String?
+    @Binding var draggingTaskIds: [String]
     @Binding var dragOverStatus: String?
+    let contextActions: [TaskContextAction]?
+    let onActivate: (_ modifiers: NSEvent.ModifierFlags, _ rect: CGRect) -> Void
+    let onBeginDrag: () -> NSItemProvider
     /// Live in-column reorder: move the dragged card before THIS card.
     let onReorder: (_ targetId: String) -> Void
     /// After a cross-column status change, place the dropped card before
     /// THIS card in the destination's local order.
-    let onCrossColumnPlace: (_ dragId: String, _ targetId: String) -> Void
+    let onCrossColumnPlace: (_ dragIds: [String], _ targetId: String) -> Void
 
     @State private var cardFrame: CGRect = .zero
 
-    private var isDragging: Bool { draggingTaskId == task.id }
+    private var isDragging: Bool { draggingTaskIds.contains(task.id) }
 
     var body: some View {
         BoardCard(task: task)
             .captureFrame($cardFrame)
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Editorial.accent.opacity(0.055))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(Editorial.accent.opacity(0.62), lineWidth: 1.2)
+                        }
+                        .allowsHitTesting(false)
+                }
+            }
             // The source card dims + shrinks slightly while it's the one
             // under the cursor, so the moving preview reads as "lifted
             // out" and the gap it leaves is obvious as siblings reflow.
@@ -716,12 +845,27 @@ private struct BoardCardRow: View {
             .animation(.bouncy(duration: 0.34, extraBounce: 0.12),
                        value: isDragging)
             .onDrag {
-                draggingTaskId = task.id
-                return NSItemProvider(object: task.id as NSString)
+                onBeginDrag()
             } preview: {
-                BoardCard(task: task)
-                    .frame(width: 260)
+                if draggingTaskIds.count > 1 {
+                    HStack(spacing: 9) {
+                        Image(systemName: "rectangle.stack")
+                        Text("\(draggingTaskIds.count) tarefas")
+                            .lineLimit(1)
+                    }
+                    .font(Editorial.sans(12.5, .semibold))
+                    .foregroundStyle(Editorial.ink)
+                    .padding(.horizontal, 14)
+                    .frame(width: 260, height: 44, alignment: .leading)
+                    .background(.regularMaterial,
+                                in: RoundedRectangle(cornerRadius: 11,
+                                                     style: .continuous))
                     .shadow(color: .black.opacity(0.22), radius: 14, y: 8)
+                } else {
+                    BoardCard(task: task)
+                        .frame(width: 260)
+                        .shadow(color: .black.opacity(0.22), radius: 14, y: 8)
+                }
             }
             // Card-level drop target → live vertical reorder. As the
             // dragged card hovers this one, `dropEntered` slots it into
@@ -732,21 +876,20 @@ private struct BoardCardRow: View {
                 status: status,
                 appState: appState,
                 draggingTaskId: $draggingTaskId,
+                draggingTaskIds: $draggingTaskIds,
                 dragOverStatus: $dragOverStatus,
                 onReorder: onReorder,
                 onCrossColumnPlace: onCrossColumnPlace
             ))
+            .contextMenu {
+                TaskContextMenuItems(actions: contextActions
+                    ?? TaskContextMenu.actions(for: task, appState: appState))
+            }
             .onTapGesture {
-                // Same transition as every other surface — the
-                // settings-style bottom slide (`.bottomSlide` is
-                // the default openStyle, so just leave it
-                // alone). Origin still captured in case any
-                // future code path needs it.
                 let rect = cardFrame != .zero
                     ? cardFrame
                     : MouseOriginCapture.currentClickRectInMainWindow()
-                appState.detailTaskOrigin = rect
-                appState.detailTask       = task
+                onActivate(NSEvent.modifierFlags, rect)
             }
     }
 }
@@ -770,9 +913,10 @@ private struct CardReorderDropDelegate: DropDelegate {
     let status: CUStatus
     let appState: AppState
     @Binding var draggingTaskId: String?
+    @Binding var draggingTaskIds: [String]
     @Binding var dragOverStatus: String?
     let onReorder: (_ targetId: String) -> Void
-    let onCrossColumnPlace: (_ dragId: String, _ targetId: String) -> Void
+    let onCrossColumnPlace: (_ dragIds: [String], _ targetId: String) -> Void
 
     private var statusKey: String { status.status.lowercased() }
 
@@ -804,19 +948,26 @@ private struct CardReorderDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        let draggedId = draggingTaskId
-        let fromKey   = draggedStatusKey
+        let primaryId = draggingTaskId
+        let ids = draggingTaskIds.isEmpty
+            ? primaryId.map { [$0] } ?? []
+            : draggingTaskIds
         draggingTaskId = nil
+        draggingTaskIds.removeAll()
         dragOverStatus = nil
-        guard let draggedId else { return false }
+        guard !ids.isEmpty else { return false }
 
-        if let fromKey, fromKey != statusKey,
-           let task = appState.tasks.first(where: { $0.id == draggedId }) {
-            // Cross-column: the ONE remote write — change status — then
-            // drop it at the targeted slot locally.
+        let needsStatusChange = ids.contains { id in
+            appState.tasks.first(where: { $0.id == id })?.status.lowercased() != statusKey
+        }
+        if needsStatusChange {
             Task { @MainActor in
-                await appState.updateTaskStatus(task, to: status, silent: true)
-                onCrossColumnPlace(draggedId, targetId)
+                for id in ids {
+                    guard let task = appState.tasks.first(where: { $0.id == id }),
+                          task.status.lowercased() != statusKey else { continue }
+                    await appState.updateTaskStatus(task, to: status, silent: true)
+                }
+                onCrossColumnPlace(ids, targetId)
             }
         }
         // Same-column reorder was already applied live in dropEntered;
@@ -890,6 +1041,7 @@ private struct StatusGlassPill: ViewModifier {
 /// returns from its ghost placeholder to full opacity.
 private struct BoardResetDropDelegate: DropDelegate {
     @Binding var draggingTaskId: String?
+    @Binding var draggingTaskIds: [String]
     @Binding var dragOverStatus: String?
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
@@ -898,6 +1050,7 @@ private struct BoardResetDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         draggingTaskId = nil
+        draggingTaskIds.removeAll()
         dragOverStatus = nil
         return false
     }
@@ -916,6 +1069,7 @@ private struct BoardDropDelegate: DropDelegate {
     let appState: AppState
     @Binding var dragOverStatus: String?
     @Binding var draggingTaskId: String?
+    @Binding var draggingTaskIds: [String]
 
     func dropEntered(info: DropInfo) {
         dragOverStatus = targetStatus.status.lowercased()
@@ -943,24 +1097,24 @@ private struct BoardDropDelegate: DropDelegate {
         // when the drop lands in the column gutter (not on a card) —
         // otherwise it would stay stuck in its ghost placeholder look.
         draggingTaskId = nil
+        draggingTaskIds.removeAll()
         guard let provider = info.itemProviders(for: [.text]).first
         else { dragOverStatus = nil; return false }
         provider.loadObject(ofClass: NSString.self) { obj, _ in
-            guard let taskId = obj as? String else { return }
+            guard let raw = obj as? String else { return }
+            let ids = MyTasksDragPayload.decode(raw)
             Task { @MainActor in
-                guard let task = appState.tasks.first(where: { $0.id == taskId })
-                else { return }
-                if task.status.lowercased() == targetStatus.status.lowercased() {
-                    dragOverStatus = nil
-                    return
+                for id in ids {
+                    guard let task = appState.tasks.first(where: { $0.id == id }),
+                          task.status.lowercased() != targetStatus.status.lowercased()
+                    else { continue }
+                    // Every task uses AppState's own optimistic mutation and
+                    // per-task rollback path; one failed request cannot leave
+                    // a card stranded in an invented local status.
+                    await appState.updateTaskStatus(task,
+                                                    to: targetStatus,
+                                                    silent: true)
                 }
-                // Silent on the board: the card already moved
-                // visually between columns on drop, so the
-                // toast confirming "Status atualizado" was
-                // redundant. Remote (teammate) status changes
-                // still notify via the sync-diff path, which
-                // this flag does NOT suppress.
-                await appState.updateTaskStatus(task, to: targetStatus, silent: true)
                 dragOverStatus = nil
             }
         }

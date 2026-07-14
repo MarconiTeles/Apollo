@@ -251,7 +251,7 @@ enum DescriptionAttachmentRenderer {
         // Studio Glass: accent roxo, chip nos neutros novos. Cores
         // são cozidas no bitmap (NSImage), então resolvem aqui pelo
         // flag `isDark` cacheado em vez de NSColor dinâmico.
-        let editorialAccent = NSColor(hexString: isDark ? "#7C5CFF" : "#6A4DF0")
+        let editorialAccent = NSColor.controlAccentColor
         let editorialCard   = NSColor(hexString: isDark ? "#1C1C1D" : "#FCFAF5")
         let editorialRule   = isDark
             ? NSColor(hexString: "#FFFFFF").withAlphaComponent(0.07)

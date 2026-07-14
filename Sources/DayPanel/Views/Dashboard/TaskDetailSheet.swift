@@ -97,6 +97,7 @@ struct TaskDetailSheet: View, Equatable {
     /// Confirm before turning the task into a calendar event
     /// (the ClickUp task is removed afterwards).
     @State private var showConvertConfirm = false
+    @State private var showStatusMenu = false
 
     /// Editorial layout: a single-column popup with the activity
     /// timeline and attachments behind tabs (matching the
@@ -264,6 +265,16 @@ struct TaskDetailSheet: View, Equatable {
 
     private var masthead: some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
+            if !liveTask.isSubtask && !appState.detailNavigationTaskIds.isEmpty {
+                HStack(spacing: 4) {
+                    detailNavigationButton(.previous, systemName: "chevron.up",
+                                           help: "Tarefa anterior")
+                    detailNavigationButton(.next, systemName: "chevron.down",
+                                           help: "Próxima tarefa")
+                }
+                .padding(.trailing, 2)
+            }
+
             // Back (subtask navigation) — kept from the old header.
             if liveTask.isSubtask {
                 let isOverlay = (appState.detailSubtaskOverlay?.id == liveTask.id)
@@ -297,7 +308,30 @@ struct TaskDetailSheet: View, Equatable {
                 .font(Editorial.serif(11).italic())
                 .foregroundStyle(Editorial.inkMute)
             Circle().fill(Editorial.inkFaint).frame(width: 3, height: 3)
-            Folio(statusLabel, accent: true)
+            let statusColor = Color(statusHex: liveTask.statusDisplayHex)
+            Button { showStatusMenu.toggle() } label: {
+                HStack(spacing: 6) {
+                    Text(statusLabel.uppercased())
+                        .font(Editorial.sans(10.5, .semibold))
+                        .tracking(1.25)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 7.5, weight: .bold))
+                }
+                .foregroundStyle(statusColor)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .disabled(appState.availableStatuses.isEmpty)
+            .popover(isPresented: $showStatusMenu, arrowEdge: .bottom) {
+                StatusPickerPopover(
+                    statuses: appState.availableStatuses,
+                    currentStatusName: liveTask.status
+                ) { status in
+                    Task { await appState.updateTaskStatus(liveTask, to: status) }
+                    showStatusMenu = false
+                }
+            }
 
             Spacer(minLength: 12)
 
@@ -333,6 +367,29 @@ struct TaskDetailSheet: View, Equatable {
         }
         .padding(.horizontal, 40)
         .padding(.vertical, 14)
+    }
+
+    private func detailNavigationButton(
+        _ direction: AppState.DetailNavigationDirection,
+        systemName: String,
+        help: String
+    ) -> some View {
+        let enabled = direction == .previous
+            ? appState.canNavigateToPreviousDetailTask
+            : appState.canNavigateToNextDetailTask
+        return Button {
+            appState.navigateDetailTask(direction)
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 10.5, weight: .semibold))
+                .frame(width: 24, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .foregroundStyle(enabled ? Editorial.inkSoft : Editorial.inkFaint)
+        .disabled(!enabled)
+        .help(help)
     }
 
     private func mastheadTab(_ t: DetailTab,

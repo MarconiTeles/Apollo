@@ -39,6 +39,48 @@ extension View {
     }
 }
 
+// MARK: - Floating panel glass
+
+/// Canonical material for Apollo's floating panes. Both the sidebar and
+/// prominent dashboard panels use this recipe so they react identically to
+/// Liquid Glass availability and Reduce Transparency.
+private struct FloatingPanelGlassSurface: ViewModifier {
+    let shape: RoundedRectangle
+
+    @ViewBuilder
+    private func material(content: Content) -> some View {
+        if Materials.tier == .solid {
+            content.background(shape.fill(Editorial.panelDeep))
+        } else if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
+    }
+
+    func body(content: Content) -> some View {
+        material(content: content)
+            .clipShape(shape)
+            .overlay {
+                if Materials.tier == .solid {
+                    shape.strokeBorder(Editorial.rule, lineWidth: 1)
+                        .allowsHitTesting(false)
+                } else {
+                    shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                        .allowsHitTesting(false)
+                }
+            }
+            .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
+    }
+}
+
+extension View {
+    /// Applies the exact floating-pane material used by Apollo's sidebar.
+    func floatingPanelGlass(in shape: RoundedRectangle) -> some View {
+        modifier(FloatingPanelGlassSurface(shape: shape))
+    }
+}
+
 // MARK: - Liquid Glass background
 
 private struct LiquidGlassFillModifier<S: InsettableShape>: ViewModifier {
@@ -63,9 +105,10 @@ private struct LiquidGlassFillModifier<S: InsettableShape>: ViewModifier {
             let glass: Glass = interactive
                 ? .regular.tint(tint.opacity(tintOpacity)).interactive()
                 : .regular.tint(tint.opacity(tintOpacity))
-            content
-                .background(shape.fill(tint.opacity(tintOpacity * 0.5)))
-                .glassEffect(glass, in: shape)
+            // Do not pre-paint a translucent color underneath native glass.
+            // That extra layer becomes the material's sampled backdrop and
+            // visually flattens refraction into a frosted/opaque fill.
+            content.glassEffect(glass, in: shape)
         } else {
             content
                 .background(.ultraThinMaterial, in: shape)

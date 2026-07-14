@@ -26,7 +26,7 @@ struct TaskCollectionView: NSViewRepresentable {
     /// 8 → 4.8 (-40%). Math: `1 + 20 + 4.8 + 22 + 1 = 48.8 ≤ 49`.
     /// Subtask rows (depth > 0) stay at 40pt via the per-row
     /// override in `sizeForItemAt` below.
-    var rowHeight: CGFloat = 49
+    var rowHeight: CGFloat = 44
     var topContentInset: CGFloat = 0
     /// Fires when the user clicks the row's content area
     /// (anywhere except the status pill). The closure receives

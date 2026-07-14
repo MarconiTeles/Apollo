@@ -528,49 +528,29 @@ private struct AgendaDaySection: View, Equatable {
     }
 
     private var dateColumn: some View {
-        // Editorial: small-caps weekday, an outsized serif
-        // numeral, and — for today — a cinnabar underline plus
-        // an italic "↳ hoje" cue. No filled accent disc.
-        VStack(alignment: .leading, spacing: 4) {
-            Text(date.formatted(.dateTime.weekday(.abbreviated)
-                .locale(Locale(identifier: "pt_BR")))
-                .uppercased()
-                .replacingOccurrences(of: ".", with: ""))
-                .font(Editorial.sans(10.5, .semibold))
-                .tracking(1.2)
+        // Flat calendar typography. Today is identified exclusively by the
+        // HOJE label; a surrounding tile looked like a second selection
+        // control and competed with the event cards beside it.
+        VStack(spacing: 1) {
+            Text(isToday ? "HOJE" : weekdayLabel)
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .tracking(0.7)
                 .foregroundStyle(isToday ? Editorial.accent : Editorial.inkMute)
 
             Text(date.formatted(.dateTime.day()))
-                .font(Editorial.serif(38))
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
                 .foregroundStyle(Editorial.ink)
-                .tracking(-1.4)
                 .monospacedDigit()
-                // Prototype `lineHeight: 0.95` — clip the serif's
-                // natural leading so the numeral doesn't inflate
-                // the row's height.
-                .padding(.vertical, -4)
-                .overlay(alignment: .bottom) {
-                    if isToday {
-                        Rectangle()
-                            .fill(Editorial.accent)
-                            .frame(height: 2)
-                            .offset(y: 6)
-                    }
-                }
-
-            if isToday {
-                Text("↳ hoje")
-                    .font(Editorial.serif(11).italic())
-                    .foregroundStyle(Editorial.accent)
-                    .padding(.top, 2)
-            }
         }
-        // 72 → 48: just wide enough for the serif day numeral +
-        // weekday, killing the unused trailing slack in the
-        // column (kept fixed so the time column stays aligned
-        // across single- and two-digit days).
-        .frame(width: 48, alignment: .leading)
+        .frame(width: 46, height: 46, alignment: .center)
         .padding(.top, 6)
+    }
+
+    private var weekdayLabel: String {
+        date.formatted(.dateTime.weekday(.abbreviated)
+            .locale(Locale(identifier: "pt_BR")))
+            .uppercased()
+            .replacingOccurrences(of: ".", with: "")
     }
 
     /// Click handler for `AgendaEventCard`. Lives on the
@@ -1112,5 +1092,3 @@ struct EventRightClickCatcher: NSViewRepresentable {
         }
     }
 }
-
-

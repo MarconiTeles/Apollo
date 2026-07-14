@@ -51,12 +51,17 @@ struct EditorialSidebar: View {
         //   C  panelDeep sólido + hairline (Reduce Transparency)
         let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
         VStack(spacing: 0) {
-            Color.clear.frame(height: 44)   // traffic-light inset
-            searchBar
+            // 44pt native traffic-light lane + 30pt breathing room before
+            // the first section label.
+            Color.clear.frame(height: 74)
             navList
             userFooter
         }
         .frame(width: 220)
+        // Keep the sidebar on its dedicated, direct glass path. Wrapping the
+        // effect in the shared floating-panel builder inserted an additional
+        // view-builder layer that weakened the live backdrop capture and made
+        // this pane read like an opaque vibrancy sheet.
         .background {
             if Materials.tier == .solid {
                 shape.fill(Editorial.panelDeep)
@@ -67,13 +72,12 @@ struct EditorialSidebar: View {
         .overlay {
             if Materials.tier != .solid {
                 shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
-                    .allowsHitTesting(false)   // fio de luz
+                    .allowsHitTesting(false)
             } else {
                 shape.strokeBorder(Editorial.rule, lineWidth: 1)
                     .allowsHitTesting(false)
             }
         }
-        // Elevação de pane flutuante (mesma família do floatingPanel).
         .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
         .padding(.leading, 10)
         .padding(.vertical, 10)
@@ -85,40 +89,6 @@ struct EditorialSidebar: View {
             let fresh = PinnedLists.load()
             if fresh != pinnedLists { pinnedLists = fresh }
         }
-    }
-
-    // ────────────────────────────────────────────────────────────────────
-    // MARK: Search pill
-    // ────────────────────────────────────────────────────────────────────
-
-    private var searchBar: some View {
-        Button(action: onOpenPalette) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Editorial.inkMute)
-                Text("Buscar tarefas, listas…")
-                    .font(Editorial.serif(13).italic())
-                    .foregroundStyle(Editorial.inkMute)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 4)
-                KbdTB(text: "⌘K")
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            // Studio Glass: campo de busca usa o token `field`
-            // (poço mais fundo que o panelDeep da coluna).
-            .background(
-                Capsule()
-                    .fill(Editorial.field)
-                    .overlay(Capsule().strokeBorder(Editorial.rule, lineWidth: 1))
-            )
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .padding(.horizontal, 14)
-        .padding(.bottom, 12)
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -140,12 +110,12 @@ struct EditorialSidebar: View {
 
     private var edicaoSection: some View {
         SidebarSection(label: "Edição") {
-            navRow("Hoje",          count: todayCount,    route: .today)
-            navRow("Minhas tarefas", count: tasksCount,   route: .tasks, italic: true)
-            navRow("Quadro",        count: boardCount,    route: .board)
+            navRow("Hoje",           count: todayCount,    route: .today)
+            navRow("Minhas tarefas", count: tasksCount,    route: .tasks)
+            navRow("Quadro",         count: boardCount,    route: .board)
             navRow("Próximos",      count: upcomingCount, route: .upcoming, disabled: true)
-            navRow("Concluídas",                          route: .done,  italic: true, disabled: true)
-            navRow("Apollo",        mark: true,           route: .ai,    disabled: true)
+            navRow("Concluídas",                          route: .done, disabled: true)
+            navRow("Apollo",                              route: .ai,   disabled: true)
         }
     }
 
@@ -156,7 +126,8 @@ struct EditorialSidebar: View {
                     color: e.color,
                     label: e.name,
                     count: e.count,
-                    isActive: activeListId == e.id
+                    isActive: activeListId == e.id,
+                    targetListId: e.id
                 ) {
                     // Picking a specific list implies leaving the
                     // cross-list "Atribuídas a mim" view — otherwise
@@ -187,8 +158,7 @@ struct EditorialSidebar: View {
     /// the canvas is actually showing a workspace-wide view.
     private var activeListId: String? {
         if appState.taskViewMode == .myWork { return nil }
-        let id = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId)
-        return (id?.isEmpty == false) ? id : nil
+        return appState.activeListId.isEmpty ? nil : appState.activeListId
     }
 
     private var filtrosSection: some View {
@@ -203,6 +173,11 @@ struct EditorialSidebar: View {
             // narrow the task list in real time.
             TaskFilterPopover(mode: .embedded)
                 .environmentObject(appState)
+                // Expanded search results must remain inside the 220pt pane.
+                // Text fields and long member/tag chips otherwise keep their
+                // intrinsic width and draw over the main canvas.
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .clipped()
         }
     }
 
@@ -252,18 +227,26 @@ struct EditorialSidebar: View {
     @ViewBuilder
     private func navRow(_ label: String,
                         count: Int? = nil,
-                        mark: Bool = false,
                         route: SidebarRoute,
-                        italic: Bool = false,
                         disabled: Bool = false) -> some View {
         SidebarNavRow(label: label,
+                      icon: icon(for: route),
                       count: count,
                       isActive: active == route,
-                      italic: italic,
-                      mark: mark,
                       disabled: disabled) {
             guard !disabled else { return }
             active = route
+        }
+    }
+
+    private func icon(for route: SidebarRoute) -> String {
+        switch route {
+        case .today:    return "calendar"
+        case .tasks:    return "checklist"
+        case .board:    return "rectangle.grid.1x2"
+        case .upcoming: return "clock"
+        case .done:     return "checkmark.circle"
+        case .ai:       return "sparkles"
         }
     }
 
@@ -337,16 +320,11 @@ struct EditorialSidebar: View {
     private var todayCount: Int {
         appState.eventsForToday.count + pool.filter(isInToday).count
     }
-    /// "Tarefas" sidebar item opens `EditorialMyTasksView` — every
-    /// non-completed task across the workspace assigned to the
-    /// connected user. Count mirrors that view's content so the
-    /// badge in the sidebar matches the actual list inside.
+    /// "Minhas tarefas" is now the single-line view of the currently
+    /// selected list (the same universe as Quadro), so its count must
+    /// follow `pool` instead of the former workspace-wide assignee count.
     private var tasksCount: Int {
-        guard let me = myUserId else { return 0 }
-        return appState.tasks.filter { t in
-            !t.isCompleted && !t.archived &&
-            t.assignees.contains { $0.id == me }
-        }.count
+        pool.filter { !$0.archived }.count
     }
     private var boardCount: Int { pool.count }
     private var upcomingCount: Int {
@@ -412,6 +390,27 @@ struct EditorialSidebar: View {
     }
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// MARK: - Sidebar glass surface
+// ────────────────────────────────────────────────────────────────────────
+
+/// Dedicated direct material application for the sidebar. Liquid Glass must
+/// remain attached to the pane content itself so the board/list beneath is
+/// sampled and refracted instead of flattened into an opaque fallback layer.
+private struct SidebarGlassSurface: ViewModifier {
+    let shape: RoundedRectangle
+
+    func body(content: Content) -> some View {
+        if Materials.tier == .solid {
+            content
+        } else if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
+    }
+}
+
 // ────────────────────────────────────────────────────────────────────
 // MARK: Section + rows
 // ────────────────────────────────────────────────────────────────────
@@ -421,22 +420,24 @@ private struct SidebarSection<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Folio(label)
+            Text(label)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(Editorial.inkMute)
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
-                .padding(.bottom, 6)
+                .padding(.bottom, 7)
             VStack(alignment: .leading, spacing: 0) { content() }
         }
     }
 }
 
 private struct SidebarNavRow: View {
+    @EnvironmentObject private var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
     let label: String
+    let icon: String
     var count: Int? = nil
     var isActive: Bool
-    var italic: Bool = false
-    var mark: Bool = false
     /// Render the row in a disabled state: muted text, no
     /// hover halo, no accent on active. Used for routes that
     /// aren't wired up yet (Próximos / Concluídas / Apollo).
@@ -446,22 +447,16 @@ private struct SidebarNavRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("↳")
-                    .font(Editorial.serif(14).italic())
-                    .foregroundStyle(disabled ? Editorial.inkFaint : Editorial.inkSoft)
-                    .opacity(isActive && !disabled ? 1 : 0)
-                    .frame(width: 8, alignment: .leading)
-                if mark {
-                    Text("✦")
-                        .font(Editorial.serif(13))
-                        .foregroundStyle(disabled ? Editorial.inkFaint : Editorial.inkSoft)
-                }
+            HStack(alignment: .center, spacing: 9) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .regular))
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(disabled ? Editorial.inkFaint
+                                              : (isActive ? Editorial.accent
+                                                          : Editorial.inkMute))
+                    .frame(width: 18, alignment: .center)
                 Text(label)
-                    .font(italic
-                          ? Editorial.sans(13.5, isActive ? .semibold : .medium).italic()
-                          : Editorial.sans(13.5, isActive ? .semibold : .medium))
-                    .tracking(-0.05)
+                    .font(.system(size: 13, weight: isActive ? .medium : .regular))
                     .foregroundStyle(disabled
                                      ? Editorial.inkFaint
                                      : Editorial.ink)
@@ -470,7 +465,7 @@ private struct SidebarNavRow: View {
                 Spacer(minLength: 4)
                 if let count {
                     Text("\(count)")
-                        .font(Editorial.sans(11, .medium))
+                        .font(.system(size: 11.5, weight: .regular))
                         .foregroundStyle(disabled
                                          ? Editorial.inkFaint
                                          : (isActive ? Editorial.ink : Editorial.inkMute))
@@ -480,7 +475,8 @@ private struct SidebarNavRow: View {
                 }
             }
             .padding(.horizontal, 6)
-            .padding(.vertical, 5)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
             // Hover wash (non-active rows only).
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -510,39 +506,57 @@ private struct SidebarNavRow: View {
             }
             .shadow(color: isActive && !disabled ? .black.opacity(0.12) : .clear,
                     radius: 5, y: 2.5)
+            .contentShape(RoundedRectangle(cornerRadius: 8,
+                                           style: .continuous))
         }
         .buttonStyle(.plain)
+        // The visual row already expands through its HStack, but SwiftUI can
+        // preserve the Button's intrinsic hit region when the plain style is
+        // used. Expand the control itself so every visible point in the row —
+        // including the space between label and count — activates it.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: 8,
+                                       style: .continuous))
         .disabled(disabled)
-        .onHover { if !disabled { hover = $0 } }
+        .onHover { entering in
+            if !disabled { hover = entering && !appState.anyPopupOpen }
+        }
+        .onChange(of: appState.anyPopupOpen) { _, open in
+            if open { hover = false }
+        }
         .animation(.easeOut(duration: 0.12), value: hover)
     }
 }
 
 private struct SidebarDotRow: View {
+    @EnvironmentObject private var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
     let color: Color
     let label: String
     var count: Int? = nil
     var accent: Bool = false
     var isActive: Bool = false
+    var targetListId: String? = nil
     var onTap: (() -> Void)? = nil
     @State private var hover = false
+    @State private var isDropTarget = false
 
     var body: some View {
         Button { onTap?() } label: {
             HStack(spacing: 9) {
-                Circle().fill(color).frame(width: 7, height: 7)
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(color)
+                    .frame(width: 18, alignment: .center)
                 Text(label)
-                    .font(accent
-                          ? Editorial.sans(12.5, .semibold).italic()
-                          : Editorial.sans(12.5, .medium))
+                    .font(.system(size: 13, weight: isActive ? .medium : .regular))
                     .foregroundStyle(accent ? Editorial.accent : Editorial.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
                 if let count {
                     Text("\(count)")
-                        .font(Editorial.sans(11, .medium))
+                        .font(.system(size: 11.5, weight: .regular))
                         .foregroundStyle(accent ? Editorial.accent : Editorial.inkMute)
                         .monospacedDigit()
                         .lineLimit(1)
@@ -550,12 +564,14 @@ private struct SidebarDotRow: View {
                 }
             }
             .padding(.horizontal, 6)
-            .padding(.vertical, 5)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
             // Hover wash (non-active rows only).
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(!isActive && hover ? Editorial.ink.opacity(0.03)
-                          : Color.clear)
+                    .fill(isDropTarget ? color.opacity(0.16)
+                          : (!isActive && hover ? Editorial.ink.opacity(0.03)
+                          : Color.clear))
             )
             // Selected list → subtly accent-tinted glass in light mode and
             // nearly colourless glass in dark mode. The dot remains the
@@ -579,31 +595,37 @@ private struct SidebarDotRow: View {
             }
             .shadow(color: isActive ? .black.opacity(0.12) : .clear,
                     radius: 5, y: 2.5)
+            .contentShape(RoundedRectangle(cornerRadius: 8,
+                                           style: .continuous))
         }
         .buttonStyle(.plain)
-        .onHover { hover = $0 }
-        .animation(.easeOut(duration: 0.12), value: hover)
-    }
-}
-
-// ────────────────────────────────────────────────────────────────────────
-// MARK: - Sidebar glass surface (receita do MINIMAL TP)
-// ────────────────────────────────────────────────────────────────────────
-
-/// Vidro do pane flutuante da sidebar — port do `MTSurfaceModifier`
-/// do MINIMAL TP: Liquid Glass REAL (`glassEffect`) no macOS 26 SEM
-/// tint (vidro neutro), `ultraThinMaterial` como fallback, e nada no
-/// Tier C (o caller pinta `panelDeep` sólido no background).
-private struct SidebarGlassSurface: ViewModifier {
-    let shape: RoundedRectangle
-
-    func body(content: Content) -> some View {
-        if Materials.tier == .solid {
-            content   // sólido já pintado pelo caller
-        } else if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
-            content.glassEffect(.regular, in: shape)
-        } else {
-            content.background(.ultraThinMaterial, in: shape)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: 8,
+                                       style: .continuous))
+        .onHover { entering in
+            hover = entering && !appState.anyPopupOpen
         }
+        .onChange(of: appState.anyPopupOpen) { _, open in
+            if open { hover = false }
+        }
+        .onDrop(of: [.text], isTargeted: $isDropTarget) { providers in
+            guard !appState.anyPopupOpen,
+                  let targetListId,
+                  let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: NSString.self) { value, _ in
+                guard let raw = value as? String else { return }
+                let ids = MyTasksDragPayload.decode(raw)
+                Task { @MainActor in
+                    for id in ids {
+                        guard let task = appState.tasksById[id],
+                              task.listId != targetListId else { continue }
+                        await appState.moveTaskToList(task, toListId: targetListId)
+                    }
+                }
+            }
+            return true
+        }
+        .animation(.easeOut(duration: 0.12), value: hover)
+        .animation(.easeOut(duration: 0.12), value: isDropTarget)
     }
 }

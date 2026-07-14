@@ -212,7 +212,7 @@ struct NotificationsCenterView: View {
 
 // MARK: - Single notification row
 
-private struct NotificationRow: View, Equatable {
+struct NotificationRow: View, Equatable {
     @EnvironmentObject var appState: AppState
     let notification: AppNotification
     let onDismiss: () -> Void
@@ -259,7 +259,7 @@ private struct NotificationRow: View, Equatable {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 // Tone dot (prototype `PNotifRow`): solid muted
                 // status/kind colour when unread, hollow ring when
                 // already read.
@@ -273,63 +273,70 @@ private struct NotificationRow: View, Equatable {
                             lineWidth: 1.5
                         )
                     )
-                    .padding(.top, 6)
+                    .padding(.bottom, 15)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(notification.title)
-                        // Sans (no serif) for the notification title.
-                        .font(Editorial.sans(13.5, .semibold))
-                        .foregroundStyle(notification.read
-                                         ? Editorial.inkSoft : Editorial.ink)
-                        .tracking(-0.1)
-                        .lineLimit(2)
-                    if let s = notification.subtitle, !s.isEmpty {
-                        Text(s)
-                            .font(Editorial.serif(12).italic())
+                VStack(alignment: .leading, spacing: 7) {
+                    // Exactly two visual lines. Source, title, time and
+                    // dismiss live on line one; contextual copy and the
+                    // target action share line two. Long ClickUp titles
+                    // truncate instead of making the inbox row grow.
+                    HStack(spacing: 7) {
+                        Text(sourceLabel)
+                            .font(Editorial.sans(8.5, .semibold))
+                            .tracking(1.0)
+                            .foregroundStyle(cachedTargetTint.editorialMuted)
+                            .fixedSize()
+                        Text(notification.title)
+                            .font(Editorial.sans(13.5, .semibold))
+                            .foregroundStyle(notification.read
+                                             ? Editorial.inkSoft : Editorial.ink)
+                            .tracking(-0.1)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 8)
+                        Text(relative)
+                            .font(Editorial.sans(10.5))
+                            .foregroundStyle(Editorial.inkMute)
+                            .fixedSize()
+                        Button(action: onDismiss) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(Editorial.inkMute)
+                                .frame(width: 18, height: 18)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .focusEffectDisabled()
+                    }
+
+                    HStack(spacing: 8) {
+                        Text(secondaryLine)
+                            .font(Editorial.serif(11.5).italic())
                             .foregroundStyle(Editorial.inkSoft)
                             .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 4)
+                        if notification.hasTarget {
+                            Label("abrir", systemImage: targetIcon)
+                                .labelStyle(CompactLabel())
+                                .font(Editorial.sans(10.5, .medium))
+                                .foregroundStyle(Editorial.accent)
+                                .fixedSize()
+                        }
                     }
-                    if let m = notification.message, !m.isEmpty {
-                        // `attributedMessage` keeps the per-status
-                        // colour highlights baked into the substring.
-                        Text(notification.attributedMessage ?? AttributedString(m))
-                            .font(Editorial.serif(12).italic())
-                            .foregroundStyle(Editorial.inkSoft)
-                            .lineLimit(3)
-                    }
-                    if notification.hasTarget {
-                        Label("abrir", systemImage: targetIcon)
-                            .labelStyle(CompactLabel())
-                            .font(Editorial.sans(10.5, .medium))
-                            .foregroundStyle(Editorial.accent)
-                            .padding(.top, 1)
-                    }
-                }
-
-                Spacer(minLength: 0)
-
-                VStack(alignment: .trailing, spacing: 6) {
-                    Text(relative)
-                        .font(Editorial.sans(10.5))
-                        .foregroundStyle(Editorial.inkMute)
-                        .fixedSize()
-                    Button(action: onDismiss) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(Editorial.inkMute)
-                            .padding(4)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain).focusEffectDisabled()
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
+            .frame(minHeight: 68)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(notification.read ? Color.clear
                                           : cachedTargetTint.editorialMuted.opacity(0.05))
             .overlay(alignment: .bottom) {
-                Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+                Rectangle()
+                    .fill(Editorial.ruleSoft.opacity(0.72))
+                    .frame(height: 0.5)
+                    .padding(.leading, 22)
             }
             .contentShape(Rectangle())
         }
@@ -372,6 +379,20 @@ private struct NotificationRow: View, Equatable {
         case .task:  return "checklist"
         default:     return "arrow.up.right.square"
         }
+    }
+
+    private var sourceLabel: String {
+        notification.targetKind == .task ? "CLICKUP" : "APOLLO"
+    }
+
+    private var secondaryLine: String {
+        [notification.subtitle, notification.message]
+            .compactMap { value in
+                guard let value else { return nil }
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            .joined(separator: " · ")
     }
 }
 

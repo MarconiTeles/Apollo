@@ -37,7 +37,7 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
 
 // Apollo — STUDIO GLASS (a filosofia de design do Galileo, portada).
 // Substitui o "Editorial Calm". Tese: neutros verdadeiros; UM accent
-// (#7C5CFF) p/ ação/marca; profundidade por MATERIAL e sombra (tiers
+// herdado do macOS p/ ação/marca; profundidade por MATERIAL e sombra (tiers
 // em Materials.swift), não por bordas; SF Pro em tudo (serif morreu —
 // o nome `serif` fica por compat de API, resolve pra SF Pro); status
 // segue como dot + word, nunca pill preenchida.
@@ -75,20 +75,24 @@ enum Editorial {
     static let rule     = Color(nsColor: .editorial(light: "#141416", dark: "#FFFFFF", lightAlpha: 0.10, darkAlpha: 0.07))
     static let ruleSoft = Color(nsColor: .editorial(light: "#141416", dark: "#FFFFFF", lightAlpha: 0.06, darkAlpha: 0.045))
 
-    // ── Single accent — roxo Studio Glass (marca unificada com o
-    //    Galileo / Apollo Review). Vivo sobre vidro.
-    static let accent     = Color(nsColor: .editorial(light: "#6A4DF0", dark: "#7C5CFF"))
-    static let accentSoft = Color(nsColor: .editorial(light: "#6A4DF0", dark: "#7C5CFF", lightAlpha: 0.10, darkAlpha: 0.18))
-    /// Glyph selecionado/hover (um passo mais claro que o accent).
-    static let accent2    = Color(nsColor: .editorial(light: "#7C5CFF", dark: "#9B7FFF"))
-    /// Pressed/borda.
-    static let accentDim  = Color(nsColor: .editorial(light: "#43269E", dark: "#43269E"))
+    // ── Single accent — follows the user's macOS Accent color.
+    // `controlAccentColor` is dynamic: changing the system preference
+    // updates Apollo without maintaining an app-specific purple fork.
+    static let accent     = Color(nsColor: .controlAccentColor)
+    static let accentSoft = Color(nsColor: .controlAccentColor).opacity(0.12)
+    /// Selected/hover glyph; hue remains identical to the system accent.
+    static let accent2    = Color(nsColor: .controlAccentColor)
+    /// Pressed/border variant.
+    static let accentDim  = Color(nsColor: .controlAccentColor).opacity(0.72)
+    /// Semantic deadline failure; unlike accent this never follows the
+    /// user's customization because overdue always means alert red.
+    static let overdue    = Color(nsColor: .systemRed)
     /// Texto/tokens sobre fills de accent.
     static let tokenOnAccent = Color(nsColor: .editorial(light: "#FFFFFF", dark: "#F0EAFF"))
 
     // Twins NSColor p/ superfícies AppKit (RichTextEditor etc.).
     static let inkNS:   NSColor = .editorial(light: "#141416", dark: "#E8E8EA")
-    static let tokenNS: NSColor = .editorial(light: "#6A4DF0", dark: "#7C5CFF")
+    static let tokenNS: NSColor = .controlAccentColor
 
     /// Status colors — used ONLY as dots + caption text, never
     /// as a filled pill (that's the whole point of the redesign).

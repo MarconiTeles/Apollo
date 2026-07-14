@@ -257,13 +257,17 @@ enum TaskContextMenu {
     /// "Copiar link" reflect the latest task state.
     static func makeNSMenu(task: CUTask,
                             appState: AppState) -> NSMenu {
+        makeNSMenu(actions: actions(for: task, appState: appState))
+    }
+
+    static func makeNSMenu(actions: [TaskContextAction]) -> NSMenu {
         let menu = NSMenu()
         // Disable autoenable so closure-driven items don't
         // get greyed out by AppKit's default validation
         // (which expects a target+selector on the
         // responder chain).
         menu.autoenablesItems = false
-        for action in actions(for: task, appState: appState) {
+        for action in actions {
             menu.addItem(makeNSItem(from: action))
         }
         return menu
@@ -345,7 +349,7 @@ extension View {
 /// SwiftUI counterpart to the NSMenu builder. Walks the
 /// same `[TaskContextAction]` spec and emits `Button` /
 /// `Menu` / `Divider` per entry. Recursive for submenus.
-private struct TaskContextMenuItems: View {
+struct TaskContextMenuItems: View {
     let actions: [TaskContextAction]
 
     var body: some View {

@@ -66,10 +66,7 @@ struct EditorialHomeTasksColumn: View {
             }
             return universe
         }()
-        let dimensioned = appState.taskFilters.isEmpty
-            ? statused
-            : statused.filter { appState.taskFilters.matches($0) }
-        return dimensioned
+        return appState.taskFilters.applying(to: statused)
     }
 
     private var groups: [(status: CUStatus, tasks: [CUTask])] {
@@ -284,10 +281,13 @@ struct EditorialHomeTasksColumn: View {
     @ViewBuilder
     private func dueLabel(_ task: CUTask) -> some View {
         if let d = task.dueDate {
-            let overdue = d < Date()
+            let today = Calendar.current.isDateInToday(d)
+            let overdue = d < Calendar.current.startOfDay(for: Date())
+            let color = today ? Editorial.accent
+                : (overdue ? Editorial.overdue : Editorial.inkSoft)
             Text(relativeDate(d))
                 .font(Editorial.sans(11.5, .medium))
-                .foregroundStyle(overdue ? Editorial.accent : Editorial.inkSoft)
+                .foregroundStyle(color)
                 .monospacedDigit()
                 .lineLimit(1)
         } else {

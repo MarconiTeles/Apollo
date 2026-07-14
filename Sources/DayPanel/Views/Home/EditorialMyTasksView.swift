@@ -1,14 +1,12 @@
 import SwiftUI
 import AppKit
 
-// Apollo · Editorial+ "Minhas tarefas" / "Atribuídas a mim".
+// Apollo · Editorial+ "Minhas tarefas".
 //
-// Mirrors ClickUp's per-user "Tasks assigned to me" page: every
-// non-completed task across the workspace that has the connected
-// user in its assignees array, grouped by status, sorted by due
-// date within each group. Cross-list — does NOT obey the active
-// list selection (the whole point is one place to see everything
-// on your plate regardless of which list it lives in).
+// List view counterpart to Quadro: every task in the currently
+// selected ClickUp list, grouped by status and narrowed by the same
+// global filters. This keeps list and board as two presentations of
+// one identical data universe.
 //
 // Routes from `sidebarRoute == .tasks` in ContentView.
 
@@ -21,37 +19,51 @@ struct EditorialMyTasksView: View {
     @AppStorage("dp_myTasks_collapsedStatuses_v1")
     private var collapsedRaw: String = ""
 
-    /// Sourced from `appState.assignedToMeTasks` — a workspace-
-    /// scoped cache populated by the STREAMING
-    /// `syncAssignedToMeAcrossWorkspace`. Reading from AppState
-    /// instead of a view-local `@State` means re-entering the
-    /// view (dashboard → Tarefas → dashboard → Tarefas) shows
-    /// the cached rows instantly while the background refresh
-    /// streams updates.
-    private var allMyTasks: [CUTask] { appState.assignedToMeTasks }
-    private var didFirstLoad: Bool { appState.assignedToMeDidFirstLoad }
+    @State private var selectedTaskIds: Set<String> = []
+    @State private var selectionAnchorId: String?
+    @State private var draggingTaskIds: Set<String> = []
+    @State private var dragOverStatus: String?
+    /// Gives SwiftUI one responsive frame to paint a truthful skeleton
+    /// before constructing the recycled task rows on route/list changes.
+    @State private var listMountReady = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Rectangle().fill(Editorial.rule).frame(height: 1)
+        ZStack(alignment: .top) {
+            // The table owns the full canvas. The chrome is layered above it
+            // so rows remain visible through the translucent material while
+            // scrolling, matching a native macOS titlebar rather than a
+            // separate opaque section above the content.
             content
+            header
+                .zIndex(2)
+        }
+        .overlay(alignment: .bottom) {
+            if !selectedTasks.isEmpty {
+                bulkToolbar
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 34)
+                    .transition(.move(edge: .bottom)
+                        .combined(with: .opacity)
+                        .combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                    .zIndex(3)
+            }
         }
         .background(Editorial.paper)
-        .task { await refresh() }
-        // Re-stream whenever a global sync touches the workspace
-        // — best proxy for "data might have moved upstream".
-        .onChange(of: appState.tasks.count) { _, _ in
-            Task { await refresh() }
+        .onChange(of: visibleTaskIds) { _, ids in
+            selectedTaskIds.formIntersection(ids)
+            if let anchor = selectionAnchorId, !ids.contains(anchor) {
+                selectionAnchorId = nil
+            }
         }
-    }
-
-    /// Trigger the streaming refresh — pages land in
-    /// `appState.assignedToMeTasks` one by one, so the canvas
-    /// paints the first 100 rows in ~500ms instead of waiting
-    /// for the entire paginated set.
-    private func refresh() async {
-        await appState.syncAssignedToMeAcrossWorkspace()
+        .task(id: activeListId) {
+            listMountReady = false
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.18)) {
+                listMountReady = true
+            }
+        }
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -61,7 +73,7 @@ struct EditorialMyTasksView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
             HStack(spacing: 10) {
-                Text("MINHAS TAREFAS · ATRIBUÍDAS A MIM")
+                Text(headerTitle)
                     .font(Editorial.sans(11, .semibold))
                     .tracking(1.4)
                     .foregroundStyle(Editorial.inkSoft)
@@ -71,15 +83,16 @@ struct EditorialMyTasksView: View {
                     .monospacedDigit()
             }
             Spacer(minLength: 24)
-            Text("¶ tudo o que está com você, agrupado por status.")
+            Text("¶ toda a lista selecionada, agrupada por status.")
                 .font(Editorial.serif(12).italic())
                 .foregroundStyle(Editorial.inkMute)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
         .padding(.horizontal, 28)
-        .padding(.top, 22)
-        .padding(.bottom, 14)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity)
+        .background(Editorial.paper)
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -91,37 +104,39 @@ struct EditorialMyTasksView: View {
         if appState.clickUpAuthService.userId == nil {
             emptyState(title: "Conecte sua conta ClickUp",
                        caption: "Faça login para ver suas tarefas atribuídas.")
-        } else if allMyTasks.isEmpty && !didFirstLoad {
-            // Skeletons ONLY before the first sync has ever
-            // finished. After that, an empty `allMyTasks` is a
-            // real "you have nothing assigned" state — not a
-            // loading state, regardless of whether a background
-            // sync is currently running.
-            EditorialSkeletonStack(count: 8)
-        } else if allMyTasks.isEmpty {
-            emptyState(title: "Tudo limpo",
-                       caption: "Nenhuma tarefa pendente atribuída a você.")
+        } else if !listMountReady || (allListTasks.isEmpty && appState.isSyncing) {
+            MyTasksLoadingPlaceholder()
+                .transition(.opacity)
+        } else if allListTasks.isEmpty {
+            emptyState(title: "Lista vazia",
+                       caption: "Nenhuma tarefa encontrada na lista selecionada.")
+        } else if visibleListTasks.isEmpty {
+            emptyState(title: "Nenhum resultado",
+                       caption: "Nenhuma tarefa corresponde aos filtros ativos.")
         } else {
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
-                    // Flatten (status, taskIndex) pairs into a single
-                    // index sequence so the cascade reads as ONE wave
-                    // sweeping across the whole canvas instead of
-                    // independent waves per group.
-                    // ONE group+sort+flatten pass per render — the
-                    // old `flattenedRows.first` check inside every
-                    // row re-ran the whole chain per visible row.
-                    let flat = flattenedRows
-                    ForEach(Array(flat.enumerated()), id: \.element.id) { (i, row) in
-                        rowOrHeader(row, isFirst: i == 0)
-                            .cascadeAppear(index: i)
-                    }
-                }
-                .padding(.horizontal, 28)
-                .padding(.top, 8)
-                .padding(.bottom, 80)
-                .animation(.easeOut(duration: 0.22), value: allMyTasks.count)
-            }
+            MyTasksAppKitList(
+                sections: nativeSections,
+                selectedTaskIds: selectedTaskIds,
+                appState: appState,
+                topContentInset: 72,
+                bottomContentInset: 112,
+                onActivate: { task, modifiers, rect in
+                    appState.detailTaskOrigin = rect
+                    activate(task, modifiers: modifiers)
+                },
+                onToggleStatus: { toggleCollapsed($0) },
+                onBeginDrag: { beginDragIds(for: $0) },
+                onEndDrag: { draggingTaskIds.removeAll() }
+            )
+        }
+    }
+
+    private var nativeSections: [MyTasksAppKitSection] {
+        groups.map { group in
+            let key = group.status.status.lowercased()
+            return MyTasksAppKitSection(status: group.status,
+                                        tasks: group.tasks,
+                                        collapsed: collapsedSet.contains(key))
         }
     }
 
@@ -161,15 +176,55 @@ struct EditorialMyTasksView: View {
                 }
                 groupHeader(status: s, count: c, collapsed: collapsed)
             }
-        case .task(let t, _):
+            .onDrop(of: [.text], delegate: MyTasksStatusDropDelegate(
+                targetStatus: s,
+                appState: appState,
+                draggingTaskIds: $draggingTaskIds,
+                dragOverStatus: $dragOverStatus
+            ))
+        case .task(let t, let statusKey):
             // Reuse the dashboard cell — swipe actions + DONE button +
             // hover haptics — instead of the old static `taskRow`.
             // Wrapped in `SwipeCellHost` so the two-finger swipe wires
             // up in this pure-SwiftUI list (no NSCollectionListView host
             // here). The transition makes the row slide + fade when its
             // status section collapses/expands (driven by `toggleCollapsed`).
-            SwipeCellHost { TaskRowView(task: t, appState: appState) }
+            SwipeCellHost {
+                TaskRowView(
+                    task: t,
+                    appState: appState,
+                    onActivate: { flags in activate(t, modifiers: flags) },
+                    contextActions: selectedTaskIds.contains(t.id)
+                        ? TaskBulkActions.actions(for: selectedTasks,
+                                                  appState: appState)
+                        : nil
+                )
+            }
                 .frame(maxWidth: .infinity)
+                .background {
+                    if selectedTaskIds.contains(t.id) {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Editorial.accent.opacity(0.075))
+                    }
+                }
+                .overlay {
+                    if selectedTaskIds.contains(t.id) {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Editorial.accent.opacity(0.42), lineWidth: 1)
+                    }
+                }
+                .opacity(draggingTaskIds.contains(t.id) ? 0.42 : 1)
+                .onDrag {
+                    dragProvider(for: t)
+                } preview: {
+                    dragPreview(for: t)
+                }
+                .onDrop(of: [.text], delegate: MyTasksStatusDropDelegate(
+                    targetStatus: status(forKey: statusKey, fallbackTask: t),
+                    appState: appState,
+                    draggingTaskIds: $draggingTaskIds,
+                    dragOverStatus: $dragOverStatus
+                ))
                 .transition(.asymmetric(
                     insertion: .opacity.combined(with: .move(edge: .top)),
                     removal:   .opacity.combined(with: .move(edge: .top))
@@ -191,34 +246,169 @@ struct EditorialMyTasksView: View {
     }
 
     // ────────────────────────────────────────────────────────────────────
-    // MARK: Groups
+    // MARK: Multi-selection + bulk commands
     // ────────────────────────────────────────────────────────────────────
 
-    /// Pending tasks where the connected user is in the assignees
-    /// array. Sourced from `allMyTasks` (the dedicated cross-
-    /// workspace fetch) so this view shows EVERYTHING on the
-    /// user's plate, not just the active list — earlier this was
-    /// filtering `appState.tasks` and silently dropped tasks in
-    /// other lists that hadn't been pulled into local state.
-    private var assignedToMe: [CUTask] {
-        allMyTasks.filter { t in
-            !t.isCompleted && !t.archived
+    private var bulkToolbar: some View {
+        TaskBulkToolbar(tasks: selectedTasks,
+                        appState: appState,
+                        onClear: clearSelection)
+    }
+
+    private func activate(_ task: CUTask, modifiers: NSEvent.ModifierFlags) {
+        let intent: TaskSelectionIntent
+        if modifiers.contains(.shift) {
+            intent = .range
+        } else if modifiers.contains(.command) {
+            intent = .toggle
+        } else {
+            intent = .plain
+        }
+
+        let resolution = TaskSelectionResolver.resolve(
+            current: selectedTaskIds,
+            anchor: selectionAnchorId,
+            clicked: task.id,
+            ordered: orderedVisibleTasks.map(\.id),
+            intent: intent
+        )
+        if resolution.shouldOpen {
+            appState.openTaskDetail(
+                task,
+                origin: MouseOriginCapture.currentClickRectInMainWindow(),
+                navigationTasks: orderedVisibleTasks
+            )
+            return
+        }
+        withAnimation(.easeOut(duration: 0.14)) {
+            selectedTaskIds = resolution.selected
+            selectionAnchorId = resolution.anchor
         }
     }
 
-    private var totalCount: Int { assignedToMe.count }
+    private func clearSelection() {
+        withAnimation(.easeOut(duration: 0.14)) {
+            selectedTaskIds.removeAll()
+            selectionAnchorId = nil
+        }
+    }
+
+    private func dragProvider(for task: CUTask) -> NSItemProvider {
+        let ids = beginDragIds(for: task)
+        return NSItemProvider(object: MyTasksDragPayload.encode(ids) as NSString)
+    }
+
+    private func beginDragIds(for task: CUTask) -> [String] {
+        let ids: [String]
+        if selectedTaskIds.contains(task.id) {
+            ids = selectedTasks.map(\.id)
+        } else {
+            ids = [task.id]
+            selectedTaskIds = [task.id]
+            selectionAnchorId = task.id
+        }
+        draggingTaskIds = Set(ids)
+        return ids
+    }
+
+    private func dragPreview(for task: CUTask) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: "line.3.horizontal")
+                .foregroundStyle(Editorial.inkMute)
+            Text(selectedTaskIds.contains(task.id) && selectedTasks.count > 1
+                 ? "\(selectedTasks.count) tarefas"
+                 : task.title)
+                .font(Editorial.sans(12.5, .semibold))
+                .foregroundStyle(Editorial.ink)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 38)
+        .frame(width: 280, alignment: .leading)
+        .background(.regularMaterial,
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
+    }
+
+    private func status(forKey key: String, fallbackTask: CUTask) -> CUStatus {
+        appState.availableStatuses.first { $0.status.lowercased() == key }
+            ?? CUStatus(status: fallbackTask.status,
+                        color: fallbackTask.statusColor,
+                        type: fallbackTask.isCompleted ? "closed" : "custom")
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // MARK: Groups
+    // ────────────────────────────────────────────────────────────────────
+
+    private var activeListId: String {
+        appState.activeListId
+    }
+
+    private var activeListName: String {
+        appState.activeListName
+    }
+
+    private var headerTitle: String {
+        let suffix = activeListName.isEmpty ? "LISTA SELECIONADA" : activeListName.uppercased()
+        return "MINHAS TAREFAS · \(suffix)"
+    }
+
+    /// Exact active-list work universe shown by Quadro/sidebar: open
+    /// tasks only. Closed history stays outside this operational list;
+    /// including it inflated a 330-item list to 1,000 rows and could
+    /// stall the SwiftUI canvas while mounting the first viewport.
+    private var allListTasks: [CUTask] {
+        TaskSurfaceScope.openTasks(in: appState.tasks,
+                                   activeListId: activeListId)
+    }
+
+    private var visibleListTasks: [CUTask] {
+        appState.taskFilters.applying(to: allListTasks)
+    }
+
+    private var visibleTaskIds: [String] { visibleListTasks.map(\.id) }
+
+    /// Selection follows current on-screen order, not AppState storage
+    /// order, so a Shift range always matches what is visibly between
+    /// the first and last clicked rows.
+    private var orderedVisibleTasks: [CUTask] {
+        flattenedRows.compactMap { row in
+            guard case .task(let task, _) = row else { return nil }
+            return task
+        }
+    }
+
+    private var selectedTasks: [CUTask] {
+        guard !selectedTaskIds.isEmpty else { return [] }
+        let byId = Dictionary(uniqueKeysWithValues: visibleListTasks.map { ($0.id, $0) })
+        let ordered = orderedVisibleTasks.compactMap { task in
+            selectedTaskIds.contains(task.id) ? byId[task.id] : nil
+        }
+        // A selected task may sit inside a status the user collapsed after
+        // selecting it. Keep it actionable and append it deterministically.
+        let orderedIds = Set(ordered.map(\.id))
+        let hidden = selectedTaskIds.subtracting(orderedIds)
+            .compactMap { byId[$0] }
+            .sorted { $0.id < $1.id }
+        return ordered + hidden
+    }
+
+    private var totalCount: Int { visibleListTasks.count }
 
     /// (status, tasks) tuples in workspace-status order. Drops empty
     /// statuses; sorts tasks within each by (overdue first → due
     /// date ascending → no-date last → priority).
     private var groups: [(status: CUStatus, tasks: [CUTask])] {
-        let byStatus = Dictionary(grouping: assignedToMe, by: { $0.status.lowercased() })
-        // Reversed status order — REVIEW first … BACKLOG last (pipeline end-first).
-        let visible = appState.availableStatuses.filter { !$0.isClosed }.reversed()
+        let byStatus = Dictionary(grouping: visibleListTasks, by: { $0.status.lowercased() })
+        // Same full status universe as Quadro, including closed lanes.
+        let visible = appState.availableStatuses.reversed()
         return visible.compactMap { s in
             let lc = s.status.lowercased()
             let ts = byStatus[lc] ?? []
-            guard !ts.isEmpty else { return nil }
+            // During a drag, empty statuses become visible drop targets;
+            // when no drag is active they stay out of the compact list.
+            guard !ts.isEmpty || !draggingTaskIds.isEmpty else { return nil }
             return (s, sorted(ts))
         }
     }
@@ -300,6 +490,18 @@ struct EditorialMyTasksView: View {
                 Spacer()
             }
             .padding(.vertical, 10)
+            .padding(.horizontal, 8)
+            .background {
+                if dragOverStatus == status.status.lowercased() {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color(hex: status.displayHex).opacity(0.12))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(Color(hex: status.displayHex).opacity(0.48),
+                                              lineWidth: 1)
+                        )
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -392,10 +594,13 @@ struct EditorialMyTasksView: View {
     @ViewBuilder
     private func dueLabel(_ task: CUTask) -> some View {
         if let d = task.dueDate {
-            let overdue = d < Date()
+            let today = Calendar.current.isDateInToday(d)
+            let overdue = d < Calendar.current.startOfDay(for: Date())
+            let color = today ? Editorial.accent
+                : (overdue ? Editorial.overdue : Editorial.inkSoft)
             Text(relativeDate(d))
                 .font(Editorial.sans(11.5, .medium))
-                .foregroundStyle(overdue ? Editorial.accent : Editorial.inkSoft)
+                .foregroundStyle(color)
                 .monospacedDigit()
                 .lineLimit(1)
         } else {
@@ -439,5 +644,211 @@ struct EditorialMyTasksView: View {
         withAnimation(.easeInOut(duration: 0.26)) {
             collapsedRaw = set.sorted().joined(separator: ",")
         }
+    }
+}
+
+/// Animated loading state shaped exactly like the single-line task list.
+/// One shared pulse drives the whole viewport, avoiding a timer/state
+/// machine per placeholder row.
+private struct MyTasksLoadingPlaceholder: View {
+    @State private var pulse = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            skeletonHeader(width: 96)
+            ForEach(0..<3, id: \.self) { _ in skeletonRow }
+            Color.clear.frame(height: 16)
+            skeletonHeader(width: 76)
+            ForEach(0..<6, id: \.self) { _ in skeletonRow }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 8)
+        .opacity(pulse ? 1 : 0.38)
+        .animation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true),
+                   value: pulse)
+        .onAppear { pulse = true }
+        .allowsHitTesting(false)
+        .accessibilityLabel("Carregando tarefas")
+    }
+
+    private func skeletonHeader(width: CGFloat) -> some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Editorial.rule)
+                .frame(width: 10, height: 6)
+            Circle().fill(Editorial.rule).frame(width: 7, height: 7)
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Editorial.rule)
+                .frame(width: width, height: 9)
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Editorial.ruleSoft)
+                .frame(width: 20, height: 9)
+            Spacer()
+        }
+        .frame(height: 38)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 0.5)
+        }
+    }
+
+    private var skeletonRow: some View {
+        HStack(spacing: 14) {
+            Circle().fill(Editorial.rule).frame(width: 14, height: 14)
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Editorial.rule)
+                .frame(height: 12)
+                .frame(maxWidth: 390)
+            Spacer(minLength: 12)
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Editorial.ruleSoft)
+                .frame(width: 74, height: 9)
+            HStack(spacing: 7) {
+                Circle().fill(Editorial.rule).frame(width: 20, height: 20)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Editorial.rule)
+                    .frame(width: 66, height: 10)
+            }
+            .frame(width: 132, alignment: .leading)
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Editorial.ruleSoft)
+                .frame(width: 54, height: 9)
+                .frame(width: 92, alignment: .trailing)
+            Circle().fill(Editorial.rule).frame(width: 4, height: 4)
+        }
+        .frame(height: 44)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 0.5)
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// MARK: - Deterministic Command / Shift selection
+// ────────────────────────────────────────────────────────────────────────
+
+enum TaskSelectionIntent {
+    case plain
+    case toggle
+    case range
+}
+
+struct TaskSelectionResolution: Equatable {
+    let selected: Set<String>
+    let anchor: String?
+    let shouldOpen: Bool
+}
+
+enum TaskSelectionResolver {
+    static func resolve(current: Set<String>,
+                        anchor: String?,
+                        clicked: String,
+                        ordered: [String],
+                        intent: TaskSelectionIntent) -> TaskSelectionResolution {
+        switch intent {
+        case .plain:
+            // With no active selection, a regular click preserves the
+            // established open-detail behaviour. Once selection mode is
+            // active, a plain click collapses it to one row like ClickUp.
+            if current.isEmpty {
+                return TaskSelectionResolution(selected: current,
+                                               anchor: anchor,
+                                               shouldOpen: true)
+            }
+            return TaskSelectionResolution(selected: [clicked],
+                                           anchor: clicked,
+                                           shouldOpen: false)
+
+        case .toggle:
+            var next = current
+            if next.contains(clicked) { next.remove(clicked) }
+            else { next.insert(clicked) }
+            return TaskSelectionResolution(selected: next,
+                                           anchor: clicked,
+                                           shouldOpen: false)
+
+        case .range:
+            guard let anchor,
+                  let first = ordered.firstIndex(of: anchor),
+                  let last = ordered.firstIndex(of: clicked) else {
+                return TaskSelectionResolution(selected: [clicked],
+                                               anchor: clicked,
+                                               shouldOpen: false)
+            }
+            let bounds = min(first, last)...max(first, last)
+            return TaskSelectionResolution(selected: Set(bounds.map { ordered[$0] }),
+                                           anchor: anchor,
+                                           shouldOpen: false)
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// MARK: - Multi-task drag payload + status drop
+// ────────────────────────────────────────────────────────────────────────
+
+enum MyTasksDragPayload {
+    private static let prefix = "apollo-task-ids:"
+    private static let separator = "\u{1F}"
+
+    static func encode(_ ids: [String]) -> String {
+        prefix + ids.joined(separator: separator)
+    }
+
+    static func decode(_ raw: String) -> [String] {
+        guard raw.hasPrefix(prefix) else {
+            // Compatibility with one-card payloads produced by Quadro.
+            return raw.isEmpty ? [] : [raw]
+        }
+        return raw.dropFirst(prefix.count)
+            .split(separator: Character(separator), omittingEmptySubsequences: true)
+            .map(String.init)
+    }
+}
+
+private struct MyTasksStatusDropDelegate: DropDelegate {
+    let targetStatus: CUStatus
+    let appState: AppState
+    @Binding var draggingTaskIds: Set<String>
+    @Binding var dragOverStatus: String?
+
+    private var statusKey: String { targetStatus.status.lowercased() }
+
+    func dropEntered(info: DropInfo) {
+        dragOverStatus = statusKey
+    }
+
+    func dropExited(info: DropInfo) {
+        if dragOverStatus == statusKey { dragOverStatus = nil }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.text])
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let provider = info.itemProviders(for: [.text]).first else {
+            draggingTaskIds.removeAll()
+            dragOverStatus = nil
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            let raw = object as? String ?? ""
+            let ids = MyTasksDragPayload.decode(raw)
+            Task { @MainActor in
+                for id in ids {
+                    guard let task = appState.tasks.first(where: { $0.id == id }),
+                          task.status.lowercased() != statusKey else { continue }
+                    await appState.updateTaskStatus(task, to: targetStatus, silent: true)
+                }
+                draggingTaskIds.removeAll()
+                dragOverStatus = nil
+            }
+        }
+        return true
     }
 }

@@ -4,7 +4,7 @@ import SwiftUI
 // STUDIO GLASS — SISTEMA DE MATERIAIS EM TIERS (o contrato de desempenho).
 // Portado do Galileo/EditKit. O vidro é um sistema, não uma chamada de API:
 //   A liquidGlass — Apple Silicon + macOS 26 (refração real via glassEffect)
-//   B vibrancy    — Apple Silicon em macOS 14-25, ou Low Power (material barato)
+//   B vibrancy    — Apple Silicon em macOS 14-25 (material compatível)
 //   C solid       — Intel, Reduce Transparency (HIG manda respeitar)
 // REGRAS DURAS: vidro só na camada SUPERIOR (chips, popups, cards flutuantes;
 // janela e painéis = sólidos) · ≤8 regiões por janela · zero vidro aninhado ·
@@ -15,8 +15,9 @@ enum Materials {
 
     /// Resolvido 1× no launch (mudanças exigiriam observer — v1 honesto:
     /// relança). Low Power NÃO mata o vidro: material ESTÁTICO não drena
-    /// bateria — o contrato corta animação contínua, não o material. Em
-    /// Low Power cai pra .vibrancy (ultraThinMaterial, barato).
+    /// bateria — o contrato corta animação contínua, não o material. Low
+    /// Power therefore keeps native Liquid Glass; animation-heavy effects
+    /// are already gated independently by `AgentGlow` and ScrollGate.
     static let tier: Tier = {
         if NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency { return .solid }   // acessibilidade: obrigatório
         var sys = utsname(); uname(&sys)
@@ -24,7 +25,6 @@ enum Materials {
             String(cString: $0.baseAddress!.assumingMemoryBound(to: CChar.self))
         }
         guard machine.hasPrefix("arm64") else { return .solid }   // Intel: iGPU + compositor → sólido
-        if ProcessInfo.processInfo.isLowPowerModeEnabled { return .vibrancy }
         if #available(macOS 26.0, *) { return .liquidGlass }
         return .vibrancy
     }()

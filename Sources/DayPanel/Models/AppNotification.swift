@@ -87,6 +87,19 @@ struct AppNotification: Identifiable, Codable, Equatable, Hashable {
 
     var hasTarget: Bool { targetKind != nil && targetId != nil }
 
+    /// The Home Inbox is an action feed, not a network log. Connection
+    /// and background-sync health remain available through the toolbar
+    /// status/toasts, but do not occupy persistent Inbox rows.
+    var isHomeInboxEligible: Bool {
+        !Self.homeInboxOperationalTitles.contains(title)
+    }
+
+    private static let homeInboxOperationalTitles: Set<String> = [
+        "Sem conexão",
+        "De volta ao online",
+        "Falha na sincronização"
+    ]
+
     // MARK: - Rendered message
 
     /// Builds an `AttributedString` from `message` with each

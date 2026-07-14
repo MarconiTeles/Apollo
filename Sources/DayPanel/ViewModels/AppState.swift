@@ -19,6 +19,13 @@ final class AppState: ObservableObject {
     @Published var tasks:             [CUTask]        = [] {
         didSet { rebuildTaskIndex() }
     }
+    /// In-memory source of truth for the active ClickUp list. Keychain is
+    /// persistence only: reading it from SwiftUI computed properties can
+    /// synchronously cross the Security daemon and freeze a render pass.
+    @Published private(set) var activeListId: String =
+        KeychainHelper.load(for: KeychainHelper.Keys.clickupListId) ?? ""
+    @Published private(set) var activeListName: String =
+        KeychainHelper.load(for: KeychainHelper.Keys.clickupListName) ?? ""
     /// Per-list memory cache so switching to a previously-visited
     /// list snaps in INSTANTLY from memory while a background
     /// refresh re-fetches silently. Mirrors ClickUp's web app
@@ -287,6 +294,69 @@ final class AppState: ObservableObject {
     /// the event overlay so the popup scales out of the button.
     @Published var detailTask:         CUTask?       = nil
     @Published var detailTaskOrigin:   CGRect        = .zero
+
+    /// Stable, surface-provided order for the task-detail previous/next
+    /// controls. My Tasks and Board populate this from their exact visible
+    /// order (after list scope, filters and sorting), so navigation always
+    /// follows what the user was looking at rather than AppState storage.
+    @Published private(set) var detailNavigationTaskIds: [String] = []
+
+    enum DetailNavigationDirection: Equatable {
+        case none, previous, next
+    }
+    @Published private(set) var detailNavigationDirection: DetailNavigationDirection = .none
+
+    var canNavigateToPreviousDetailTask: Bool {
+        guard let id = detailTask?.id,
+              let index = detailNavigationTaskIds.firstIndex(of: id) else { return false }
+        return index > detailNavigationTaskIds.startIndex
+    }
+
+    var canNavigateToNextDetailTask: Bool {
+        guard let id = detailTask?.id,
+              let index = detailNavigationTaskIds.firstIndex(of: id) else { return false }
+        return detailNavigationTaskIds.index(after: index) < detailNavigationTaskIds.endIndex
+    }
+
+    /// Opens a task with the ordering context of the originating surface.
+    /// Duplicate ids are removed without disturbing the visible order.
+    func openTaskDetail(_ task: CUTask,
+                        origin: CGRect,
+                        navigationTasks: [CUTask],
+                        style: DetailTaskOpenStyle = .bottomSlide) {
+        var seen = Set<String>()
+        detailNavigationTaskIds = navigationTasks.compactMap { candidate in
+            seen.insert(candidate.id).inserted ? candidate.id : nil
+        }
+        detailNavigationDirection = .none
+        detailTaskOpenStyle = style
+        detailTaskOrigin = origin
+        detailTask = task
+    }
+
+    /// Moves one card in the surface-defined order. The direction is exposed
+    /// to ContentView so the replacement card enters from the side that
+    /// matches the arrow: previous descends from above, next rises from below.
+    func navigateDetailTask(_ direction: DetailNavigationDirection) {
+        guard direction != .none,
+              let currentId = detailTask?.id,
+              let currentIndex = detailNavigationTaskIds.firstIndex(of: currentId) else { return }
+        let targetIndex: Int
+        switch direction {
+        case .previous: targetIndex = currentIndex - 1
+        case .next: targetIndex = currentIndex + 1
+        case .none: return
+        }
+        guard detailNavigationTaskIds.indices.contains(targetIndex),
+              let target = tasksById[detailNavigationTaskIds[targetIndex]] else { return }
+
+        detailNavigationDirection = direction
+        detailTaskOrigin = .zero
+        closeAllDetailSubtasks()
+        withAnimation(.spring(response: 0.46, dampingFraction: 0.86)) {
+            detailTask = target
+        }
+    }
 
     /// Which open/close animation the task-detail popup uses for its
     /// next presentation. Set by the originating view BEFORE assigning
@@ -3476,18 +3546,24 @@ final class AppState: ObservableObject {
     /// workspace. Doesn't change the active list — user has
     /// to switch manually if they want to follow the task.
     func moveTaskToList(_ task: CUTask, toListId: String) async {
-        do {
-            try await cuSvc.moveTask(id: task.id, toListId: toListId)
-            await MainActor.run {
-                tasks.removeAll { $0.id == task.id }
-            }
-            notifyTask(.success, title: task.title,
-                       subtitle: "Movida para outra lista",
-                       message: task.notificationDetails,
-                       taskId: task.id)
-        } catch {
-            Log.error("moveTaskToList: \(error)")
-        }
+        guard task.listId != toListId,
+              let workspaceId = await resolveWorkspaceId() else { return }
+        let targetName = availableLists.first(where: { $0.id == toListId })?.name
+            ?? "outra lista"
+
+        await patchTask(task, field: "lista",
+            apply: { updated in
+                updated.listId = toListId
+                updated.listName = targetName
+                // If the destination used to be an additional membership,
+                // it is now represented by listId/listName instead.
+                updated.locations.removeAll { $0.id == toListId }
+            },
+            remote: {
+                try await self.cuSvc.moveTask(id: task.id,
+                                              workspaceId: workspaceId,
+                                              toListId: toListId)
+            })
     }
 
     /// Posts a comment on the user's behalf. Wrapper over the
@@ -3648,6 +3724,8 @@ final class AppState: ObservableObject {
     /// "click → instant" feel of ClickUp's own web app.
     @MainActor
     func activateList(id: String, name: String) {
+        activeListId = id
+        activeListName = name
         KeychainHelper.save(id,   for: KeychainHelper.Keys.clickupListId)
         KeychainHelper.save(name, for: KeychainHelper.Keys.clickupListName)
         // Picking a specific list implies leaving the cross-
@@ -3847,6 +3925,10 @@ final class AppState: ObservableObject {
                     }) ?? lists.first(where: {
                         $0.name.lowercased().contains(needle)
                     }) {
+                        await MainActor.run {
+                            self.activeListId = match.id
+                            self.activeListName = match.name
+                        }
                         KeychainHelper.save(match.id, for: KeychainHelper.Keys.clickupListId)
                         KeychainHelper.save(match.name, for: KeychainHelper.Keys.clickupListName)
                         await sync()

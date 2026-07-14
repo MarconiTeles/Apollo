@@ -137,6 +137,8 @@ struct TaskFilterPopover: View {
     /// embedding view if it wants one.
     private var embeddedBody: some View {
         sectionsStack
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
     }
 
     /// Shared filter sections — the same content rendered in
@@ -161,6 +163,7 @@ struct TaskFilterPopover: View {
             createdSection
             closedSection
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Footer (prototype: Limpar · Aplicar)
@@ -464,6 +467,11 @@ struct TaskFilterPopover: View {
                 .font(Editorial.serif(14))
                 .foregroundStyle(Editorial.ink)
                 .focusEffectDisabled()
+                // TextField has a large intrinsic width while editing. Force
+                // it to consume only the remaining row width and let AppKit
+                // scroll the insertion point internally instead of widening
+                // the sidebar/popup.
+                .frame(minWidth: 0, maxWidth: .infinity)
             if hasQuery {
                 Button { query.wrappedValue = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -474,6 +482,8 @@ struct TaskFilterPopover: View {
                 .focusEffectDisabled()
             }
         }
+        .frame(maxWidth: .infinity)
+        .clipped()
         .padding(.vertical, 7)
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -529,7 +539,7 @@ struct TaskFilterPopover: View {
 
     private func sectionContainer<Content: View>(
         title: String,
-        systemImage _: String,
+        systemImage: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
         let expanded = expandedSections.contains(title)
@@ -544,13 +554,12 @@ struct TaskFilterPopover: View {
                 }
             } label: {
                 HStack(alignment: .center, spacing: 8) {
-                    // Mirror the SidebarNavRow row labels
-                    // (Hoje, Tarefas, Quadro, …) — sans 13.5
-                    // medium ink, NOT the caps Folio used for
-                    // section TITLES. Filter categories live
-                    // at the same hierarchy as those rows.
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Editorial.inkMute)
+                        .frame(width: 18, alignment: .center)
                     Text(title)
-                        .font(Editorial.sans(13.5, .medium))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Editorial.ink)
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.down")
@@ -563,10 +572,14 @@ struct TaskFilterPopover: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
             .focusEffectDisabled()
 
             if expanded {
                 content()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .clipped()
                     .padding(.horizontal, 6)
                     .padding(.bottom, 6)
             }
@@ -602,6 +615,12 @@ struct TaskFilterPopover: View {
                 Text(label)
                     .font(Editorial.sans(12, .medium))
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    // A result such as a full ClickUp display name can be
+                    // wider than the entire sidebar. Cap only the text — the
+                    // chip keeps its natural compact width for short labels.
+                    .frame(maxWidth: mode == .embedded ? 124 : 246,
+                           alignment: .leading)
             }
             .foregroundStyle(isActive ? c : Editorial.ink)
             .padding(.horizontal, 11)

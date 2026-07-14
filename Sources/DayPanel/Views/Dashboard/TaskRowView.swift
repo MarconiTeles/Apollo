@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct TaskRowView: View, Equatable {
     /// AppState held as a plain reference, NOT `@EnvironmentObject`.
@@ -26,10 +27,23 @@ struct TaskRowView: View, Equatable {
     /// refresh them when the task itself changes.
     let appState: AppState
     let task: CUTask
+    /// Optional list-surface activation handler. Minhas tarefas uses it
+    /// to implement Command/Shift selection without stealing clicks from
+    /// the DONE button or the trailing menus. Other surfaces keep the
+    /// original open-detail behaviour by leaving it nil.
+    let onActivate: ((NSEvent.ModifierFlags) -> Void)?
+    /// Optional action override used while a multi-selection is active.
+    /// It feeds both right-click and the row's ellipsis button.
+    let contextActions: [TaskContextAction]?
 
-    init(task: CUTask, appState: AppState) {
+    init(task: CUTask,
+         appState: AppState,
+         onActivate: ((NSEvent.ModifierFlags) -> Void)? = nil,
+         contextActions: [TaskContextAction]? = nil) {
         self.task = task
         self.appState = appState
+        self.onActivate = onActivate
+        self.contextActions = contextActions
     }
 
     /// Equatable conformance — used by `.equatable()` at the
@@ -152,7 +166,7 @@ struct TaskRowView: View, Equatable {
     /// The glow shows on row hover AND throughout a swipe (so its colour
     /// transition is visible even during a two-finger trackpad swipe
     /// where the cursor never enters the row).
-    private var glowVisible: Bool { rowHover || dragOffset != 0 }
+    private var glowVisible: Bool { dragOffset != 0 }
 
     /// How far the title + assignee slide RIGHT while the DONE
     /// checkbox is hovered, so the expanding pill never overlaps
@@ -367,7 +381,10 @@ struct TaskRowView: View, Equatable {
             // SwiftUI fallback keeps the editorial baseline.
             // No hover fill wash — the top/bottom edge glow below is the only
             // hover affordance now.
-            .background(Color.clear)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(rowHover ? Editorial.card : Color.clear)
+            }
             .overlay(alignment: .bottom) {
                 // Row divider — 35% lower opacity, and masked with the
                 // same horizontal clear→opaque→clear gradient as the
@@ -610,7 +627,9 @@ struct TaskRowView: View, Equatable {
         // `menu(for:)`) and the popup `SubtaskRow`. Building
         // from the shared `TaskContextMenu.actions` spec
         // keeps the three surfaces in lockstep.
-        .taskContextMenu(task: task, appState: appState)
+        .contextMenu {
+            TaskContextMenuItems(actions: effectiveContextActions)
+        }
     }
 
     // MARK: - Swipe action background
@@ -717,133 +736,105 @@ struct TaskRowView: View, Equatable {
     /// ZStack and overlay the DONE pill as a layout-
     /// independent sibling.
     private var compactRowContent: some View {
-        // Two-side HStack, top-aligned, so the trailing button column
-        // (which has a fixed 50pt height — 2 buttons + 6pt spacer) can
-        // grow taller than the title row WITHOUT inflating it. Stripe
-        // and title now live in the SAME sub-HStack, so the stripe's
-        // vertical span is dictated by the title's content height
-        // (not by the button column).
-        HStack(alignment: .top, spacing: 0) {
+        HStack(alignment: .center, spacing: 12) {
+            checkboxButton
+                .overlay(alignment: .leading) { donePillOverlay }
 
-            // ── Title group ────────────────────────────────────────
-            // Stripe + checkbox + title VStack. ALWAYS center-aligned
-            // now that the trailing button column lives in a separate
-            // sibling HStack — the title group's intrinsic height is
-            // exactly the title's content height, so the stripe and
-            // checkbox center on the title in both states.
-            // `.firstTextBaseline` aligns the DONE checkbox to the FIRST
-            // label line (the title) rather than the centre of the whole
-            // two-line block. Gap to the labels = 9.
-            HStack(alignment: .firstTextBaseline, spacing: 9) {
-                // Status color used to live as a 3pt stripe here; it's
-                // now expressed as a coloured drop shadow on the whole
-                // row card (see `.shadow(...)` below) so the row reads
-                // as a "tinted card" instead of needing a vertical
-                // accent bar to communicate status.
-                //
-                // DONE pill attached as a leading overlay on the checkbox
-                // so it sits EXACTLY where the checkbox is — same vertical
-                // line as the title, same leading X — without the pill's
-                // intrinsic width affecting the row layout.
-                checkboxButton
-                    .overlay(alignment: .leading) { donePillOverlay }
+            titleView
+                .offset(x: hoveringCheckbox && !task.isCompleted && !completing && dragOffset == 0
+                        ? doneHoverOffset : 0)
+                .animation(.spring(response: 0.30, dampingFraction: 0.82),
+                           value: hoveringCheckbox)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
 
-                // Spacing 8pt between title and meta row gives the
-                // title clear breathing room — at 3pt the meta pills
-                // were touching the title's descenders.
-                //
-                // Animated leading padding on the title VStack is
-                // what makes the title + status pill slide rightward
-                // when the user hovers DONE. The checkbox slot
-                // itself is LOCKED at 14pt regardless of hover (see
-                // `checkboxButton` — DONE pill is rendered as an
-                // overlay that overflows the slot's bounds, NOT by
-                // growing the slot). Keeping the slot at 14pt means
-                // the row's content has the SAME intrinsic width
-                // whether hovered or not, so the row card cannot
-                // grow horizontally. The 66pt padding here is the
-                // delta needed to clear the DONE pill's natural
-                // intrinsic width — same offset the title would
-                // have received if the slot had grown to 80pt, but
-                // applied via padding instead of slot growth so
-                // the row card's outer dimensions stay invariant.
-                VStack(alignment: .leading, spacing: 6.728) {  // gap between the two label lines
-                    // LINE 1 — title + date/priority on the SAME row.
-                    // The title takes the flexible width and truncates with
-                    // "…" when long; the date/flag cluster keeps its
-                    // intrinsic size (`layoutPriority(1)`) and hugs the
-                    // trailing edge, so the TITLE compresses first.
-                    HStack(spacing: 8) {
-                        // Title slides RIGHT on DONE hover (`.offset(x:)`,
-                        // visual-only) to clear the revealed DONE pill.
-                        titleView
-                            .offset(x: hoveringCheckbox && !task.isCompleted && !completing && dragOffset == 0 ? doneHoverOffset : 0)
-                            .animation(.spring(response: 0.30, dampingFraction: 0.82),
-                                       value: hoveringCheckbox)
-
-                        HStack(spacing: 6) {
-                            // Priority flag left of the date so the date hugs
-                            // the row's trailing edge.
-                            priorityBadge
-                            if let due = task.dueDate {
-                                metaDateBadge(due: due)
-                            }
-                        }
-                        .fixedSize()
-                        .layoutPriority(1)
-                        // Hidden while the DONE pill is revealed so the
-                        // sliding title can't collide with it.
-                        .opacity(hoveringCheckbox && !task.isCompleted && !completing && dragOffset == 0 ? 0 : 1)
-                        .animation(.easeInOut(duration: 0.18), value: hoveringCheckbox)
-                    }
-
-                    // LINE 2 — assignee first name.
-                    Text(assigneeFirstName ?? "")
-                        .font(Editorial.serif(12.5).italic())
-                        .foregroundStyle(Editorial.inkSoft)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .opacity(hoveringCheckbox ? 0 : 1)
-                        .offset(x: hoveringCheckbox && !task.isCompleted && !completing && dragOffset == 0 ? doneHoverOffset : 0)
-                        .animation(.spring(response: 0.30, dampingFraction: 0.82),
-                                   value: hoveringCheckbox)
+            HStack(spacing: 14) {
+                ZStack(alignment: .leading) {
+                    Color.clear
+                    inlinePriority
                 }
-                // Nudges title + assignee/status row 10pt to the
-                // right (a small "10%" visual offset) so both
-                // labels share the same leading X and sit slightly
-                // inside the row instead of crowding the checkbox.
-                // 5 = 10 × 0.5 — halved alongside the checkbox↔labels gap.
-                .padding(.leading, 5)
+                .frame(width: 112)
 
-                Spacer(minLength: 0)
+                ZStack(alignment: .leading) {
+                    Color.clear
+                    HStack(spacing: 7) {
+                        if !task.assignees.isEmpty {
+                            AvatarStack(assignees: task.assignees,
+                                        size: 20,
+                                        maxShown: 1)
+                            Text(assigneeFirstName ?? "")
+                                .font(Editorial.sans(11.5, .regular))
+                                .foregroundStyle(Editorial.inkSoft)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .frame(width: 132)
+
+                ZStack(alignment: .trailing) {
+                    Color.clear
+                    if let due = task.dueDate {
+                        metaDateBadge(due: due)
+                    }
+                }
+                .frame(width: 92)
+
+                Menu {
+                    TaskContextMenuItems(
+                        actions: effectiveContextActions
+                    )
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Editorial.inkMute)
+                        .frame(width: 18, height: 18)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 18, height: 18)
             }
-            // 22 = 34 × 0.65 — left padding before the DONE checkbox
-            // reduced 35%.
-            .padding(.leading, 22)
-            .padding(.vertical, 14)
-
-            // Trailing button column was removed: the row's tap
-            // gesture (below) opens the same popup the explicit
-            // expand button used to. With inline-expand gone,
-            // there's only one detail-view path — the duplicate
-            // affordance was just visual noise.
-            // 15pt trailing gutter — the date's anchored right edge
-            // sits 15pt in from the row's trailing edge.
-            Spacer().frame(width: 15)
+            .frame(width: 396, alignment: .trailing)
+            .layoutPriority(1)
+            .opacity(hoveringCheckbox && !task.isCompleted && !completing && dragOffset == 0 ? 0 : 1)
+            .animation(.easeInOut(duration: 0.18), value: hoveringCheckbox)
         }
-        // Tap anywhere on the row (outside the inner buttons)
-        // opens the detail popup. Inline-expand was removed —
-        // every row interaction now lives in the popup.
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .frame(minHeight: 42)
         .contentShape(Rectangle())
         .onTapGesture {
-            appState.detailTaskOrigin = MouseOriginCapture
-                .currentClickRectInMainWindow()
-            appState.detailTask = task
+            if let onActivate {
+                onActivate(NSEvent.modifierFlags
+                    .intersection(.deviceIndependentFlagsMask))
+            } else {
+                appState.detailTaskOrigin = MouseOriginCapture
+                    .currentClickRectInMainWindow()
+                appState.detailTask = task
+            }
         }
         // Force the row to its intrinsic content height — without
         // this the parent VStack can propose a much larger height
         // and the trailing buttons VStack would absorb it.
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var effectiveContextActions: [TaskContextAction] {
+        contextActions ?? TaskContextMenu.actions(for: task, appState: appState)
+    }
+
+    @ViewBuilder
+    private var inlinePriority: some View {
+        if task.priority > 0 && task.priority <= 2 {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(Color(hex: task.priorityHex))
+                    .frame(width: 6, height: 6)
+                Text(task.priorityLabel.uppercased())
+                    .font(Editorial.sans(9.5, .semibold))
+                    .tracking(0.9)
+                    .foregroundStyle(Color(hex: task.priorityHex))
+            }
+        }
     }
 
     private var checkIcon: String {
@@ -930,12 +921,7 @@ struct TaskRowView: View, Equatable {
             // mirroring how a right-swipe commits.
             commitStatusChange(to: target, direction: 1)
         } label: {
-            Image(systemName: checkIcon)
-                // 10 = 14 × 0.7 — DONE checkbox shrunk 30%.
-                .font(.system(size: 10, weight: .regular))
-                .foregroundStyle(task.isCompleted
-                                 ? Editorial.statusColor("complete")
-                                 : Editorial.inkFaint)
+            checkboxGlyph
                 .symbolEffect(.bounce, value: task.isCompleted)
                 .frame(width: 10, height: 10)
                 .opacity(hoveringCheckbox && !task.isCompleted && !completing && dragOffset == 0 ? 0 : 1)
@@ -970,6 +956,30 @@ struct TaskRowView: View, Equatable {
         }
         .onReceive(ScrollStateObserver.shared.$isScrolling) { scrolling in
             if scrolling, hoveringCheckbox { hoveringCheckbox = false }
+        }
+    }
+
+    @ViewBuilder
+    private var checkboxGlyph: some View {
+        if task.isCompleted || completing {
+            Image(systemName: checkIcon)
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(task.isCompleted
+                                 ? Editorial.statusColor("complete")
+                                 : Editorial.inkFaint)
+        } else {
+            let statusColor = Color(hex: cachedStatusHex)
+            Circle()
+                .fill(
+                    Editorial.paper.shadow(
+                        .inner(color: statusColor.opacity(0.78), radius: 2.2)
+                    )
+                )
+                .overlay {
+                    Circle()
+                        .stroke(Editorial.inkFaint.opacity(0.85), lineWidth: 0.75)
+                }
+                .accessibilityLabel("Concluir tarefa")
         }
     }
 
@@ -1157,12 +1167,15 @@ struct TaskRowView: View, Equatable {
         // varied within a list. Overdue is now signalled purely by the
         // accent-red date text (e.g. red "3 dias atrás"), keeping every
         // cell exactly one line tall.
-        let overdue = due < Date() && !task.isCompleted
+        let today = TodayCache.calendar.isDateInToday(due)
+        let overdue = due < TodayCache.startOfToday && !task.isCompleted
+        let color = today ? Editorial.accent
+            : (overdue ? Editorial.overdue : Editorial.inkSoft)
         return Text(relativeDateText(for: due))
             // 10 = 8 × 1.25 (+25% over the trimmed size); opacity 0.70.
             .font(Editorial.sans(10, .medium))
-            .foregroundStyle(overdue ? Editorial.accent : Editorial.inkSoft)
-            .opacity(0.70)
+            .foregroundStyle(color)
+            .opacity(today || overdue ? 0.88 : 0.70)
             .monospacedDigit()
             .lineLimit(1)
     }

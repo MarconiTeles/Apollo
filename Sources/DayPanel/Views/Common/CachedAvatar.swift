@@ -6,7 +6,10 @@ import AppKit
 // the SAME tiny URL — burning CPU/GPU during scroll. NSCache evicts
 // under memory pressure automatically.
 
-private final class AvatarStore {
+/// Shared by SwiftUI avatars and the recycled AppKit task rows. Keeping one
+/// cache prevents the native list from starting a second fetch/decode pipeline
+/// for the same 20pt profile images.
+final class AvatarStore {
     static let shared = AvatarStore()
     private let cache = NSCache<NSURL, NSImage>()
     private var inFlight: [NSURL: Task<NSImage?, Never>] = [:]

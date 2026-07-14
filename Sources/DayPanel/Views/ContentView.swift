@@ -88,12 +88,37 @@ struct ContentView: View {
         appState.detailTask != nil
             || appState.detailEvent != nil
             || !appState.detailSubtaskStack.isEmpty
+            || appState.commandPaletteOpen
             || showNewEvent
             || showNewTask
             || showSettings
             || showListPicker
             || showOnboarding
             || showWelcome
+            || showNotifs
+            || showFilters
+            || showAIChat
+            || reviewPresenter.request != nil
+    }
+
+    /// Card-stack replacement used by the previous/next controls in task
+    /// detail. A next task rises from below while the current card exits
+    /// upward; previous performs the exact inverse.
+    private var detailNavigationTransition: AnyTransition {
+        switch appState.detailNavigationDirection {
+        case .next:
+            return .asymmetric(
+                insertion: .move(edge: .bottom).combined(with: .opacity),
+                removal: .move(edge: .top).combined(with: .opacity)
+            )
+        case .previous:
+            return .asymmetric(
+                insertion: .move(edge: .top).combined(with: .opacity),
+                removal: .move(edge: .bottom).combined(with: .opacity)
+            )
+        case .none:
+            return .opacity
+        }
     }
 
     var body: some View {
@@ -121,11 +146,10 @@ struct ContentView: View {
                 // window y=0 down (covering the transparent title
                 // bar) and prevents the desktop wallpaper from
                 // bleeding through as a coloured aurora.
-                // Cobre a JANELA INTEIRA agora (sem o recorte de
-                // 220pt): a sidebar virou um pane FLUTUANTE de
-                // Liquid Glass (estilo MINIMAL TP) e o vidro
-                // amostra o conteúdo SwiftUI atrás — paper + cards
-                // do quadro passando por baixo — não o desktop.
+                // Keep the app canvas behind the sidebar. Native Liquid Glass
+                // must refract Apollo's own content, not the desktop wallpaper:
+                // exposing the window here pulled cyan/yellow scenery into the
+                // pane and destroyed the neutral 1:1 sidebar design.
                 Rectangle()
                     .fill(Editorial.paper)
                     .ignoresSafeArea()
@@ -521,6 +545,10 @@ struct ContentView: View {
                             // TaskDetailSheet anyway. The `.id()`
                             // makes both flows behave identically.
                             .id(t.id)
+                            .transition(detailNavigationTransition)
+                            .animation(.spring(response: 0.46,
+                                              dampingFraction: 0.86),
+                                       value: t.id)
                     }
                 }
                 .zIndex(1000)
@@ -622,7 +650,16 @@ struct ContentView: View {
                         // visibly during dismiss; a clean
                         // fade-to-clear reads much better.
                         .transition(.opacity)
-                        .allowsHitTesting(false)
+                        // This is a real modal shield, not decoration. It must
+                        // own the background hit region so the dashboard cannot
+                        // receive clicks, scroll or hover while Apollo IA is up.
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.easeIn(duration: 0.30)) {
+                                showAIChat = false
+                            }
+                        }
+                        .onHover { _ in }
                         .zIndex(800)
 
                     // Transition attached HERE (not on a child
@@ -917,18 +954,6 @@ struct ContentView: View {
     /// hunting for the close button.
     @ViewBuilder
     private func aiChatCenteredOverlay(windowSize: CGSize) -> some View {
-        // Translate the captured click point into a UnitPoint
-        // (0…1 across the window) so the chat scales out of the
-        // exact orb pixel the user pressed. Falls back to the
-        // top-centre on the very first paint when windowSize is
-        // still zero.
-        let cursorAnchor = UnitPoint(
-            x: windowSize.width  > 0 && aiChatOpenPoint != .zero
-                ? aiChatOpenPoint.x / windowSize.width  : 0.5,
-            y: windowSize.height > 0 && aiChatOpenPoint != .zero
-                ? aiChatOpenPoint.y / windowSize.height : 0.05
-        )
-
         ZStack {
             // PERF: window-wide dim backdrop removed. A full-
             // window `Color.black.opacity(0.18)` cost an alpha
@@ -1309,12 +1334,9 @@ struct ContentView: View {
     // MARK: - Glass Toolbar
 
     private var toolbar: some View {
-        // Reproduces the prototype's `PToolbar` exactly: a type-led
-        // band of `TBBtn` text buttons separated by a 26pt gap, the
-        // active-list picker, a flexible gap, then the trailing
-        // cluster (Filtros · Buscar ⌘K · + Tarefa · ✦ Apollo · 🔔 ·
-        // ⚙). No glass, no capsules, no diagnostic chrome — the
-        // hairline rule along the bottom IS the only divider.
+        // Type-led toolbar with no independent surface or divider. It
+        // remains visually continuous with the page underneath instead
+        // of reading as a detached header band.
         HStack(spacing: 26) {
 
             // (Apollo brand mark removed — leading slot is now
@@ -1329,6 +1351,7 @@ struct ContentView: View {
             .focusEffectDisabled()
             .help("Novo evento")
             .captureFrame($newEventOrigin)
+            .padding(.leading, 10)
 
             // Hoje — jump to today + resync
             Button {
@@ -1517,11 +1540,6 @@ struct ContentView: View {
                 .keyboardShortcut("r", modifiers: .command)
         )
         .frame(maxHeight: .infinity, alignment: .center)
-        // The chrome IS the rule — a single hairline along the
-        // band's bottom edge, no frosted material.
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Editorial.rule).frame(height: 1)
-        }
     }
 
     // MARK: - Main content
@@ -1579,11 +1597,8 @@ struct ContentView: View {
                 .environmentObject(appState)
                 .padding(.top, 52)        // clear the toolbar pills
                 .padding(.leading, 220)   // clear the glass sidebar
-            // Home-specific split: TimelineView on the left
-            // (forward-only window), EditorialHomeTasksColumn on
-            // the right — grouped-by-status with collapsibles,
-            // matching the MyTasks page's organisation. Replaces
-            // the flat `TaskListView` on this route.
+            // Home-specific split: forward agenda on the left and a
+            // unified ClickUp + Apollo Inbox on the right.
             homeDashboardSplit
         }
     }
@@ -1600,7 +1615,7 @@ struct ContentView: View {
                     .fill(Editorial.rule.opacity(0.65))
                     .frame(width: 1)
                     .edgeFadedVertical()
-                EditorialHomeTasksColumn()
+                EditorialHomeInboxColumn()
                     .environmentObject(appState)
                     .frame(maxWidth: .infinity)
             }

@@ -358,13 +358,31 @@ final class ClickUpService {
         try await updateTask(id: id, fields: ["archived": true])
     }
 
-    /// NOTE: despite its name, this hits ClickUp's
-    /// **"Add Task To List"** endpoint (`POST /list/{lid}/task/{tid}`),
-    /// which ADDS the task to an additional list — it doesn't move.
-    /// New callers should prefer the explicit `addTaskToList` /
-    /// `removeTaskFromList` methods below.
-    func moveTask(id: String, toListId: String) async throws {
-        try await addTaskToList(taskId: id, listId: toListId)
+    /// Moves the task's HOME list through ClickUp's public v3 endpoint.
+    /// Unlike the legacy "Add Task To List" endpoint, this is a real move:
+    /// the task is removed from its previous home list and appears in the
+    /// destination after the next sync. Additional-list memberships remain.
+    func moveTask(id: String,
+                  workspaceId: String,
+                  toListId: String) async throws {
+        guard let token else { throw CUError.notConfigured }
+        var req = URLRequest(url: URL(
+            string: "https://api.clickup.com/api/v3/workspaces/\(Self.cuPathSafe(workspaceId))/tasks/\(Self.cuPathSafe(id))/home_list/\(Self.cuPathSafe(toListId))"
+        )!)
+        req.httpMethod = "PUT"
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Carry compatible custom fields into the destination. ClickUp only
+        // requires explicit status mappings when the destination lacks the
+        // current status; same-workflow Apollo lists therefore need no map.
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "move_custom_fields": true
+        ])
+        let (_, response) = try await Self.data(retrying: req)
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            throw CUError.parse
+        }
     }
 
     /// Adds an existing task to an additional list — implements

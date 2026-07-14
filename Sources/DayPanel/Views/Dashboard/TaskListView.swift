@@ -88,9 +88,7 @@ struct TaskListView: View {
             }
             return appState.sortByDeadlineThenPriority(universe)
         }()
-        let dimensioned = appState.taskFilters.isEmpty
-            ? base
-            : base.filter { appState.taskFilters.matches($0) }
+        let dimensioned = appState.taskFilters.applying(to: base)
         return applySearch(to: dimensioned)
     }
 
@@ -937,4 +935,3 @@ private struct StatusTintedShadow: ViewModifier {
         )
     }
 }
-
