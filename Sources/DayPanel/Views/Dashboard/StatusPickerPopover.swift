@@ -19,33 +19,40 @@ struct StatusPickerPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(statuses) { status in
-                let isSelected  = status.status == currentStatusName
+                let isSelected = status.status.caseInsensitiveCompare(
+                    currentStatusName ?? ""
+                ) == .orderedSame
                 let statusColor = Color(statusHex: status.displayHex)
                 Button {
                     onSelect(status)
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 7) {
                         Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.caption)
+                            .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(isSelected ? statusColor : Editorial.inkMute)
                         Text(status.status.uppercased())
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 10.5, weight: .semibold))
                             .foregroundStyle(statusColor)
                         Spacer()
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
 
                 if status.id != statuses.last?.id {
-                    Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+                    Rectangle()
+                        .fill(Editorial.ruleSoft)
+                        .frame(height: 1)
+                        .padding(.horizontal, 10)
                 }
             }
         }
-        .frame(minWidth: 180)
-        .padding(.vertical, 4)
+        // NSPopover supplies the one native Liquid Glass layer. This view is
+        // intentionally content-only: no nested card, blur, border or shadow.
+        .frame(width: 172)
+        .padding(.vertical, 3)
     }
 }

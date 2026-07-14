@@ -210,8 +210,10 @@ struct EditorialHomeTasksColumn: View {
 
     private func taskRow(_ task: CUTask) -> some View {
         Button {
-            appState.detailTaskOrigin = .zero
-            appState.detailTask       = task
+            appState.openTaskDetail(task,
+                                    origin: .zero,
+                                    navigationTasks: appState.tasks,
+                                    style: .bottomSlide)
         } label: {
             HStack(alignment: .center, spacing: 12) {
                 Circle()

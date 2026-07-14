@@ -37,18 +37,33 @@ struct EditorialMyTasksView: View {
             header
                 .zIndex(2)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {
             if !selectedTasks.isEmpty {
+                // ContentView already lays this route out to the right of the
+                // 220pt sidebar. Adding another sidebar spacer here shifted the
+                // capsule right and clipped it. Centre in the real route canvas.
                 bulkToolbar
-                    .padding(.horizontal, 28)
-                    .padding(.bottom, 34)
-                    .transition(.move(edge: .bottom)
-                        .combined(with: .opacity)
-                        .combined(with: .scale(scale: 0.96, anchor: .bottom)))
-                    .zIndex(3)
+                    .frame(maxWidth: .infinity)
+                .padding(.horizontal, 28)
+                .padding(.bottom, 34)
+                .transition(.move(edge: .bottom)
+                    .combined(with: .opacity)
+                    .combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                .zIndex(3)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Editorial.paper)
+        .background {
+            EscapeSelectionMonitor(isActive: !selectedTaskIds.isEmpty,
+                                   onEscape: clearSelection)
+                .frame(width: 0, height: 0)
+        }
+        .onExitCommand(perform: clearSelection)
+        .onReceive(NotificationCenter.default.publisher(for: .apolloTaskDropCompleted)) { _ in
+            clearSelection()
+        }
         .onChange(of: visibleTaskIds) { _, ids in
             selectedTaskIds.formIntersection(ids)
             if let anchor = selectionAnchorId, !ids.contains(anchor) {
@@ -107,26 +122,29 @@ struct EditorialMyTasksView: View {
         } else if !listMountReady || (allListTasks.isEmpty && appState.isSyncing) {
             MyTasksLoadingPlaceholder()
                 .transition(.opacity)
-        } else if allListTasks.isEmpty {
-            emptyState(title: "Lista vazia",
-                       caption: "Nenhuma tarefa encontrada na lista selecionada.")
-        } else if visibleListTasks.isEmpty {
-            emptyState(title: "Nenhum resultado",
-                       caption: "Nenhuma tarefa corresponde aos filtros ativos.")
+        } else if appState.availableStatuses.isEmpty {
+            emptyState(title: "Status indisponíveis",
+                       caption: "Sincronize a lista para carregar suas categorias.")
         } else {
             MyTasksAppKitList(
                 sections: nativeSections,
                 selectedTaskIds: selectedTaskIds,
                 appState: appState,
                 topContentInset: 72,
-                bottomContentInset: 112,
+                // Reserve the bulk-action capsule only while it actually
+                // exists. A permanent 112pt NSScrollView inset left visible
+                // rows inside a non-interactive bottom band.
+                bottomContentInset: selectedTasks.isEmpty ? 12 : 112,
                 onActivate: { task, modifiers, rect in
-                    appState.detailTaskOrigin = rect
-                    activate(task, modifiers: modifiers)
+                    activate(task, modifiers: modifiers, origin: rect)
                 },
                 onToggleStatus: { toggleCollapsed($0) },
                 onBeginDrag: { beginDragIds(for: $0) },
-                onEndDrag: { draggingTaskIds.removeAll() }
+                onEndDrag: { completed in
+                    draggingTaskIds.removeAll()
+                    if completed { clearSelection() }
+                },
+                onClearSelection: clearSelection
             )
         }
     }
@@ -193,7 +211,11 @@ struct EditorialMyTasksView: View {
                 TaskRowView(
                     task: t,
                     appState: appState,
-                    onActivate: { flags in activate(t, modifiers: flags) },
+                    onActivate: { flags in
+                        activate(t,
+                                 modifiers: flags,
+                                 origin: MouseOriginCapture.currentClickRectInMainWindow())
+                    },
                     contextActions: selectedTaskIds.contains(t.id)
                         ? TaskBulkActions.actions(for: selectedTasks,
                                                   appState: appState)
@@ -201,18 +223,7 @@ struct EditorialMyTasksView: View {
                 )
             }
                 .frame(maxWidth: .infinity)
-                .background {
-                    if selectedTaskIds.contains(t.id) {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Editorial.accent.opacity(0.075))
-                    }
-                }
-                .overlay {
-                    if selectedTaskIds.contains(t.id) {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(Editorial.accent.opacity(0.42), lineWidth: 1)
-                    }
-                }
+                .taskSelectionSurface(selectedTaskIds.contains(t.id), tint: .black)
                 .opacity(draggingTaskIds.contains(t.id) ? 0.42 : 1)
                 .onDrag {
                     dragProvider(for: t)
@@ -255,7 +266,9 @@ struct EditorialMyTasksView: View {
                         onClear: clearSelection)
     }
 
-    private func activate(_ task: CUTask, modifiers: NSEvent.ModifierFlags) {
+    private func activate(_ task: CUTask,
+                          modifiers: NSEvent.ModifierFlags,
+                          origin: CGRect) {
         let intent: TaskSelectionIntent
         if modifiers.contains(.shift) {
             intent = .range
@@ -275,8 +288,9 @@ struct EditorialMyTasksView: View {
         if resolution.shouldOpen {
             appState.openTaskDetail(
                 task,
-                origin: MouseOriginCapture.currentClickRectInMainWindow(),
-                navigationTasks: orderedVisibleTasks
+                origin: origin,
+                navigationTasks: orderedVisibleTasks,
+                style: .bottomSlide
             )
             return
         }
@@ -299,35 +313,21 @@ struct EditorialMyTasksView: View {
     }
 
     private func beginDragIds(for task: CUTask) -> [String] {
-        let ids: [String]
-        if selectedTaskIds.contains(task.id) {
-            ids = selectedTasks.map(\.id)
-        } else {
-            ids = [task.id]
-            selectedTaskIds = [task.id]
-            selectionAnchorId = task.id
-        }
+        let ids = TaskDragSelectionResolver.draggedIDs(
+            dragged: task.id,
+            selected: selectedTaskIds,
+            ordered: orderedVisibleTasks.map(\.id)
+        )
         draggingTaskIds = Set(ids)
         return ids
     }
 
     private func dragPreview(for task: CUTask) -> some View {
-        HStack(spacing: 9) {
-            Image(systemName: "line.3.horizontal")
-                .foregroundStyle(Editorial.inkMute)
-            Text(selectedTaskIds.contains(task.id) && selectedTasks.count > 1
-                 ? "\(selectedTasks.count) tarefas"
-                 : task.title)
-                .font(Editorial.sans(12.5, .semibold))
-                .foregroundStyle(Editorial.ink)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 38)
-        .frame(width: 280, alignment: .leading)
-        .background(.regularMaterial,
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
+        TaskDragStackPreview(
+            tasks: selectedTaskIds.contains(task.id) ? selectedTasks : [task],
+            primary: task,
+            width: 280
+        )
     }
 
     private func status(forKey key: String, fallbackTask: CUTask) -> CUStatus {
@@ -396,19 +396,19 @@ struct EditorialMyTasksView: View {
 
     private var totalCount: Int { visibleListTasks.count }
 
-    /// (status, tasks) tuples in workspace-status order. Drops empty
-    /// statuses; sorts tasks within each by (overdue first → due
-    /// date ascending → no-date last → priority).
+    /// (status, tasks) tuples in workspace-status order. Every workspace
+    /// status remains present even when its task array is empty: the header
+    /// is a stable AppKit drop destination, so moving the last task out of a
+    /// category never removes the path for dragging a task back into it.
+    /// Tasks within each status are sorted by (overdue first → due date
+    /// ascending → no-date last → priority).
     private var groups: [(status: CUStatus, tasks: [CUTask])] {
         let byStatus = Dictionary(grouping: visibleListTasks, by: { $0.status.lowercased() })
         // Same full status universe as Quadro, including closed lanes.
         let visible = appState.availableStatuses.reversed()
-        return visible.compactMap { s in
+        return visible.map { s in
             let lc = s.status.lowercased()
             let ts = byStatus[lc] ?? []
-            // During a drag, empty statuses become visible drop targets;
-            // when no drag is active they stay out of the compact list.
-            guard !ts.isEmpty || !draggingTaskIds.isEmpty else { return nil }
             return (s, sorted(ts))
         }
     }
@@ -517,8 +517,10 @@ struct EditorialMyTasksView: View {
 
     private func taskRow(_ task: CUTask) -> some View {
         Button {
-            appState.detailTaskOrigin = .zero
-            appState.detailTask       = task
+            appState.openTaskDetail(task,
+                                    origin: .zero,
+                                    navigationTasks: orderedVisibleTasks,
+                                    style: .bottomSlide)
         } label: {
             HStack(alignment: .center, spacing: 12) {
                 // Status dot — mirrors the row in the dashboard
@@ -783,6 +785,18 @@ enum TaskSelectionResolver {
     }
 }
 
+/// Dragging an unselected task is a transient one-object operation. It must
+/// not silently enter persistent selection mode. A drag only carries multiple
+/// tasks when it starts on a task already included in the Command/Shift set.
+enum TaskDragSelectionResolver {
+    static func draggedIDs(dragged: String,
+                           selected: Set<String>,
+                           ordered: [String]) -> [String] {
+        guard selected.contains(dragged) else { return [dragged] }
+        return ordered.filter(selected.contains)
+    }
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // MARK: - Multi-task drag payload + status drop
 // ────────────────────────────────────────────────────────────────────────
@@ -840,13 +854,22 @@ private struct MyTasksStatusDropDelegate: DropDelegate {
             let raw = object as? String ?? ""
             let ids = MyTasksDragPayload.decode(raw)
             Task { @MainActor in
+                let originals = ids.compactMap { appState.tasksById[$0] }.filter {
+                    $0.status.lowercased() != statusKey
+                }
                 for id in ids {
                     guard let task = appState.tasks.first(where: { $0.id == id }),
                           task.status.lowercased() != statusKey else { continue }
                     await appState.updateTaskStatus(task, to: targetStatus, silent: true)
                 }
+                appState.pushTaskStatusUndo(originals,
+                    label: originals.count == 1
+                        ? "Mover tarefa para \(targetStatus.status.uppercased())"
+                        : "Mover \(originals.count) tarefas para \(targetStatus.status.uppercased())")
                 draggingTaskIds.removeAll()
                 dragOverStatus = nil
+                NotificationCenter.default.post(name: .apolloTaskDropCompleted,
+                                                object: nil)
             }
         }
         return true

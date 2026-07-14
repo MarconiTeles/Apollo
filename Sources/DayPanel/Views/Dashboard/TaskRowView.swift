@@ -531,7 +531,7 @@ struct TaskRowView: View, Equatable {
             // with a calm cream hover wash. Scroll-aware like the
             // checkbox handler so a cursor sweeping rows during a
             // scroll doesn't thrash the state.
-            .onHover { hovering in
+            .scrollAwareOnHover { hovering in
                 if ScrollStateObserver.shared.isScrolling {
                     if rowHover { rowHover = false }
                     return
@@ -807,9 +807,12 @@ struct TaskRowView: View, Equatable {
                 onActivate(NSEvent.modifierFlags
                     .intersection(.deviceIndependentFlagsMask))
             } else {
-                appState.detailTaskOrigin = MouseOriginCapture
-                    .currentClickRectInMainWindow()
-                appState.detailTask = task
+                appState.openTaskDetail(
+                    task,
+                    origin: MouseOriginCapture.currentClickRectInMainWindow(),
+                    navigationTasks: appState.tasks,
+                    style: .bottomSlide
+                )
             }
         }
         // Force the row to its intrinsic content height — without
@@ -942,7 +945,7 @@ struct TaskRowView: View, Equatable {
         // a row that was hovered when the user started
         // scrolling doesn't keep its DONE pill visible
         // through the scroll.
-        .onHover { hover in
+        .scrollAwareOnHover { hover in
             if ScrollStateObserver.shared.isScrolling {
                 if hoveringCheckbox { hoveringCheckbox = false }
                 return
@@ -1052,7 +1055,7 @@ struct TaskRowView: View, Equatable {
                     .background(
                         RoundedRectangle(cornerRadius: 4)
                             .fill(Color.clear)
-                            .shadow(color: pillColor.opacity(0.45),
+                            .shadow(color: .black.opacity(0.18),
                                     radius: 5, x: 0, y: 2))
                     .liquidGlass(in: RoundedRectangle(cornerRadius: 4,
                                                       style: .continuous),
@@ -1090,7 +1093,7 @@ struct TaskRowView: View, Equatable {
         // hover handler — skip state updates while scrolling
         // so the pill reveal/scale springs don't run for every
         // row the cursor sweeps across.
-        .onHover { hover in
+        .scrollAwareOnHover { hover in
             if ScrollStateObserver.shared.isScrolling {
                 if hoveringCheckbox { hoveringCheckbox = false }
                 return
@@ -1147,9 +1150,10 @@ struct TaskRowView: View, Equatable {
             Button { showStatusMenu.toggle() } label: { pill }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
-                .popover(isPresented: $showStatusMenu, arrowEdge: .top) {
-                    StatusPickerPopover(
-                        statuses:          appState.availableStatuses,
+                .background {
+                    StatusPickerBubbleAnchor(
+                        isPresented: $showStatusMenu,
+                        statuses: appState.availableStatuses,
                         currentStatusName: task.status
                     ) { status in
                         Task { await appState.updateTaskStatus(task, to: status) }

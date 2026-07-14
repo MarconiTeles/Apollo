@@ -85,7 +85,7 @@ struct AgentGlow: View {
                                              Color(hex: "#5AC8FA")],
                                     center: .center, angle: a),
                     lineWidth: 1.5)
-                .shadow(color: Editorial.accent.opacity(0.30), radius: 10)
+                .shadow(color: .black.opacity(0.18), radius: 10)
             }
         }
     }

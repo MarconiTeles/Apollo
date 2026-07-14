@@ -322,15 +322,9 @@ struct SharedCalendarSearchBar: View {
         // running off the top of the window.
         .frame(maxHeight: 320)
         .fixedSize(horizontal: false, vertical: true)
-        .background(Editorial.popup,
-                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Editorial.rule, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .shadow(color: .black.opacity(0.18), radius: 28, x: 0, y: 10)
-        .shadow(color: .black.opacity(0.07), radius: 8,  x: 0, y: 2)
+        .popupGlass(in: RoundedRectangle(
+            cornerRadius: Editorial.popupRadius(6), style: .continuous
+        ))
     }
 
     private var addManualHint: some View {
@@ -357,14 +351,9 @@ struct SharedCalendarSearchBar: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Editorial.popup,
-                        in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(Editorial.rule, lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.18), radius: 28, x: 0, y: 10)
-            .shadow(color: .black.opacity(0.07), radius: 8, x: 0, y: 2)
+            .popupGlass(in: RoundedRectangle(
+                cornerRadius: Editorial.popupRadius(6), style: .continuous
+            ))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -542,7 +531,7 @@ private struct ContactSuggestionRow: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .onHover { hover = $0 }
+        .scrollAwareOnHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: hover)
     }
 }

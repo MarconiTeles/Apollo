@@ -34,6 +34,9 @@ struct ContentView: View {
     /// notification arrives. Auto-collapses after a few seconds.
     @State private var bellPillNotif:  AppNotification?
     @State private var bellPillTask:   Task<Void, Never>?
+    /// Upload pills can be dismissed independently without cancelling the
+    /// transfer. The id only lives for this ContentView session.
+    @State private var dismissedUploadPillIDs: Set<UUID> = []
     /// Once the user closes the onboarding manually we don't reopen it
     /// during the same session — but a fresh launch re-evaluates the
     /// connections from scratch.
@@ -99,26 +102,6 @@ struct ContentView: View {
             || showFilters
             || showAIChat
             || reviewPresenter.request != nil
-    }
-
-    /// Card-stack replacement used by the previous/next controls in task
-    /// detail. A next task rises from below while the current card exits
-    /// upward; previous performs the exact inverse.
-    private var detailNavigationTransition: AnyTransition {
-        switch appState.detailNavigationDirection {
-        case .next:
-            return .asymmetric(
-                insertion: .move(edge: .bottom).combined(with: .opacity),
-                removal: .move(edge: .top).combined(with: .opacity)
-            )
-        case .previous:
-            return .asymmetric(
-                insertion: .move(edge: .top).combined(with: .opacity),
-                removal: .move(edge: .bottom).combined(with: .opacity)
-            )
-        case .none:
-            return .opacity
-        }
     }
 
     var body: some View {
@@ -210,7 +193,8 @@ struct ContentView: View {
                     //    (those surfaces carry their own
                     //    headers and don't want a blur band
                     //    cutting across their top).
-                    if sidebarRoute != .board && sidebarRoute != .tasks && sidebarRoute != .today {
+                    if sidebarRoute != .board && sidebarRoute != .tasks
+                        && sidebarRoute != .today && sidebarRoute != .assignedComments {
                         FrostedStrip(barHeight: 52, fadeExtent: 60)
                             .padding(.leading, 220)
                     }
@@ -227,7 +211,8 @@ struct ContentView: View {
                     //      .tasks → MyTasksView groups by status
                     //               itself + carries its own
                     //               crumb header
-                    if sidebarRoute != .board && sidebarRoute != .tasks && sidebarRoute != .today {
+                    if sidebarRoute != .board && sidebarRoute != .tasks
+                        && sidebarRoute != .today && sidebarRoute != .assignedComments {
                         GeometryReader { geo in
                             let total     = max(1, geo.size.width)
                             let timelineW = (total - 1) * (1.0 / 2.05)
@@ -478,79 +463,10 @@ struct ContentView: View {
                 // the detail above the AI chat overlay so opening a
                 // task from inside the chat doesn't tuck the popup
                 // out of sight.
-                FloatingModal(
-                    isPresented: Binding(
-                        get: { appState.detailTask != nil },
-                        set: {
-                            // Just nil-out detailTask here. The
-                            // morph unwind lives in a single
-                            // .onChange(of:) observer further
-                            // down — that way BOTH dismiss paths
-                            // (backdrop tap → this setter; X
-                            // button → `appState.detailTask = nil`
-                            // directly, bypassing this setter)
-                            // hit the same unwind logic. The
-                            // observer-only approach was the fix
-                            // for "X close leaves a stuck proxy
-                            // overlay" — the X path never ran
-                            // this setter, so morphProgress
-                            // stayed at 1.
-                            if !$0 { appState.detailTask = nil }
-                        }
-                    ),
-                    origin:      appState.detailTaskOrigin,
-                    windowSize:  windowGeo.size,
-                    // Quadro board sets `.scaleFromOrigin` so the
-                    // popup grows out of the clicked card; every
-                    // other surface keeps the default bottom slide.
-                    fromBottom:      appState.detailTaskOpenStyle == .bottomSlide,
-                    scaleFromOrigin: appState.detailTaskOpenStyle == .scaleFromOrigin
-                ) {
-                    if let t = appState.detailTask {
-                        // Read the live snapshot here — ContentView
-                        // still observes AppState via @EnvironmentObject,
-                        // so it re-evaluates whenever tasksById mutates.
-                        // The popup itself holds `let appState` (no
-                        // subscription) and reacts to edits via this
-                        // `task` prop change instead of an implicit
-                        // observer cascade.
-                        let live = appState.tasksById[t.id] ?? t
-                        TaskDetailSheet(task: live,
-                                        appState: appState,
-                                        visibleSubtasks: appState.subtasks(of: live.id),
-                                        onClose: { appState.detailTask = nil })
-                            .equatable()
-                            // CRITICAL: keying the sheet on the task
-                            // id forces SwiftUI to discard and rebuild
-                            // the view tree (and every nested @State,
-                            // @FocusState, NSViewRepresentable cache,
-                            // RichTextEditor NSTextView etc.) when
-                            // the user navigates parent → subtask.
-                            //
-                            // Without this, opening a subtask from
-                            // inside an already-open parent popup
-                            // reuses the same TaskDetailSheet
-                            // instance: the parent's stored
-                            // `lockedSize`, description draft, focus
-                            // state, and the RichTextEditor's
-                            // NSTextView (still sized for the parent's
-                            // description content) all bleed into the
-                            // subtask render, producing the visible
-                            // layout breakage where the description
-                            // text was clipped both vertically and
-                            // horizontally. Opening a subtask from an
-                            // expanded inline row didn't have the bug
-                            // because no popup was on screen yet —
-                            // SwiftUI would create a fresh
-                            // TaskDetailSheet anyway. The `.id()`
-                            // makes both flows behave identically.
-                            .id(t.id)
-                            .transition(detailNavigationTransition)
-                            .animation(.spring(response: 0.46,
-                                              dampingFraction: 0.86),
-                                       value: t.id)
-                    }
-                }
+                // Same concrete presentation path as EventDetailOverlay:
+                // observer-backed conditional, identical full-window travel,
+                // opening spring and explicit ease-in removal.
+                TaskDetailOverlay(windowSize: windowGeo.size)
                 .zIndex(1000)
 
                 // Subtask overlay popup — mounts ON TOP of the
@@ -712,7 +628,12 @@ struct ContentView: View {
                 // fires through "Verificar Atualizações…"; this is a
                 // persistent passive announcement that survives a
                 // "Remind Me Later" click.
-                if !showWelcome && !showOnboarding {
+                // Do not mount an empty, full-window aligned banner. Even
+                // with no visible child, that wrapper kept a bottom band in
+                // the hit-test tree and made the last rows of long task lists
+                // impossible to click.
+                if !showWelcome && !showOnboarding
+                    && updateService.hasVisibleUpdateStatus {
                     UpdateAvailableBanner(updateService: updateService)
                         .padding(.trailing, 18)
                         .padding(.bottom, 18)
@@ -721,7 +642,6 @@ struct ContentView: View {
                             maxHeight: .infinity,
                             alignment: .bottomTrailing
                         )
-                        .allowsHitTesting(updateService.availableUpdate != nil)
                         .zIndex(1200)
                 }
 
@@ -729,7 +649,25 @@ struct ContentView: View {
                 // top-right, as its own surface (no longer painted
                 // over the bell). Suppressed during welcome /
                 // onboarding so the intro stays clean.
-                if !showWelcome && !showOnboarding, let pill = bellPillNotif {
+                if !showWelcome && !showOnboarding,
+                   let upload = appState.uploadActivities.first(where: {
+                       $0.state == .uploading && !dismissedUploadPillIDs.contains($0.id)
+                   }) {
+                    BellUploadPill(upload: upload,
+                                   onTap: { showNotifs = true },
+                                   onDismiss: {
+                                       withAnimation(.spring(duration: 0.34, bounce: 0.14)) {
+                                           _ = dismissedUploadPillIDs.insert(upload.id)
+                                       }
+                                   })
+                        .padding(.top, 52 + 12)
+                        .padding(.trailing, 18)
+                        .transition(.asymmetric(
+                            insertion: .offset(y: -8).combined(with: .opacity),
+                            removal: .opacity
+                        ))
+                        .zIndex(1251)
+                } else if !showWelcome && !showOnboarding, let pill = bellPillNotif {
                     BellPill(notification: pill,
                              onTap: {
                                  collapseBellPill()
@@ -738,11 +676,9 @@ struct ContentView: View {
                              onDismiss: { collapseBellPill() })
                         .padding(.top, 52 + 12)
                         .padding(.trailing, 18)
-                        .frame(
-                            maxWidth: .infinity,
-                            maxHeight: .infinity,
-                            alignment: .topTrailing
-                        )
+                        // The outer ZStack is already top-trailing. Do not
+                        // inflate this toast to a full-window hit-test layer.
+                        // Only the visible capsule is interactive.
                         .transition(.asymmetric(
                             insertion: .offset(y: -8).combined(with: .opacity),
                             removal:   .opacity
@@ -1579,6 +1515,11 @@ struct ContentView: View {
                     .padding(.leading, 220)
             case .today:
                 editorialHomeView
+            case .assignedComments:
+                AssignedCommentsView()
+                    .environmentObject(appState)
+                    .padding(.top, 52)
+                    .padding(.leading, 220)
             default:
                 dashboardSplit
             }

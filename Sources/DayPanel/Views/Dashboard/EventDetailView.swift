@@ -50,9 +50,19 @@ struct EventDetailView: View {
 
     private var color: Color { Color(googleSnapHex: event.colorHex) }
     private var shape: RoundedRectangle {
-        // Same near-square radius as the sibling popups.
-        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(4.5), style: .continuous)
     }
+
+    private var headerShape: UnevenRoundedRectangle {
+        let radius = Editorial.popupRadius(4.5)
+        return UnevenRoundedRectangle(topLeadingRadius: radius,
+                                      bottomLeadingRadius: 0,
+                                      bottomTrailingRadius: 0,
+                                      topTrailingRadius: radius,
+                                      style: .continuous)
+    }
+
+    private let headerHeight: CGFloat = 126
 
     private func computeScrollMaxH(for window: CGSize) -> CGFloat {
         let h = window.height
@@ -70,15 +80,13 @@ struct EventDetailView: View {
     // MARK: - Body
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-                .opacity(entered ? 1 : 0)
-                .offset(y: (entered || reduceMotion) ? 0 : 6)
-                .animation(settle, value: entered)
-            Rectangle().fill(Editorial.rule).frame(height: 1)
-
-            ScrollablePopupContent(maxHeight: scrollMaxHeight) {
+        ZStack(alignment: .top) {
+            ScrollablePopupContent(maxHeight: scrollMaxHeight,
+                                   clipDisabled: true) {
                 VStack(alignment: .leading, spacing: 0) {
+                    // Resting content begins below the header; when scrolled,
+                    // this spacer leaves and real content travels under glass.
+                    Color.clear.frame(height: headerHeight)
                     if let url = event.meetingURL {
                         reveal(0,
                                meetingButton(url: url)
@@ -127,19 +135,26 @@ struct EventDetailView: View {
                     }
                 }
                 .padding(.horizontal, 28)
-                .padding(.top, 20)
                 .padding(.bottom, 28)
             }
+
+            header
+                .frame(minHeight: headerHeight, alignment: .top)
+                .opacity(entered ? 1 : 0)
+                .offset(y: (entered || reduceMotion) ? 0 : 6)
+                .animation(settle, value: entered)
+                .liquidGlass(in: headerShape,
+                             tint: Editorial.ink,
+                             tintOpacity: 0.01,
+                             interactive: false)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Editorial.rule).frame(height: 1)
+                }
+                .zIndex(20)
         }
         .frame(width: 540)
         .fixedSize(horizontal: false, vertical: true)
-        // Editorial card chrome — near-neutral popup surface,
-        // hairline border, one soft ambient shadow.
-        .background(Editorial.popup, in: shape)
-        .clipShape(shape)
-        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .solidPopupSurface(in: shape)
         .onAppear {
             if lockedScrollMaxH == nil {
                 lockedScrollMaxH = computeScrollMaxH(for: windowSize)
@@ -546,7 +561,7 @@ private struct EventActionIcon: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .onHover { hover = $0 }
+        .scrollAwareOnHover { hover = $0 }
         .animation(.easeOut(duration: 0.13), value: hover)
     }
 }
@@ -584,7 +599,7 @@ private struct MeetingCTA: View {
         .offset(y: (hover && !reduceMotion) ? -1 : 0)
         .shadow(color: .black.opacity(hover && !reduceMotion ? 0.18 : 0),
                 radius: 10, x: 0, y: 4)
-        .onHover { hover = $0 }
+        .scrollAwareOnHover { hover = $0 }
         .animation(.easeOut(duration: 0.16), value: hover)
     }
 
@@ -634,9 +649,7 @@ struct ConvertEventToTaskSheet: View {
     @State private var isCreating: Bool = false
 
     private var shape: RoundedRectangle {
-        // Matches the sibling editorial popups — close to square,
-        // not a chunky system sheet.
-        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(4.5), style: .continuous)
     }
 
     var body: some View {
@@ -682,24 +695,12 @@ struct ConvertEventToTaskSheet: View {
         }
         .frame(width: 480)
         .fixedSize(horizontal: false, vertical: true)
-        // Single backing view: paper fill + a tap recognizer.
-        // Taps that hit a control (button / text field) are
-        // consumed by that control first; taps on empty body
-        // areas fall through to this background and drop
-        // assignee focus, which animates the suggestions out.
         .background {
-            shape
-                .fill(Editorial.paper)
+            Color.clear
                 .contentShape(shape)
                 .onTapGesture { assigneeFocused = false }
         }
-        .clipShape(shape)
-        .overlay {
-            shape.strokeBorder(Editorial.rule, lineWidth: 1)
-                .allowsHitTesting(false)
-        }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .popupGlass(in: shape)
     }
 
     // MARK: - Submit
@@ -996,4 +997,3 @@ struct ConvertEventToTaskSheet: View {
                    value: keepOriginal)
     }
 }
-

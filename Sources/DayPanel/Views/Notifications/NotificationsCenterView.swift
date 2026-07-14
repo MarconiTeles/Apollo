@@ -6,12 +6,34 @@ import SwiftUI
 
 struct NotificationsCenterView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var updateService: UpdateService
     @Environment(\.windowSize) private var windowSize
     var onClose: () -> Void = {}
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(6), style: .continuous)
     }
+
+    private var topBarShape: UnevenRoundedRectangle {
+        let radius = Editorial.popupRadius(6)
+        return UnevenRoundedRectangle(topLeadingRadius: radius,
+                                      bottomLeadingRadius: 0,
+                                      bottomTrailingRadius: 0,
+                                      topTrailingRadius: radius,
+                                      style: .continuous)
+    }
+
+    private var bottomBarShape: UnevenRoundedRectangle {
+        let radius = Editorial.popupRadius(6)
+        return UnevenRoundedRectangle(topLeadingRadius: 0,
+                                      bottomLeadingRadius: radius,
+                                      bottomTrailingRadius: radius,
+                                      topTrailingRadius: 0,
+                                      style: .continuous)
+    }
+
+    private let topBarHeight: CGFloat = 58
+    private let bottomBarHeight: CGFloat = 54
 
     /// Cap the scrollable list relative to the window so the
     /// panel never pushes off-screen on small windows. Side-
@@ -26,72 +48,99 @@ struct NotificationsCenterView: View {
         // ~62pt toolbar reserve + 24pt bottom = 86pt outer
         // wrapper. Internal chrome (header + footer + borders)
         // ≈ 110pt. The rest is the scrollable list.
-        let chrome: CGFloat = 110
-        return max(220, h - 86 - chrome)
+        return max(220, h - 86)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Rectangle().fill(Editorial.rule).frame(height: 1)
-
-            VStack(spacing: 0) {
-                if appState.notifications.isEmpty {
+        ZStack(alignment: .top) {
+            Group {
+                if let activity = updateService.backgroundActivity {
+                    ScrollablePopupContent(maxHeight: maxScrollHeight,
+                                           clipDisabled: true) {
+                        LazyVStack(spacing: 9) {
+                            Color.clear.frame(height: topBarHeight + 14)
+                            BackgroundUpdateNotificationRow(
+                                activity: activity,
+                                onOpen: { updateService.presentUpdateUI() }
+                            )
+                            uploadRows
+                            notificationRows
+                            Color.clear.frame(height: footerReserve + 14)
+                        }
+                        .padding(.horizontal, 20)
+                    }
+                }
+                else if appState.notifications.isEmpty
+                            && appState.uploadActivities.isEmpty {
                     // Fill the remaining height so the header stays pinned to
                     // the top (the outer maxHeight frame would otherwise centre
                     // the short content, dropping the header to the middle).
                     emptyState
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, topBarHeight)
+                } else if appState.uploadActivities.isEmpty {
+                    // Same recycled native feed used by the Home Inbox.
+                    // Header/footer remain the only Liquid Glass layers and
+                    // the collection scrolls underneath them. The larger top
+                    // and bottom insets are transparent reserves, not nested
+                    // panels, so rows remain visible through the glass while
+                    // avoiding one SwiftUI hover/shadow graph per item.
+                    InboxAppKitList(
+                        notifications: appState.notifications,
+                        onDismiss: appState.removeNotification,
+                        onTap: { notification in
+                            if notification.hasTarget {
+                                appState.openNotificationTarget(notification)
+                                onClose()
+                            } else {
+                                appState.markNotificationRead(notification.id)
+                            }
+                        },
+                        topInset: topBarHeight + 14,
+                        bottomInset: footerReserve + 14,
+                        horizontalInset: 20
+                    )
                 } else {
-                ScrollablePopupContent(maxHeight: maxScrollHeight) {
-                    // Flat editorial rows divided by hairlines
-                    // (prototype `PNotifRow`) — no spacing, no
-                    // coloured halos.
-                    VStack(spacing: 0) {
-                        ForEach(appState.notifications) { n in
-                            NotificationRow(notification: n,
-                                            onDismiss: {
-                                                withAnimation(.spring(duration: 0.35, bounce: 0.20)) {
-                                                    appState.removeNotification(n.id)
-                                                }
-                                            },
-                                            onTap: {
-                                                if n.hasTarget {
-                                                    appState.openNotificationTarget(n)
-                                                    onClose()
-                                                } else {
-                                                    appState.markNotificationRead(n.id)
-                                                }
-                                            })
-                                .equatable()
-                                .transition(.asymmetric(
-                                    // Insert: slides in from above + scales up + fades in
-                                    insertion: .move(edge: .top)
-                                        .combined(with: .scale(scale: 0.92))
-                                        .combined(with: .opacity),
-                                    // Remove: slides off to the trailing edge + fades out
-                                    removal: .move(edge: .trailing)
-                                        .combined(with: .opacity)
-                                ))
+                    // Upload progress rows are intentionally kept in the
+                    // mixed SwiftUI feed: they are few, transient and update
+                    // live. The common notification-only path above carries
+                    // the potentially large history in a recycled viewport.
+                    ScrollablePopupContent(maxHeight: maxScrollHeight,
+                                           clipDisabled: true) {
+                        LazyVStack(spacing: 9) {
+                            Color.clear.frame(height: topBarHeight + 14)
+                            uploadRows
+                            notificationRows
+                            Color.clear.frame(height: footerReserve + 14)
                         }
+                        .padding(.horizontal, 20)
                     }
-                    // Animate the ForEach contents whenever the
-                    // notifications array changes (new arrival or
-                    // user-dismiss). `value:` is just `count` —
-                    // notifications only get appended at top or
-                    // removed, so the count tracks every relevant
-                    // mutation. Was `.map(\.id)` which allocated a
-                    // fresh `[String]` on EVERY body re-eval, even
-                    // when nothing had changed.
-                    .animation(.spring(duration: 0.4, bounce: 0.22),
-                               value: appState.notifications.count)
                 }
             }
 
-            if !appState.notifications.isEmpty {
-                Rectangle().fill(Editorial.rule).frame(height: 1)
+            header
+                .frame(height: topBarHeight)
+                .liquidGlass(in: topBarShape,
+                             tint: Editorial.ink,
+                             tintOpacity: 0.01,
+                             interactive: false)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Editorial.rule).frame(height: 1)
+                }
+                .zIndex(30)
+
+            if hasFeedContent {
                 footer
-            }
+                    .frame(height: bottomBarHeight)
+                    .liquidGlass(in: bottomBarShape,
+                                 tint: Editorial.ink,
+                                 tintOpacity: 0.01,
+                                 interactive: false)
+                    .overlay(alignment: .top) {
+                        Rectangle().fill(Editorial.rule).frame(height: 1)
+                    }
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .zIndex(30)
             }
         }
         // Tall side-panel layout (was a compact dropdown). Width
@@ -102,12 +151,49 @@ struct NotificationsCenterView: View {
         // bottom, matching the prototype's right-side rail.
         .frame(width: 440)
         .frame(maxHeight: .infinity)
-        // Editorial card (prototype `PNotifs` / `PPopup`).
-        .background(Editorial.popup, in: shape)
-        .clipShape(shape)
-        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .solidPopupSurface(in: shape)
+    }
+
+    private var footerReserve: CGFloat {
+        hasFeedContent ? bottomBarHeight : 0
+    }
+
+    private var hasFeedContent: Bool {
+        !appState.notifications.isEmpty || !appState.uploadActivities.isEmpty
+    }
+
+    @ViewBuilder
+    private var notificationRows: some View {
+        ForEach(appState.notifications) { n in
+            NotificationRow(notification: n,
+                            onDismiss: {
+                                withAnimation(.spring(duration: 0.35, bounce: 0.20)) {
+                                    appState.removeNotification(n.id)
+                                }
+                            },
+                            onTap: {
+                                if n.hasTarget {
+                                    appState.openNotificationTarget(n)
+                                    onClose()
+                                } else {
+                                    appState.markNotificationRead(n.id)
+                                }
+                            })
+                .equatable()
+                .transition(.asymmetric(
+                    insertion: .move(edge: .top)
+                        .combined(with: .scale(scale: 0.92))
+                        .combined(with: .opacity),
+                    removal: .move(edge: .trailing).combined(with: .opacity)
+                ))
+        }
+    }
+
+    @ViewBuilder
+    private var uploadRows: some View {
+        ForEach(appState.uploadActivities) { upload in
+            UploadActivityRow(upload: upload)
+        }
     }
 
     private var header: some View {
@@ -116,11 +202,10 @@ struct NotificationsCenterView: View {
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Editorial.inkSoft)
             Text("Notificações")
-                .font(Editorial.serif(16, .medium))
+                .font(Editorial.sans(16, .semibold))
                 .foregroundStyle(Editorial.ink)
-            if appState.unreadNotifications > 0 {
-                Text(appState.unreadNotifications > 99
-                     ? "99+" : "\(appState.unreadNotifications)")
+            if headerBadgeCount > 0 {
+                Text(headerBadgeCount > 99 ? "99+" : "\(headerBadgeCount)")
                     .font(Editorial.sans(10.5, .bold))
                     .foregroundStyle(Editorial.page)
                     .padding(.horizontal, 6).padding(.vertical, 1)
@@ -156,13 +241,19 @@ struct NotificationsCenterView: View {
         .padding(.vertical, 14)
     }
 
+    private var headerBadgeCount: Int {
+        appState.unreadNotifications
+            + appState.uploadActivities.filter { $0.state == .uploading }.count
+            + (updateService.backgroundActivity == nil ? 0 : 1)
+    }
+
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "bell.slash")
                 .font(.system(size: 26, weight: .regular))
                 .foregroundStyle(Editorial.inkMute)
             Text("Nenhuma notificação ainda")
-                .font(Editorial.serif(15))
+                .font(Editorial.sans(15, .semibold))
                 .foregroundStyle(Editorial.ink)
             Caption("Atualizações de sincronização, eventos e tarefas vão aparecer aqui.",
                     size: 12.5)
@@ -213,7 +304,6 @@ struct NotificationsCenterView: View {
 // MARK: - Single notification row
 
 struct NotificationRow: View, Equatable {
-    @EnvironmentObject var appState: AppState
     let notification: AppNotification
     let onDismiss: () -> Void
     let onTap:     () -> Void
@@ -228,54 +318,21 @@ struct NotificationRow: View, Equatable {
         lhs.notification == rhs.notification
     }
 
-    /// Cached tint resolved once per row mount + on `targetId`
-    /// change. The previous computed property did a
-    /// `.first(where:)` linear scan over `appState.events` on
-    /// EVERY body re-eval. With ~10 rows visible and
-    /// `appState.events` typically holding 50–500 entries,
-    /// that was O(rows × events) per scroll frame — the
-    /// single biggest reason notifications scroll felt awful.
-    @State private var cachedTargetTint: Color = .gray
-
-    private func resolveTargetTint() -> Color {
-        switch notification.targetKind {
-        case .task:
-            if let id = notification.targetId,
-               let task = appState.tasksById[id] {
-                return Color(statusHex: task.statusDisplayHex)
-            }
-        case .event:
-            if let id = notification.targetId,
-               let event = appState.events.first(where: { $0.id == id }) {
-                return Color(hex: event.colorHex)
-            }
-        case .review:
-            break   // review rows use the kind's default tint
-        case .none:
-            break
+    /// Resolve exclusively from the immutable notification payload. Keeping
+    /// `AppState` out of every row prevents unrelated sync/progress mutations
+    /// from invalidating all visible Inbox capsules while they scroll.
+    private var targetTint: Color {
+        if notification.targetKind == .task,
+           let hex = notification.messageHighlights?.last?.hex {
+            return Color(statusHex: hex)
         }
         return notification.kind.tint
     }
 
     var body: some View {
         Button(action: onTap) {
-            HStack(alignment: .center, spacing: 12) {
-                // Tone dot (prototype `PNotifRow`): solid muted
-                // status/kind colour when unread, hollow ring when
-                // already read.
-                Circle()
-                    .fill(notification.read ? Color.clear
-                                            : cachedTargetTint.editorialMuted)
-                    .frame(width: 6, height: 6)
-                    .overlay(
-                        Circle().strokeBorder(
-                            notification.read ? Editorial.inkFaint : Color.clear,
-                            lineWidth: 1.5
-                        )
-                    )
-                    .padding(.bottom, 15)
-
-                VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .center, spacing: 0) {
+                VStack(alignment: .leading, spacing: 4) {
                     // Exactly two visual lines. Source, title, time and
                     // dismiss live on line one; contextual copy and the
                     // target action share line two. Long ClickUp titles
@@ -284,7 +341,7 @@ struct NotificationRow: View, Equatable {
                         Text(sourceLabel)
                             .font(Editorial.sans(8.5, .semibold))
                             .tracking(1.0)
-                            .foregroundStyle(cachedTargetTint.editorialMuted)
+                            .foregroundStyle(targetTint.editorialMuted)
                             .fixedSize()
                         Text(notification.title)
                             .font(Editorial.sans(13.5, .semibold))
@@ -294,7 +351,7 @@ struct NotificationRow: View, Equatable {
                             .lineLimit(1)
                             .truncationMode(.tail)
                         Spacer(minLength: 8)
-                        Text(relative)
+                        Text(notification.date, style: .relative)
                             .font(Editorial.sans(10.5))
                             .foregroundStyle(Editorial.inkMute)
                             .fixedSize()
@@ -311,7 +368,7 @@ struct NotificationRow: View, Equatable {
 
                     HStack(spacing: 8) {
                         Text(secondaryLine)
-                            .font(Editorial.serif(11.5).italic())
+                            .font(Editorial.sans(11.5))
                             .foregroundStyle(Editorial.inkSoft)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -326,51 +383,36 @@ struct NotificationRow: View, Equatable {
                     }
                 }
             }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 14)
-            .frame(minHeight: 68)
+            .padding(.horizontal, 15)
+            .padding(.vertical, 9)
+            .frame(minHeight: 58)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(notification.read ? Color.clear
-                                          : cachedTargetTint.editorialMuted.opacity(0.05))
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(Editorial.ruleSoft.opacity(0.72))
-                    .frame(height: 0.5)
-                    .padding(.leading, 22)
+            // One native glass surface belongs to the outer notification
+            // panel. Repeating a glassEffect for ~100 rows creates ~100 live
+            // blur/refraction passes and destroys scroll FPS. Inner capsules
+            // are cheap opaque-adaptive surfaces instead.
+            .background {
+                let capsule = RoundedRectangle(
+                    cornerRadius: Editorial.notificationCapsuleRadius,
+                    style: .continuous
+                )
+                ZStack {
+                    capsule.fill(Editorial.card.opacity(notification.read ? 0.62 : 0.86))
+                    capsule.fill(targetTint.opacity(notification.read ? 0.018 : 0.035))
+                }
             }
-            .contentShape(Rectangle())
+            .overlay {
+                RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
+                                 style: .continuous)
+                    .strokeBorder(Editorial.rule.opacity(0.72), lineWidth: 0.6)
+                    .allowsHitTesting(false)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
+                                           style: .continuous))
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .onAppear { cachedTargetTint = resolveTargetTint() }
-        .onChange(of: notification.targetId) { _, _ in
-            cachedTargetTint = resolveTargetTint()
-        }
-        .onChange(of: notification.read) { _, _ in
-            // `read` doesn't change the tint colour itself but
-            // changes how alpha is applied — we recompute as a
-            // safety net so the row's shadow opacity matches.
-        }
-    }
-
-    /// Shared formatter — was being instantiated per row per
-    /// render, plus a fresh `Locale` lookup. With 10+ rows
-    /// re-evaluating on every `appState` mutation, that was a
-    /// pile of allocations per scroll frame for what's
-    /// effectively static configuration. The static let runs
-    /// once per app launch.
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        f.locale     = Locale(identifier: "pt-BR")
-        return f
-    }()
-
-    private var relative: String {
-        Self.relativeFormatter.localizedString(
-            for: notification.date,
-            relativeTo: Date()
-        )
+        .capsuleHoverLift(tint: targetTint)
     }
 
     private var targetIcon: String {
@@ -393,6 +435,211 @@ struct NotificationRow: View, Equatable {
                 return trimmed.isEmpty ? nil : trimmed
             }
             .joined(separator: " · ")
+    }
+}
+
+// MARK: - Live upload queue
+
+private struct UploadActivityRow: View {
+    let upload: AppState.UploadActivity
+
+    private var stateLabel: String {
+        switch upload.state {
+        case .uploading: return "Enviando"
+        case .completed: return "Concluído"
+        case .failed: return "Falhou"
+        }
+    }
+
+    private var stateIcon: String {
+        switch upload.state {
+        case .uploading: return "arrow.up.doc"
+        case .completed: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var stateColor: Color {
+        switch upload.state {
+        case .uploading: return Editorial.accent
+        case .completed: return .green
+        case .failed: return .red
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: stateIcon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(stateColor)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(upload.fileName)
+                        .font(Editorial.sans(12.5, .semibold))
+                        .foregroundStyle(Editorial.ink)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Text(upload.state == .uploading
+                         ? "\(Int(upload.progress * 100))%"
+                         : stateLabel)
+                        .font(Editorial.sans(10.5, .semibold))
+                        .foregroundStyle(stateColor)
+                        .monospacedDigit()
+                }
+
+                Text(upload.taskTitle)
+                    .font(Editorial.sans(10.5))
+                    .foregroundStyle(Editorial.inkMute)
+                    .lineLimit(1)
+
+                ProgressView(value: upload.progress)
+                    .progressViewStyle(.linear)
+                    .tint(stateColor)
+            }
+        }
+        .padding(.horizontal, 15)
+        .padding(.vertical, 12)
+        .background {
+            let capsule = RoundedRectangle(
+                cornerRadius: Editorial.notificationCapsuleRadius,
+                style: .continuous
+            )
+            ZStack {
+                capsule.fill(Editorial.card.opacity(0.88))
+                capsule.fill(stateColor.opacity(0.04))
+            }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
+                             style: .continuous)
+                .strokeBorder(Editorial.rule.opacity(0.72), lineWidth: 0.6)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.04), radius: 1.5, y: 0.75)
+    }
+}
+
+/// Live, non-persisted updater state pinned above notification history. It is
+/// deliberately two lines tall: progress remains visible after the updater
+/// window hides, without turning each Sparkle callback into noisy inbox rows.
+private struct BackgroundUpdateNotificationRow: View {
+    let activity: UpdateService.BackgroundActivity
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 12) {
+                statusIcon
+                    .frame(width: 22, height: 22)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 7) {
+                        Text("ATUALIZAÇÃO DO APOLLO")
+                            .font(Editorial.sans(9.5, .bold))
+                            .tracking(1.25)
+                            .foregroundStyle(Editorial.inkSoft)
+                        Spacer(minLength: 6)
+                        Text(detail)
+                            .font(Editorial.sans(10.5, .medium))
+                            .foregroundStyle(Editorial.inkMute)
+                    }
+
+                    HStack(spacing: 10) {
+                        Text(title)
+                            .font(Editorial.sans(13, .semibold))
+                            .foregroundStyle(isFailure ? Color.red : Editorial.ink)
+                            .lineLimit(1)
+                        if let fraction {
+                            ProgressView(value: fraction)
+                                .progressViewStyle(.linear)
+                                .tint(Editorial.accent)
+                                .frame(maxWidth: 145)
+                        }
+                        Spacer(minLength: 0)
+                        Text("abrir")
+                            .font(Editorial.sans(11.5, .semibold))
+                            .foregroundStyle(Editorial.accent)
+                    }
+                }
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                let capsule = RoundedRectangle(
+                    cornerRadius: Editorial.notificationCapsuleRadius,
+                    style: .continuous
+                )
+                ZStack {
+                    capsule.fill(Editorial.card.opacity(0.86))
+                    capsule.fill((isFailure ? Color.red : Editorial.accent).opacity(0.035))
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
+                                 style: .continuous)
+                    .strokeBorder(Editorial.rule.opacity(0.72), lineWidth: 0.6)
+                    .allowsHitTesting(false)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
+                                           style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .capsuleHoverLift(tint: isFailure ? .red : Editorial.accent)
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch activity {
+        case .ready:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Color.green)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Color.red)
+        case .downloading, .extracting, .installing:
+            ProgressView()
+                .controlSize(.small)
+                .tint(Editorial.accent)
+        }
+    }
+
+    private var fraction: Double? {
+        switch activity {
+        case let .downloading(value): return value
+        case let .extracting(value): return value
+        case .installing, .ready, .failed: return nil
+        }
+    }
+
+    private var title: String {
+        switch activity {
+        case .downloading: return "Baixando em segundo plano"
+        case .extracting: return "Preparando atualização"
+        case .installing: return "Instalando atualização"
+        case .ready: return "Pronta para instalar e reiniciar"
+        case .failed: return "Falha no download"
+        }
+    }
+
+    private var detail: String {
+        switch activity {
+        case let .downloading(value):
+            return value.map { "\(Int($0 * 100))%" } ?? "iniciando"
+        case let .extracting(value): return "\(Int(value * 100))%"
+        case .installing: return "aguarde"
+        case let .ready(version): return version.isEmpty ? "concluído" : "v\(version)"
+        case .failed: return "atenção"
+        }
+    }
+
+    private var isFailure: Bool {
+        if case .failed = activity { return true }
+        return false
     }
 }
 

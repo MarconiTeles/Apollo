@@ -119,9 +119,19 @@ struct TaskDetailSheet: View, Equatable {
     }
 
     private var shape: RoundedRectangle {
-        // Popup corner radius bumped +50% (3 → 4.5).
-        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(4.5), style: .continuous)
     }
+
+    private var headerShape: UnevenRoundedRectangle {
+        let radius = Editorial.popupRadius(4.5)
+        return UnevenRoundedRectangle(topLeadingRadius: radius,
+                                      bottomLeadingRadius: 0,
+                                      bottomTrailingRadius: 0,
+                                      topTrailingRadius: radius,
+                                      style: .continuous)
+    }
+
+    private let mastheadHeight: CGFloat = 68
 
     /// Compute a popup size from the host window. Used once on
     /// first appear; afterwards the cached `lockedSize` value
@@ -168,10 +178,7 @@ struct TaskDetailSheet: View, Equatable {
     var body: some View {
         // EditorialDetailV2 — "task as a magazine spread":
         // masthead, then a 7fr/3fr grid (main column · marginalia).
-        VStack(spacing: 0) {
-            masthead
-            Rectangle().fill(Editorial.rule).frame(height: 1)
-
+        ZStack(alignment: .top) {
             Group {
                 switch detailTab {
                 case .overview:    overviewSpread
@@ -181,18 +188,20 @@ struct TaskDetailSheet: View, Equatable {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+            masthead
+                .frame(minHeight: mastheadHeight)
+                .liquidGlass(in: headerShape,
+                             tint: Editorial.ink,
+                             tintOpacity: 0.01,
+                             interactive: false)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Editorial.rule).frame(height: 1)
+                }
+                .zIndex(20)
         }
         .frame(width: popoverSize.width, height: popoverSize.height)
-        // Editorial page: near-neutral popup surface, near-square
-        // corners, one soft ambient shadow (prototype `EditorialDetailV2`).
-        .background(Editorial.popup, in: shape)
-        .clipShape(shape)
-        .overlay {
-            shape.strokeBorder(Editorial.rule, lineWidth: 1)
-                .allowsHitTesting(false)
-        }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .solidPopupSurface(in: shape)
         // Lock the size on first appear so subsequent host-
         // window resizes don't reflow the popup.
         //
@@ -323,8 +332,9 @@ struct TaskDetailSheet: View, Equatable {
             .buttonStyle(.plain)
             .focusEffectDisabled()
             .disabled(appState.availableStatuses.isEmpty)
-            .popover(isPresented: $showStatusMenu, arrowEdge: .bottom) {
-                StatusPickerPopover(
+            .background {
+                StatusPickerBubbleAnchor(
+                    isPresented: $showStatusMenu,
                     statuses: appState.availableStatuses,
                     currentStatusName: liveTask.status
                 ) { status in
@@ -389,6 +399,8 @@ struct TaskDetailSheet: View, Equatable {
         .focusEffectDisabled()
         .foregroundStyle(enabled ? Editorial.inkSoft : Editorial.inkFaint)
         .disabled(!enabled)
+        .keyboardShortcut(direction == .previous ? .upArrow : .downArrow,
+                          modifiers: .command)
         .help(help)
     }
 
@@ -439,6 +451,7 @@ struct TaskDetailSheet: View, Equatable {
                 .padding(.bottom, 8)
 
             Text(liveTask.title)
+                .textSelection(.enabled)
                 .font(Editorial.serif(38))
                 .foregroundStyle(Editorial.ink)
                 .tracking(-1.2)
@@ -465,6 +478,7 @@ struct TaskDetailSheet: View, Equatable {
     private var overviewMain: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: mastheadHeight)
                 titleBlock
 
                 Spacer().frame(height: 24)
@@ -509,6 +523,7 @@ struct TaskDetailSheet: View, Equatable {
     private var subtasksTab: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: mastheadHeight)
                 titleBlock
 
                 Spacer().frame(height: 24)
@@ -538,14 +553,17 @@ struct TaskDetailSheet: View, Equatable {
 
     private var attachmentsTab: some View {
         ScrollView(.vertical, showsIndicators: true) {
-            TaskDetailView(
-                task: liveTask,
-                appState: appState,
-                includesComments: false,
-                attachmentsOnly:  true,
-                visibleSubtasks:  visibleSubtasks
-            )
-            .equatable()
+            VStack(spacing: 0) {
+                Color.clear.frame(height: mastheadHeight)
+                TaskDetailView(
+                    task: liveTask,
+                    appState: appState,
+                    includesComments: false,
+                    attachmentsOnly:  true,
+                    visibleSubtasks:  visibleSubtasks
+                )
+                .equatable()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.horizontal, 56)
@@ -553,11 +571,13 @@ struct TaskDetailSheet: View, Equatable {
     }
 
     private var activityTab: some View {
-        TaskCommentsSection(task: liveTask, appState: appState,
-                            composerAtBottom: true)
+        TaskCommentsSection(task: liveTask,
+                            appState: appState,
+                            composerAtBottom: true,
+                            topContentInset: mastheadHeight + 8)
             .equatable()
             .padding(.horizontal, 56)
-            .padding(.vertical, 28)
+            .padding(.bottom, 28)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 

@@ -511,7 +511,12 @@ final class AgentActionExecutor {
             guard let task = resolveTask(ref: ref, in: appState) else {
                 return .failed(reason: "Tarefa '\(ref)' não encontrada")
             }
-            await MainActor.run { appState.detailTask = task }
+            await MainActor.run {
+                appState.openTaskDetail(task,
+                                        origin: .zero,
+                                        navigationTasks: appState.tasks,
+                                        style: .bottomSlide)
+            }
             return .fetchedContext(
                 label: "ui",
                 body: "Popup da tarefa \"\(task.title)\" aberto."

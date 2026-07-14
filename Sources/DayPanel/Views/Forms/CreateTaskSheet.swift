@@ -69,10 +69,7 @@ struct CreateTaskSheet: View {
     }
 
     private var shape: RoundedRectangle {
-        // Editorial popup: near-square corners — same radius as the
-        // sibling `TaskDetailSheet` so creating and editing feel like
-        // one surface (prototype `PPopup`).
-        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(4.5), style: .continuous)
     }
 
     @FocusState private var titleFocused:       Bool
@@ -146,17 +143,7 @@ struct CreateTaskSheet: View {
         }
         .frame(width: 540)
         .fixedSize(horizontal: false, vertical: true)
-        // Editorial page chrome — near-neutral popup surface,
-        // hairline border, one soft ambient shadow (matches
-        // `TaskDetailSheet`).
-        .background(Editorial.popup, in: shape)
-        .clipShape(shape)
-        .overlay {
-            shape.strokeBorder(Editorial.rule, lineWidth: 1)
-                .allowsHitTesting(false)
-        }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .popupGlass(in: shape)
         // Drop target — accepts any file dragged from Finder /
         // Mail / Safari / iMessage. URLs are queued exactly the
         // same way the "Adicionar" button feeds `pickedAttachments`,
@@ -899,9 +886,10 @@ struct CreateTaskSheet: View {
                 Button { showStatusPicker.toggle() } label: { statusPillLabel }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
-                    .popover(isPresented: $showStatusPicker, arrowEdge: .bottom) {
-                        StatusPickerPopover(
-                            statuses:          appState.availableStatuses,
+                    .background {
+                        StatusPickerBubbleAnchor(
+                            isPresented: $showStatusPicker,
+                            statuses: appState.availableStatuses,
                             currentStatusName: statusName
                         ) { status in
                             statusName = status.status

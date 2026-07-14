@@ -30,6 +30,10 @@ struct TaskCommentsSection: View, Equatable {
     /// task detail (`TaskDetailSheet`) where the comments column gets
     /// the full popover height.
     var composerAtBottom: Bool = false
+    /// Empty space inside the popup scroll content. Unlike outer padding,
+    /// this preserves a full-height viewport so rows can travel underneath
+    /// a fixed Liquid Glass masthead.
+    var topContentInset: CGFloat = 0
 
     /// Equatable conformance — `.equatable()` short-circuits
     /// re-renders when surrounding views re-evaluate but
@@ -37,7 +41,9 @@ struct TaskCommentsSection: View, Equatable {
     /// comment list / drafts / focus state live in `@State` and
     /// drive their own redraws independently.
     static func == (lhs: TaskCommentsSection, rhs: TaskCommentsSection) -> Bool {
-        lhs.task == rhs.task && lhs.composerAtBottom == rhs.composerAtBottom
+        lhs.task == rhs.task
+            && lhs.composerAtBottom == rhs.composerAtBottom
+            && lhs.topContentInset == rhs.topContentInset
     }
 
     @State private var lastReviewTick   = -1
@@ -256,85 +262,12 @@ struct TaskCommentsSection: View, Equatable {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader
-
-            if loading && timeline.isEmpty {
-                HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
-                    .padding(.vertical, 12)
-                if composerAtBottom { Spacer(minLength: 0) }
-            } else if timeline.isEmpty {
-                Text("Nenhuma atividade ainda.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 8)
-                if composerAtBottom { Spacer(minLength: 0) }
+        Group {
+            if composerAtBottom {
+                popupBody
             } else {
-                // Comment list rendering depends on the host
-                // surface — the section is reused in two very
-                // different layouts:
-                //
-                //  • POPUP (composerAtBottom == true): the
-                //    column is given a FIXED height by the
-                //    parent HStack. Without an inner ScrollView
-                //    the VStack grows to its content's
-                //    intrinsic height — on tasks with rich
-                //    comments (multi-line bodies, attachment
-                //    cards) it overflows, dragging the
-                //    composer offscreen and squeezing the
-                //    sibling metadata column. That's the
-                //    "abre certo e desconfigura quando os
-                //    comentários carregam" bug: popup opens
-                //    fine, network response lands, layout
-                //    collapses. A ScrollView claiming
-                //    `maxHeight: .infinity` claims the slot
-                //    and scrolls overflow within it.
-                //
-                //  • INLINE (composerAtBottom == false): the
-                //    section sits inside the parent's own
-                //    ScrollView in the expanded task pill. An
-                //    inner ScrollView would conflict with the
-                //    outer one (nested scroll, gesture
-                //    fighting). Let the VStack grow naturally
-                //    and the parent handles overflow.
-                if composerAtBottom {
-                    // LazyVStack: only the comments visible inside
-                    // the ScrollView's viewport mount initially.
-                    // Each `commentRow` is heavy (avatar, body w/
-                    // NSDataDetector parse, reactions row, replies
-                    // section, attachment cards) — eagerly mounting
-                    // 30+ rows up front was the dominant cost on
-                    // the popup's open animation and on the first
-                    // scroll past row ~10. Lazy mount cuts initial
-                    // cost to roughly the viewport's worth (~5–7
-                    // rows) and lets the scroll keep up.
-                    // `.vertical` axis + `scrollBounceBehavior`
-                    // on the horizontal axis fully locks the
-                    // pan to vertical when content fits the
-                    // viewport (which it always does — comment
-                    // rows wrap to column width).
-                    ScrollView(.vertical, showsIndicators: true) {
-                        LazyVStack(spacing: 8) {
-                            ForEach(timeline) { entry in
-                                switch entry {
-                                case .comment(let c): commentRow(c)
-                                case .event(let e):   eventRow(e)
-                                }
-                            }
-                        }
-                        .padding(.bottom, 4)
-                    }
-                    .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-                    .frame(maxHeight: .infinity)
-                } else {
-                    LazyVStack(spacing: 8) {
-                        ForEach(comments) { c in commentRow(c) }
-                    }
-                }
+                inlineBody
             }
-
-            composer
         }
         .onAppear {
             // Both streams loaded together so a fresh popup
@@ -384,6 +317,71 @@ struct TaskCommentsSection: View, Equatable {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 await refresh()
             }
+        }
+    }
+
+    /// The popup viewport spans the complete surface. Only its content gets
+    /// the masthead reserve, so scrolling visibly refracts rows through the
+    /// fixed Liquid Glass header instead of stopping at its lower edge.
+    private var popupBody: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    Color.clear.frame(height: topContentInset)
+                    sectionHeader
+                    popupTimelineContent
+                }
+                .padding(.bottom, 4)
+            }
+            .scrollIndicators(.never)
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .frame(maxHeight: .infinity)
+
+            composer
+        }
+    }
+
+    @ViewBuilder
+    private var popupTimelineContent: some View {
+        if loading && timeline.isEmpty {
+            HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
+                .padding(.vertical, 12)
+        } else if timeline.isEmpty {
+            Text("Nenhuma atividade ainda.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 8)
+        } else {
+            ForEach(timeline) { entry in
+                switch entry {
+                case .comment(let comment): commentRow(comment)
+                case .event(let event): eventRow(event)
+                }
+            }
+        }
+    }
+
+    /// Inline sections already live in a parent ScrollView and must remain
+    /// naturally sized to avoid nested-scroll gesture conflicts.
+    private var inlineBody: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader
+            if loading && comments.isEmpty {
+                HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
+                    .padding(.vertical, 12)
+            } else if comments.isEmpty {
+                Text("Nenhuma atividade ainda.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 8)
+            } else {
+                LazyVStack(spacing: 8) {
+                    ForEach(comments) { comment in commentRow(comment) }
+                }
+            }
+            composer
         }
     }
 

@@ -36,7 +36,17 @@ let package = Package(
                 .product(name: "ReviewKit", package: "apollo-review-swift"),
             ],
             path: "Sources/DayPanel",
-            exclude: ["Resources/Info.plist"]
+            // App bundle-only resources copied by build.sh. Excluding them
+            // from SwiftPM avoids misleading "unhandled file" warnings while
+            // keeping the signed bundle assembly explicit and reproducible.
+            exclude: [
+                "Resources/Info.plist",
+                "Resources/APOLLO_ICON_06.png",
+                "Resources/Apollo.entitlements",
+                "Resources/SparkleEntitlements/Downloader.entitlements",
+                "Resources/SparkleEntitlements/Installer.entitlements",
+                "Resources/SparkleEntitlements/Updater.entitlements"
+            ]
         ),
         // Invariants that were expensive to (re)discover in
         // production: deterministic task ordering, page-order

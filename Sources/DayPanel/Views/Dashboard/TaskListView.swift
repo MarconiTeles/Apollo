@@ -158,8 +158,10 @@ struct TaskListView: View {
                 guard let id = new,
                       let target = appState.tasks.first(where: { $0.id == id })
                 else { return }
-                appState.detailTaskOrigin = .zero
-                appState.detailTask = target
+                appState.openTaskDetail(target,
+                                        origin: .zero,
+                                        navigationTasks: filteredTasks,
+                                        style: .bottomSlide)
                 // Reset so a follow-up trigger fires fresh.
                 DispatchQueue.main.async { appState.expandedTaskId = nil }
             }
@@ -222,8 +224,10 @@ struct TaskListView: View {
                     items:           rows,
                     topContentInset: legacyTopBand + filterBarHeight,
                     onTapTask:       { task, frame in
-                        appState.detailTaskOrigin = frame
-                        appState.detailTask       = task
+                        appState.openTaskDetail(task,
+                                                origin: frame,
+                                                navigationTasks: rows.map(\.task),
+                                                style: .bottomSlide)
                     },
                     appState:        appState
                 )

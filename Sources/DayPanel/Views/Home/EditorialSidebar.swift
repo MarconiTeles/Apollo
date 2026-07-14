@@ -10,7 +10,7 @@ import AppKit
 // MARK: - Sidebar item identity
 
 enum SidebarRoute: Hashable {
-    case today, tasks, board, upcoming, done, ai
+    case today, tasks, board, assignedComments, done, ai
 }
 
 // MARK: - Sidebar view
@@ -53,7 +53,17 @@ struct EditorialSidebar: View {
         VStack(spacing: 0) {
             // 44pt native traffic-light lane + 30pt breathing room before
             // the first section label.
-            Color.clear.frame(height: 74)
+            Color.clear
+                .frame(height: 74)
+                .overlay(alignment: .bottomLeading) {
+                    Text("APOLLO")
+                        .font(.system(size: 12, weight: .semibold))
+                        .tracking(2.8)
+                        .foregroundStyle(Editorial.inkSoft)
+                        .padding(.leading, 20)
+                        .padding(.bottom, 8)
+                        .accessibilityLabel("Apollo")
+                }
             navList
             userFooter
         }
@@ -110,10 +120,11 @@ struct EditorialSidebar: View {
 
     private var edicaoSection: some View {
         SidebarSection(label: "Edição") {
-            navRow("Hoje",           count: todayCount,    route: .today)
-            navRow("Minhas tarefas", count: tasksCount,    route: .tasks)
+            navRow("Inbox",          count: todayCount,    route: .today)
+            navRow("Tarefas",        count: tasksCount,    route: .tasks)
             navRow("Quadro",         count: boardCount,    route: .board)
-            navRow("Próximos",      count: upcomingCount, route: .upcoming, disabled: true)
+            navRow("Comentários",    count: assignedCommentsCount,
+                   route: .assignedComments)
             navRow("Concluídas",                          route: .done, disabled: true)
             navRow("Apollo",                              route: .ai,   disabled: true)
         }
@@ -241,10 +252,10 @@ struct EditorialSidebar: View {
 
     private func icon(for route: SidebarRoute) -> String {
         switch route {
-        case .today:    return "calendar"
+        case .today:    return "tray"
         case .tasks:    return "checklist"
         case .board:    return "rectangle.grid.1x2"
-        case .upcoming: return "clock"
+        case .assignedComments: return "text.bubble"
         case .done:     return "checkmark.circle"
         case .ai:       return "sparkles"
         }
@@ -329,6 +340,14 @@ struct EditorialSidebar: View {
     private var boardCount: Int { pool.count }
     private var upcomingCount: Int {
         pool.filter { ($0.dueDate ?? .distantPast) > .now }.count
+    }
+    private var assignedCommentsCount: Int {
+        guard let me = myUserId else { return 0 }
+        let username = appState.availableMembers.first { $0.id == me }?.username ?? ""
+        return appState.assignedCommentRecords.filter {
+            !$0.comment.resolved
+                && ($0.isAssigned(to: me) || $0.mentions(username: username))
+        }.count
     }
     private var overdueCount: Int {
         pool.filter { ($0.dueDate ?? .distantFuture) < .now }.count
@@ -518,7 +537,7 @@ private struct SidebarNavRow: View {
         .contentShape(RoundedRectangle(cornerRadius: 8,
                                        style: .continuous))
         .disabled(disabled)
-        .onHover { entering in
+        .scrollAwareOnHover { entering in
             if !disabled { hover = entering && !appState.anyPopupOpen }
         }
         .onChange(of: appState.anyPopupOpen) { _, open in
@@ -602,7 +621,7 @@ private struct SidebarDotRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 8,
                                        style: .continuous))
-        .onHover { entering in
+        .scrollAwareOnHover { entering in
             hover = entering && !appState.anyPopupOpen
         }
         .onChange(of: appState.anyPopupOpen) { _, open in
@@ -616,11 +635,20 @@ private struct SidebarDotRow: View {
                 guard let raw = value as? String else { return }
                 let ids = MyTasksDragPayload.decode(raw)
                 Task { @MainActor in
+                    let originals = ids.compactMap { appState.tasksById[$0] }.filter {
+                        $0.listId != targetListId
+                    }
                     for id in ids {
                         guard let task = appState.tasksById[id],
                               task.listId != targetListId else { continue }
                         await appState.moveTaskToList(task, toListId: targetListId)
                     }
+                    appState.pushTaskListUndo(originals,
+                        label: originals.count == 1
+                            ? "Mover tarefa para \(label)"
+                            : "Mover \(originals.count) tarefas para \(label)")
+                    NotificationCenter.default.post(name: .apolloTaskDropCompleted,
+                                                    object: nil)
                 }
             }
             return true

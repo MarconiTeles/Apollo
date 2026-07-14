@@ -48,6 +48,26 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
 
 enum Editorial {
 
+    /// New popup geometry. Callers pass their previous radius so the
+    /// requested 35% increase stays mathematically consistent across small
+    /// menus, standard dialogs and full-window sheets.
+    static let popupRadiusScale: CGFloat = 1.35
+    static func popupRadius(_ previous: CGFloat) -> CGFloat {
+        previous * popupRadiusScale
+    }
+
+    /// Inbox rows intentionally read as capsules rather than editorial list
+    /// rows. The 10pt baseline comes from the compact reference capsule.
+    static let notificationCapsuleRadius: CGFloat = 13.5
+
+    /// Canonical vertical elevation for native AppKit capsules. Core
+    /// Animation layers hosted by Apollo's flipped list views use positive Y
+    /// to project the shadow visually downward, matching SwiftUI's
+    /// `.shadow(y:)` convention used everywhere else in the app.
+    static let nativeCapsuleShadowRestY: CGFloat = 0.75
+    static let nativeCapsuleShadowHoverY: CGFloat = 2
+    static let nativeListShadowHoverY: CGFloat = 1
+
     // ── Surface (light / dark). Light mantém o creme original
     //    Light e dark são AMBOS neutros frios (o creme editorial
     //    morreu junto com o serif): light é uma escala cinza-clara
@@ -300,7 +320,7 @@ struct HoverBounce: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scaleEffect(hover ? scale : 1.0)
-            .onHover { hover = ScrollGate.shared.active ? false : $0 }
+            .scrollAwareOnHover { hover = $0 }
             .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hover)
     }
 }
@@ -323,7 +343,7 @@ struct HoverGlass: ViewModifier {
             .overlay(RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(Color.clear, lineWidth: 1))
             .scaleEffect(hover ? scale : 1.0)
-            .onHover { hover = ScrollGate.shared.active ? false : $0 }
+            .scrollAwareOnHover { hover = $0 }
             .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hover)
     }
 }
@@ -362,7 +382,7 @@ struct PaperButtonStyle: ButtonStyle {
                 .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .scaleEffect(configuration.isPressed ? 0.96 : (hover ? 1.02 : 1.0))
                 .opacity(configuration.isPressed ? 0.85 : 1)
-                .onHover { hover = ScrollGate.shared.active ? false : $0 }
+                .scrollAwareOnHover { hover = $0 }
                 .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hover)
                 .animation(.spring(response: 0.22, dampingFraction: 0.7), value: configuration.isPressed)
         }
@@ -392,7 +412,7 @@ struct AccentButtonStyle: ButtonStyle {
                 .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                 .scaleEffect(configuration.isPressed ? 0.96 : (hover && enabled ? 1.02 : 1.0))
                 .opacity(configuration.isPressed ? 0.85 : 1)
-                .onHover { hover = ScrollGate.shared.active ? false : $0 }
+                .scrollAwareOnHover { hover = $0 }
                 .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hover)
                 .animation(.spring(response: 0.22, dampingFraction: 0.7), value: configuration.isPressed)
         }

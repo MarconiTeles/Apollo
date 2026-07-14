@@ -226,6 +226,18 @@ final class AppState: ObservableObject {
     @Published var availableMembers:  [CUMember]      = []
     @Published var availableTags:     [CUTask.Tag]    = []
 
+    /// Progressive index behind the global Assigned Comments surface.
+    /// The public ClickUp API exposes comments per task (not the private
+    /// workspace-wide endpoint used by clickup.com), so Apollo builds this
+    /// index from every task already synchronized or prefetched locally.
+    @Published private(set) var assignedCommentRecords: [AssignedCommentRecord] = []
+    @Published private(set) var assignedCommentsLoading = false
+    @Published private(set) var assignedCommentsScannedTasks = 0
+    @Published private(set) var assignedCommentsTotalTasks = 0
+    @Published private(set) var assignedCommentsHasMore = false
+    @Published private(set) var assignedCommentsError: String? = nil
+    @MainActor private var assignedCommentsPendingTasks: [CUTask] = []
+
     /// Lists currently selectable in the task-detail "LISTAS"
     /// picker — union of the user's pinned lists (`PinnedLists`,
     /// the same set the sidebar's LISTAS column shows) AND every
@@ -331,7 +343,43 @@ final class AppState: ObservableObject {
         detailNavigationDirection = .none
         detailTaskOpenStyle = style
         detailTaskOrigin = origin
-        detailTask = task
+        // Keep presentation inside an explicit animation transaction.
+        // AppKit-backed lists invoke this method from an NSCollectionView
+        // callback, which does not inherit a SwiftUI transaction. Assigning
+        // directly here therefore made the detail appear instantly even
+        // though FloatingModal still declared a transition.
+        withAnimation(detailPresentationAnimation(for: style)) {
+            detailTask = task
+        }
+    }
+
+    /// Single dismissal path for backdrop, close button and keyboard escape.
+    /// In particular, the close button used to nil `detailTask` directly and
+    /// bypass the removal transaction owned by FloatingModal.
+    func closeTaskDetail() {
+        guard detailTask != nil else { return }
+        let style = detailTaskOpenStyle
+        withAnimation(detailDismissAnimation(for: style)) {
+            detailTask = nil
+        }
+    }
+
+    private func detailPresentationAnimation(for style: DetailTaskOpenStyle) -> Animation {
+        switch style {
+        case .bottomSlide:
+            return .spring(response: 0.34, dampingFraction: 0.86)
+        case .scaleFromOrigin:
+            return .spring(response: 0.34, dampingFraction: 0.86)
+        }
+    }
+
+    private func detailDismissAnimation(for style: DetailTaskOpenStyle) -> Animation {
+        switch style {
+        case .bottomSlide:
+            return .easeIn(duration: 0.30)
+        case .scaleFromOrigin:
+            return .spring(response: 0.34, dampingFraction: 0.96)
+        }
     }
 
     /// Moves one card in the surface-defined order. The direction is exposed
@@ -497,6 +545,56 @@ final class AppState: ObservableObject {
 
     @Published private(set) var notifications: [AppNotification] = []
     @Published var toastQueue: [AppNotification] = []
+
+    struct UploadActivity: Identifiable, Equatable {
+        enum State: Equatable { case uploading, completed, failed }
+        let id: UUID
+        let fileName: String
+        let taskId: String
+        let taskTitle: String
+        var progress: Double
+        var state: State
+    }
+
+    /// Pure queue transitions shared by the live uploader and unit tests.
+    /// Replacing the published array (instead of mutating an element in place)
+    /// also guarantees SwiftUI receives exactly one coherent update per
+    /// progress callback.
+    static func insertingUploadActivity(_ activity: UploadActivity,
+                                        into activities: [UploadActivity],
+                                        limit: Int = 20) -> [UploadActivity] {
+        Array(([activity] + activities).prefix(max(1, limit)))
+    }
+
+    static func updatingUploadProgress(id: UUID,
+                                       fraction: Double,
+                                       in activities: [UploadActivity]) -> [UploadActivity] {
+        var next = activities
+        guard let index = next.firstIndex(where: { $0.id == id }),
+              next[index].state == .uploading else { return next }
+        next[index].progress = fraction.isFinite
+            ? max(0, min(1, fraction))
+            : 0
+        return next
+    }
+
+    static func finishingUploadActivity(id: UUID,
+                                        succeeded: Bool,
+                                        in activities: [UploadActivity]) -> [UploadActivity] {
+        var next = activities
+        guard let index = next.firstIndex(where: { $0.id == id }) else { return next }
+        if succeeded {
+            next[index].progress = 1
+            next[index].state = .completed
+        } else {
+            next[index].state = .failed
+        }
+        return next
+    }
+
+    /// Live attachment queue shown in Notifications. Fractions come directly
+    /// from URLSessionTaskDelegate; this is never simulated progress.
+    @Published private(set) var uploadActivities: [UploadActivity] = []
     private let notifsKey = "dp_notifications_v1"
     private let notifsCap = 100
 
@@ -541,6 +639,97 @@ final class AppState: ObservableObject {
         undoStack.append(UndoableAction(label: label, undo: undo))
         if undoStack.count > undoStackCap {
             undoStack.removeFirst(undoStack.count - undoStackCap)
+        }
+    }
+
+    /// Registers one semantic undo for a single- or multi-task status move.
+    /// Drag destinations call this after their batch succeeds so one ⌘Z
+    /// restores the entire gesture, rather than requiring one undo per card.
+    @MainActor
+    func pushTaskStatusUndo(_ originals: [CUTask], label: String) {
+        guard !originals.isEmpty else { return }
+        pushUndo(label: label) { [weak self] in
+            guard let self else { return }
+            for original in originals {
+                guard let current = self.tasksById[original.id],
+                      current.status.caseInsensitiveCompare(original.status) != .orderedSame
+                else { continue }
+                let restore = self.availableStatuses.first {
+                    $0.status.caseInsensitiveCompare(original.status) == .orderedSame
+                } ?? CUStatus(status: original.status,
+                              color: original.statusColor,
+                              type: original.isCompleted ? "closed" : "custom")
+                await self.updateTaskStatus(current, to: restore, silent: true)
+            }
+        }
+    }
+
+    /// Same batch semantics for moving tasks between ClickUp home lists.
+    @MainActor
+    func pushTaskListUndo(_ originals: [CUTask], label: String) {
+        guard !originals.isEmpty else { return }
+        pushUndo(label: label) { [weak self] in
+            guard let self else { return }
+            for original in originals {
+                guard let current = self.tasksById[original.id],
+                      current.listId != original.listId else { continue }
+                await self.moveTaskToList(current, toListId: original.listId)
+            }
+        }
+    }
+
+    /// Snapshot-based inverse used by bulk field commands. It intentionally
+    /// records one stack entry for the user's one gesture/menu command, even
+    /// when that command mutates many tasks and several ClickUp fields.
+    @MainActor
+    func pushTaskSnapshotUndo(_ originals: [CUTask], label: String) {
+        guard !originals.isEmpty else { return }
+        pushUndo(label: label) { [weak self] in
+            guard let self else { return }
+            for original in originals {
+                guard var current = self.tasksById[original.id] else { continue }
+
+                if current.status.caseInsensitiveCompare(original.status) != .orderedSame {
+                    let status = self.availableStatuses.first {
+                        $0.status.caseInsensitiveCompare(original.status) == .orderedSame
+                    } ?? CUStatus(status: original.status,
+                                  color: original.statusColor,
+                                  type: original.isCompleted ? "closed" : "custom")
+                    await self.updateTaskStatus(current, to: status, silent: true)
+                    current = self.tasksById[original.id] ?? current
+                }
+                if current.priority != original.priority {
+                    await self.updateTaskPriority(current, to: original.priority)
+                    current = self.tasksById[original.id] ?? current
+                }
+                if current.startDate != original.startDate {
+                    await self.updateTaskStartDate(current, to: original.startDate)
+                    current = self.tasksById[original.id] ?? current
+                }
+                if current.dueDate != original.dueDate {
+                    await self.updateTaskDueDate(current, to: original.dueDate)
+                    current = self.tasksById[original.id] ?? current
+                }
+                let currentAssignees = Set(current.assignees.map(\.id))
+                let originalAssignees = Set(original.assignees.map(\.id))
+                if currentAssignees != originalAssignees {
+                    await self.updateTaskAssignees(current, to: originalAssignees)
+                    current = self.tasksById[original.id] ?? current
+                }
+                let currentTags = Set(current.tags.map(\.name))
+                let originalTags = Set(original.tags.map(\.name))
+                if currentTags != originalTags {
+                    await self.updateTaskTags(current, to: originalTags)
+                    current = self.tasksById[original.id] ?? current
+                }
+                if current.listId != original.listId {
+                    await self.moveTaskToList(current, toListId: original.listId)
+                    current = self.tasksById[original.id] ?? current
+                }
+                if current.archived != original.archived {
+                    await self.setTaskArchived(current, to: original.archived)
+                }
+            }
         }
     }
 
@@ -900,6 +1089,32 @@ final class AppState: ObservableObject {
             UserDefaults.standard.set(true, forKey: "dp_nativeNotifs")
         }
         loadNotifications()
+        // Deterministic visual-validation seam. It never exists in release
+        // behaviour unless the explicit local QA default is enabled. It
+        // performs no network request; QA can inspect the real Notifications
+        // and floating-pill layouts without publishing synthetic activity.
+        if UserDefaults.standard.bool(forKey: "dp_uiTestUploadQueue") {
+            uploadActivities = [
+                UploadActivity(id: UUID(),
+                               fileName: "Roteiro_final.mov",
+                               taskId: "ui-test-1",
+                               taskTitle: "Campanha · Vídeo principal",
+                               progress: 0.37,
+                               state: .uploading),
+                UploadActivity(id: UUID(),
+                               fileName: "Referencias.zip",
+                               taskId: "ui-test-2",
+                               taskTitle: "Direção de arte",
+                               progress: 1,
+                               state: .completed),
+                UploadActivity(id: UUID(),
+                               fileName: "Audio_v2.wav",
+                               taskId: "ui-test-3",
+                               taskTitle: "Captação de áudio",
+                               progress: 0.64,
+                               state: .failed),
+            ]
+        }
         updateDockBadge()
 
         // Request macOS notification authorization eagerly when the
@@ -1200,10 +1415,10 @@ final class AppState: ObservableObject {
                 // comments column) without forcing the surrounding
                 // task list to scroll-to-row + push siblings down.
                 if let task = tasksById[id] {
-                    detailTaskOrigin = .zero          // origin unknown — popup centres
-                    withAnimation(.spring(duration: 0.45, bounce: 0.30)) {
-                        detailTask = task
-                    }
+                    openTaskDetail(task,
+                                   origin: .zero,
+                                   navigationTasks: tasks,
+                                   style: .bottomSlide)
                 }
             case .review:
                 // Reopen the Apollo Review window directly on the updated review
@@ -1228,10 +1443,10 @@ final class AppState: ObservableObject {
     func openTask(id: String) {
         Task { @MainActor in
             guard let task = tasksById[id] else { return }
-            detailTaskOrigin = .zero
-            withAnimation(.spring(duration: 0.45, bounce: 0.30)) {
-                detailTask = task
-            }
+            openTaskDetail(task,
+                           origin: .zero,
+                           navigationTasks: tasks,
+                           style: .bottomSlide)
         }
     }
 
@@ -3454,20 +3669,27 @@ final class AppState: ObservableObject {
     /// Archives a task. Reversible from the ClickUp web UI;
     /// the API just sets `archived: true`.
     func archiveTask(_ task: CUTask) async {
+        await setTaskArchived(task, to: true)
+    }
+
+    /// Shared reversible archived flag mutation. Keeping archive/unarchive on
+    /// the same optimistic path lets the snapshot undo restore the exact task.
+    func setTaskArchived(_ task: CUTask, to archived: Bool) async {
+        guard task.archived != archived else { return }
         do {
-            try await cuSvc.archiveTask(id: task.id)
+            try await cuSvc.updateTask(id: task.id, fields: ["archived": archived])
             await MainActor.run {
                 if let idx = tasks.firstIndex(where: { $0.id == task.id }) {
-                    tasks[idx].archived = true
+                    tasks[idx].archived = archived
                 }
                 bumpTaskSnapshot(for: task.id)
             }
             notifyTask(.success, title: task.title,
-                       subtitle: "Tarefa arquivada",
+                       subtitle: archived ? "Tarefa arquivada" : "Tarefa restaurada",
                        message: task.notificationDetails,
                        taskId: task.id)
         } catch {
-            Log.error("archiveTask: \(error)")
+            Log.error("setTaskArchived: \(error)")
         }
     }
 
@@ -3961,6 +4183,200 @@ final class AppState: ObservableObject {
             Log.error("loadComments: \(error)")
             return []
         }
+    }
+
+    /// Starts a fresh assigned-comment index and fetches only its first page.
+    /// ClickUp exposes comments per task, so scanning thousands of tasks at
+    /// once creates thousands of requests before the user can act on the
+    /// first result. Apollo instead keeps a newest-first queue and consumes
+    /// it in explicit 30-task pages.
+    @MainActor
+    func refreshAssignedComments() async {
+        guard !assignedCommentsLoading else { return }
+        assignedCommentsError = nil
+        assignedCommentsScannedTasks = 0
+
+        var byId: [String: CUTask] = [:]
+        for task in tasks { byId[task.id] = task }
+        for cached in tasksByListId.values {
+            for task in cached { byId[task.id] = task }
+        }
+        // ClickUp's list payload includes `comment_count`. A definitive zero
+        // cannot contain an assignment or @mention, so skip it. `nil` remains
+        // eligible for compatibility with old caches/endpoints and preserves
+        // the page's completeness guarantee.
+        let candidates = byId.values
+            .filter { ($0.commentCount ?? 1) > 0 }
+            .sorted { lhs, rhs in
+                switch (lhs.dateCreated, rhs.dateCreated) {
+                case let (left?, right?) where left != right:
+                    return left > right
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    return lhs.id < rhs.id
+                }
+            }
+        assignedCommentsTotalTasks = candidates.count
+        assignedCommentRecords = []
+        assignedCommentsPendingTasks = candidates
+        assignedCommentsHasMore = !candidates.isEmpty
+
+        guard !candidates.isEmpty else {
+            return
+        }
+
+        await loadNextAssignedCommentsPage()
+    }
+
+    /// Loads the next bounded page without discarding results already shown.
+    /// At most three requests run concurrently inside a page, preserving the
+    /// previous rate-limit discipline while capping each user action at 30
+    /// task-comment requests.
+    @MainActor
+    func loadNextAssignedCommentsPage() async {
+        guard !assignedCommentsLoading,
+              !assignedCommentsPendingTasks.isEmpty else { return }
+
+        assignedCommentsLoading = true
+        assignedCommentsError = nil
+        let next = AssignedCommentsPagination.split(assignedCommentsPendingTasks)
+        let page = next.page
+        assignedCommentsPendingTasks = next.remainder
+        assignedCommentsHasMore = !assignedCommentsPendingTasks.isEmpty
+
+        let service = cuSvc
+        let username = availableMembers.first {
+            $0.id == clickUpAuthService.userId
+        }?.username ?? clickUpAuthService.userName ?? ""
+
+        await withTaskGroup(of: [AssignedCommentRecord].self) { group in
+            var iterator = page.makeIterator()
+            func enqueue(_ task: CUTask) {
+                group.addTask {
+                    guard let comments = try? await service.getTaskComments(taskId: task.id)
+                    else { return [] }
+                    return comments.compactMap { comment in
+                        let mention = !username.isEmpty
+                            && comment.text.range(of: "@\(username)",
+                                                  options: .caseInsensitive) != nil
+                        guard comment.assignee != nil
+                                || comment.assignedBy != nil
+                                || mention
+                        else { return nil }
+                        return AssignedCommentRecord(task: task, comment: comment)
+                    }
+                }
+            }
+
+            for _ in 0..<min(3, page.count) {
+                if let task = iterator.next() { enqueue(task) }
+            }
+
+            while let records = await group.next() {
+                assignedCommentsScannedTasks += 1
+                if !records.isEmpty {
+                    var merged = Dictionary(
+                        assignedCommentRecords.map { ($0.id, $0) },
+                        uniquingKeysWith: { _, newest in newest }
+                    )
+                    for record in records { merged[record.id] = record }
+                    assignedCommentRecords = merged.values.sorted {
+                        $0.comment.date > $1.comment.date
+                    }
+                }
+                if let next = iterator.next() { enqueue(next) }
+            }
+        }
+        assignedCommentsLoading = false
+    }
+
+    @MainActor
+    func setAssignedCommentResolved(_ record: AssignedCommentRecord,
+                                    resolved: Bool) async -> Bool {
+        guard let assigneeId = record.comment.assignee?.id else { return false }
+        do {
+            try await cuSvc.updateAssignedComment(record.comment,
+                                                  assigneeId: assigneeId,
+                                                  resolved: resolved)
+            if let index = assignedCommentRecords.firstIndex(where: { $0.id == record.id }) {
+                assignedCommentRecords[index].comment.resolved = resolved
+            }
+            return true
+        } catch {
+            assignedCommentsError = "Não foi possível atualizar o comentário."
+            Log.error("setAssignedCommentResolved: \(error)")
+            return false
+        }
+    }
+
+    @MainActor
+    func assignComment(_ record: AssignedCommentRecord, to member: CUMember) async -> Bool {
+        do {
+            try await cuSvc.updateAssignedComment(record.comment,
+                                                  assigneeId: member.id,
+                                                  resolved: false)
+            if let index = assignedCommentRecords.firstIndex(where: { $0.id == record.id }) {
+                assignedCommentRecords[index].comment.assignee = .init(
+                    id: member.id,
+                    username: member.username,
+                    email: member.email,
+                    color: member.color,
+                    initials: nil,
+                    profilePicture: member.profilePicture
+                )
+                assignedCommentRecords[index].comment.resolved = false
+            }
+            return true
+        } catch {
+            assignedCommentsError = "Não foi possível atribuir o comentário."
+            Log.error("assignComment: \(error)")
+            return false
+        }
+    }
+
+    @MainActor
+    func toggleAssignedCommentReaction(_ record: AssignedCommentRecord,
+                                       emoji: String) async -> Bool {
+        guard let me = clickUpAuthService.userId else { return false }
+        let currentlyReacted = record.comment.reactions.first {
+            $0.emoji == emoji
+        }?.userIds.contains(me) == true
+        do {
+            if currentlyReacted {
+                try await cuSvc.removeCommentReaction(commentId: record.id, emoji: emoji)
+            } else {
+                try await cuSvc.addCommentReaction(commentId: record.id, emoji: emoji)
+            }
+            if let index = assignedCommentRecords.firstIndex(where: { $0.id == record.id }) {
+                var reactions = assignedCommentRecords[index].comment.reactions
+                if let reactionIndex = reactions.firstIndex(where: { $0.emoji == emoji }) {
+                    var ids = reactions[reactionIndex].userIds
+                    if currentlyReacted { ids.removeAll { $0 == me } }
+                    else if !ids.contains(me) { ids.append(me) }
+                    if ids.isEmpty { reactions.remove(at: reactionIndex) }
+                    else { reactions[reactionIndex] = .init(emoji: emoji, userIds: ids) }
+                } else if !currentlyReacted {
+                    reactions.append(.init(emoji: emoji, userIds: [me]))
+                }
+                assignedCommentRecords[index].comment.reactions = reactions
+            }
+            return true
+        } catch {
+            assignedCommentsError = "Não foi possível atualizar a reação."
+            Log.error("toggleAssignedCommentReaction: \(error)")
+            return false
+        }
+    }
+
+    func loadReplies(for commentId: String) async -> [CUComment] {
+        (try? await cuSvc.getCommentReplies(commentId: commentId)) ?? []
+    }
+
+    func reply(to commentId: String, text: String) async -> CUComment? {
+        try? await cuSvc.addCommentReply(commentId: commentId, text: text)
     }
 
     // MARK: - Comment notifications
@@ -4747,11 +5163,41 @@ final class AppState: ObservableObject {
                                  fileURL: URL,
                                  commentId: String? = nil,
                                  onProgress: (@Sendable (Double) -> Void)? = nil) async -> (url: URL, id: String?)? {
+        let uploadId = UUID()
+        await MainActor.run {
+            uploadActivities = Self.insertingUploadActivity(
+                UploadActivity(id: uploadId,
+                               fileName: fileURL.lastPathComponent,
+                               taskId: task.id,
+                               taskTitle: task.title,
+                               progress: 0,
+                               state: .uploading),
+                into: uploadActivities
+            )
+        }
+        let progressRelay: @Sendable (Double) -> Void = { [weak self] fraction in
+            onProgress?(fraction)
+            Task { @MainActor in
+                guard let self else { return }
+                self.uploadActivities = Self.updatingUploadProgress(
+                    id: uploadId,
+                    fraction: fraction,
+                    in: self.uploadActivities
+                )
+            }
+        }
         do {
             let url = try await cuSvc.uploadAttachment(taskId:    task.id,
                                                        fileURL:   fileURL,
                                                        commentId: commentId,
-                                                       onProgress: onProgress)
+                                                       onProgress: progressRelay)
+            await MainActor.run {
+                uploadActivities = Self.finishingUploadActivity(
+                    id: uploadId,
+                    succeeded: true,
+                    in: uploadActivities
+                )
+            }
             notifyTask(.success,
                        title:    task.title,
                        subtitle: "Anexo enviado",
@@ -4760,6 +5206,13 @@ final class AppState: ObservableObject {
             guard let url else { return nil }
             return (url: url, id: cuSvc.lastUploadedAttachmentId)
         } catch {
+            await MainActor.run {
+                uploadActivities = Self.finishingUploadActivity(
+                    id: uploadId,
+                    succeeded: false,
+                    in: uploadActivities
+                )
+            }
             Log.error("uploadCommentAttachment: \(error)")
             notifyTask(.error,
                        title:    task.title,

@@ -20,35 +20,17 @@ struct EditorialHomeInboxColumn: View {
                 emptyState
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(inboxNotifications) { notification in
-                            NotificationRow(
-                                notification: notification,
-                                onDismiss: {
-                                    withAnimation(.spring(duration: 0.35, bounce: 0.18)) {
-                                        appState.removeNotification(notification.id)
-                                    }
-                                },
-                                onTap: {
-                                    if notification.hasTarget {
-                                        appState.openNotificationTarget(notification)
-                                    } else {
-                                        appState.markNotificationRead(notification.id)
-                                    }
-                                }
-                            )
-                            .equatable()
-                            .transition(.asymmetric(
-                                insertion: .move(edge: .top).combined(with: .opacity),
-                                removal: .move(edge: .trailing).combined(with: .opacity)
-                            ))
+                InboxAppKitList(
+                    notifications: inboxNotifications,
+                    onDismiss: appState.removeNotification,
+                    onTap: { notification in
+                        if notification.hasTarget {
+                            appState.openNotificationTarget(notification)
+                        } else {
+                            appState.markNotificationRead(notification.id)
                         }
                     }
-                    .animation(.spring(duration: 0.4, bounce: 0.20),
-                               value: inboxNotifications.count)
-                    .padding(.bottom, 72)
-                }
+                )
             }
         }
         .background(Editorial.paper)
@@ -60,10 +42,10 @@ struct EditorialHomeInboxColumn: View {
                 .font(.system(size: 24, weight: .regular))
                 .foregroundStyle(Editorial.inkMute)
             Text("Inbox em dia")
-                .font(Editorial.serif(16, .medium))
+                .font(Editorial.sans(16, .semibold))
                 .foregroundStyle(Editorial.ink)
             Text("Atualizações do ClickUp e do Apollo aparecerão aqui.")
-                .font(Editorial.serif(12).italic())
+                .font(Editorial.sans(12))
                 .foregroundStyle(Editorial.inkMute)
                 .multilineTextAlignment(.center)
         }

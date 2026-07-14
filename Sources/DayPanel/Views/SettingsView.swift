@@ -19,7 +19,7 @@ struct SettingsView: View {
     @State private var section: SettingsSection = .integracoes
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(8), style: .continuous)
     }
 
     /// Full-bleed: fills the window minus the prototype's
@@ -39,11 +39,17 @@ struct SettingsView: View {
             content
         }
         .frame(width: popupSize.width, height: popupSize.height)
-        .background(Editorial.popup, in: shape)
+        // Do not place an opaque sheet behind both panes: it made the left
+        // Liquid Glass sample a white backstop and therefore look solid. The
+        // working pane paints its own Editorial.page background; the sidebar
+        // is intentionally left to refract the live app canvas behind it.
         .clipShape(shape)
-        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .overlay {
+            shape.strokeBorder(Editorial.rule, lineWidth: 0.7)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.20), radius: 36, y: 18)
+        .shadow(color: .black.opacity(0.07), radius: 12, y: 4)
         .sheet(isPresented: $showListPicker) {
             CUListPickerSheet().environmentObject(appState)
         }
@@ -95,7 +101,10 @@ struct SettingsView: View {
             .padding(.horizontal, 16).padding(.vertical, 12)
         }
         .frame(width: 260)
-        .background(Editorial.card)
+        .liquidGlass(in: Rectangle(),
+                     tint: Editorial.ink,
+                     tintOpacity: 0.012,
+                     interactive: false)
     }
 
     // MARK: Content
@@ -145,9 +154,10 @@ struct SettingsView: View {
                 .padding(.horizontal, 40)
                 .padding(.top, 32).padding(.bottom, 40)
             }
-            .background(Editorial.popup)
+            .background(Color.clear)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Editorial.page)
     }
 
     // MARK: Account identity (real)
@@ -560,7 +570,7 @@ private struct SetNavItem: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .onHover { hover = $0 }
+        .scrollAwareOnHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: hover)
     }
 }
@@ -1849,20 +1859,14 @@ struct CUListPickerSheet: View {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(4.5), style: .continuous)
     }
 
     var body: some View {
         Group {
             if compact { compactBody } else { wideBody }
         }
-        // Editorial card chrome — near-neutral popup surface,
-        // hairline border, one soft ambient shadow.
-        .background(Editorial.popup, in: shape)
-        .clipShape(shape)
-        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .popupGlass(in: shape)
         .task { await loadWorkspaces() }
     }
 
@@ -2527,7 +2531,7 @@ private struct ListPickerRow: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
         }
-        .onHover { hover = $0 }
+        .scrollAwareOnHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: hover)
     }
 }

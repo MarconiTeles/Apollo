@@ -39,7 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// it renders the SwiftUI `UpdaterCardView`. The silent-channel
     /// suppression that used to live in `SPUStandardUserDriverDelegate`
     /// now lives inside this driver's `showUpdateFound`.
-    private lazy var updateDriver = MainActor.assumeIsolated { ApolloUpdateDriver() }
+    private lazy var updateDriver = MainActor.assumeIsolated {
+        let driver = ApolloUpdateDriver()
+        driver.updateService = updateService
+        updateService.updateDriver = driver
+        return driver
+    }
 
     /// Raw `SPUUpdater` (instead of `SPUStandardUpdaterController`) so we
     /// can plug in our custom user driver. Started manually on launch so

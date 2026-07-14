@@ -1150,6 +1150,27 @@ final class ClickUpService {
         _ = try await Self.data(retrying: req)
     }
 
+    /// ClickUp's Update Comment endpoint is the canonical mutation path for
+    /// assigned-comment actions. The API requires the current text and
+    /// assignee alongside the resolved flag, so callers pass the full comment
+    /// snapshot rather than risking an accidental blank/unassign operation.
+    func updateAssignedComment(_ comment: CUComment,
+                               assigneeId: Int,
+                               resolved: Bool) async throws {
+        guard let token else { throw CUError.notConfigured }
+        var req = URLRequest(url: URL(string:
+            "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(comment.id))")!)
+        req.httpMethod = "PUT"
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "comment_text": comment.text,
+            "assignee": assigneeId,
+            "resolved": resolved,
+        ])
+        _ = try await Self.data(retrying: req)
+    }
+
     // MARK: - Reactions
 
     func addCommentReaction(commentId: String, emoji: String) async throws {
@@ -1295,11 +1316,16 @@ final class ClickUpService {
         req.httpBody = body
 
         let delegate = onProgress.map { UploadProgressDelegate(onProgress: $0) }
-        let (data, _) = try await URLSession.shared.upload(for: req,
-                                                           from: body,
-                                                           delegate: delegate)
+        let (data, response) = try await URLSession.shared.upload(for: req,
+                                                                  from: body,
+                                                                  delegate: delegate)
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            throw APIError.classify(response: response, data: data, thrown: nil)
+                ?? APIError.serverError(statusCode: http.statusCode)
+        }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
+        else { throw CUError.parse }
         lastUploadedAttachmentId = json["id"] as? String
         if let s = json["url"]         as? String, let u = URL(string: s) { return u }
         if let s = json["url_w_query"] as? String, let u = URL(string: s) { return u }
@@ -1697,6 +1723,12 @@ final class ClickUpService {
                 ?? (item["description"] as? String)
                 ?? (item["text_content"] as? String)
             let description = rawDescription.map(Self.flattenMarkdownLinks(_:))
+            let commentCount: Int? = {
+                if let value = item["comment_count"] as? Int { return value }
+                if let value = item["comment_count"] as? NSNumber { return value.intValue }
+                if let value = item["comment_count"] as? String { return Int(value) }
+                return nil
+            }()
 
             let assignees: [CUTask.Assignee] = (item["assignees"] as? [[String: Any]] ?? [])
                 .compactMap { a in
@@ -1858,6 +1890,7 @@ final class ClickUpService {
                 listName:          listName,
                 isCompleted:       statusType == "closed",
                 description:       (description?.isEmpty == false) ? description : nil,
+                commentCount:      commentCount,
                 assignees:         assignees,
                 tags:              tags,
                 url:               url,
@@ -2384,6 +2417,20 @@ final class ClickUpService {
             }
 
             let user = item["user"] as? [String: Any]
+            func participant(_ raw: Any?) -> CUComment.Participant? {
+                guard let value = raw as? [String: Any] else { return nil }
+                let id = (value["id"] as? Int)
+                    ?? Int(value["id"] as? String ?? "")
+                guard let id else { return nil }
+                return CUComment.Participant(
+                    id: id,
+                    username: value["username"] as? String ?? "Pessoa",
+                    email: value["email"] as? String,
+                    color: value["color"] as? String,
+                    initials: value["initials"] as? String,
+                    profilePicture: value["profilePicture"] as? String
+                )
+            }
 
             // Group reactions by emoji → list of user IDs.
             var grouped: [String: [Int]] = [:]
@@ -2484,7 +2531,9 @@ final class ClickUpService {
                 resolved:     item["resolved"] as? Bool ?? false,
                 reactions:    reactions,
                 replyCount:   replyCount,
-                attachments:  attachments
+                attachments:  attachments,
+                assignee:     participant(item["assignee"]),
+                assignedBy:   participant(item["assigned_by"])
             )
         }
     }
@@ -2525,6 +2574,13 @@ final class ClickUpService {
 
 /// Streams URLSession upload progress (0.0 → 1.0) back to the caller.
 /// Used by `uploadAttachment` to drive a SwiftUI progress bar.
+enum UploadProgressMath {
+    static func fraction(sent: Int64, expected: Int64) -> Double? {
+        guard expected > 0 else { return nil }
+        return max(0, min(1, Double(sent) / Double(expected)))
+    }
+}
+
 private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     let onProgress: @Sendable (Double) -> Void
     init(onProgress: @escaping @Sendable (Double) -> Void) {
@@ -2535,8 +2591,10 @@ private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @u
                     didSendBodyData bytesSent: Int64,
                     totalBytesSent: Int64,
                     totalBytesExpectedToSend: Int64) {
-        guard totalBytesExpectedToSend > 0 else { return }
-        let p = Double(totalBytesSent) / Double(totalBytesExpectedToSend)
-        onProgress(p)
+        guard let fraction = UploadProgressMath.fraction(
+            sent: totalBytesSent,
+            expected: totalBytesExpectedToSend
+        ) else { return }
+        onProgress(fraction)
     }
 }

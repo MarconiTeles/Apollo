@@ -47,6 +47,24 @@ final class TaskSelectionTests: XCTestCase {
         XCTAssertEqual(MyTasksDragPayload.decode("single-board-task"), ["single-board-task"])
     }
 
+    func testDraggingUnselectedTaskIsTransientAndDoesNotCarrySelection() {
+        XCTAssertEqual(
+            TaskDragSelectionResolver.draggedIDs(
+                dragged: "d", selected: ["a", "b"], ordered: order
+            ),
+            ["d"]
+        )
+    }
+
+    func testDraggingSelectedTaskCarriesSelectionInVisibleOrder() {
+        XCTAssertEqual(
+            TaskDragSelectionResolver.draggedIDs(
+                dragged: "d", selected: ["b", "d", "e"], ordered: order
+            ),
+            ["b", "d", "e"]
+        )
+    }
+
     func testHomeInboxExcludesConnectionAndSyncHealthEntries() {
         for title in ["Sem conexão", "De volta ao online", "Falha na sincronização"] {
             let notification = AppNotification(kind: .warning, title: title)

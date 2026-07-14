@@ -193,17 +193,18 @@ struct FloatingModal<Content: View>: View {
     /// button position and grow into place.
     private var popupTransition: AnyTransition {
         if scaleFromOrigin {
-            // Standard scale-from-click-point transition with
-            // opacity fade. Popup grows out of the clicked
-            // BoardCard's centre (origin rect) from a small
-            // scale to full size, and reverses on dismiss.
-            // No "morph" — just the original scale animation.
-            let active   = PopupTransform(scale: 0.05,
-                                          offset: offsetDelta,
-                                          opacity: 0)
-            let identity = PopupTransform(scale: 1.0,
-                                          offset: .zero,
-                                          opacity: 1)
+            // Preserve the source task's full geometry instead of
+            // collapsing the detail to a generic point. Width and height
+            // interpolate independently, so a compact list row/card really
+            // reads as the same capsule unfurling into the detail surface.
+            // The same modifier is used for removal, which restores the
+            // previously-lost close-back-into-task animation.
+            let active = MorphFromRectModifier(progress: 0,
+                                               origin: origin,
+                                               windowSize: windowSize)
+            let identity = MorphFromRectModifier(progress: 1,
+                                                 origin: origin,
+                                                 windowSize: windowSize)
             return .asymmetric(
                 insertion: .modifier(active: active, identity: identity),
                 removal:   .modifier(active: active, identity: identity)
@@ -479,8 +480,73 @@ struct OffsetYModifier: ViewModifier, Animatable {
     }
 }
 
-// (MorphFromRectModifier removed — Quadro now uses the standard
-// scale-from-origin transition via PopupTransform.)
+/// Geometry-preserving task-detail morph. At progress zero the popup occupies
+/// the exact source row/card rectangle; at progress one it is centred at its
+/// natural size. Keeping this Animatable (instead of stacking scale + offset
+/// transitions) gives opening and closing the same continuous path.
+struct MorphFromRectModifier: ViewModifier, Animatable {
+    var progress: CGFloat
+    let origin: CGRect
+    let windowSize: CGSize
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let p = min(1, max(0, progress))
+        content
+            .modifier(MorphFromRectGeometry(progress: p,
+                                            origin: origin,
+                                            windowSize: windowSize))
+            // Hide only the illegible, fully-compressed first frames. The
+            // surface remains visible for virtually the entire morph and does
+            // not dissolve into a generic fade.
+            .opacity(Double(min(1, max(0, p * 4))))
+            .blur(radius: 1.4 * (1 - p))
+    }
+}
+
+private struct MorphFromRectGeometry: GeometryEffect {
+    var progress: CGFloat
+    let origin: CGRect
+    let windowSize: CGSize
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        let p = min(1, max(0, progress))
+        let usableOrigin: CGRect
+        if origin == .zero || origin.width <= 0 || origin.height <= 0 {
+            usableOrigin = CGRect(x: windowSize.width / 2 - 2,
+                                  y: windowSize.height / 2 - 2,
+                                  width: 4, height: 4)
+        } else {
+            usableOrigin = origin
+        }
+
+        let startScaleX = max(0.035, min(1, usableOrigin.width / max(1, size.width)))
+        let startScaleY = max(0.035, min(1, usableOrigin.height / max(1, size.height)))
+        let scaleX = startScaleX + (1 - startScaleX) * p
+        let scaleY = startScaleY + (1 - startScaleY) * p
+        let sourceOffsetX = usableOrigin.midX - windowSize.width / 2
+        let sourceOffsetY = usableOrigin.midY - windowSize.height / 2
+        let offsetX = sourceOffsetX * (1 - p)
+        let offsetY = sourceOffsetY * (1 - p)
+
+        var transform = CGAffineTransform.identity
+        transform = transform.translatedBy(x: size.width / 2 + offsetX,
+                                           y: size.height / 2 + offsetY)
+        transform = transform.scaledBy(x: scaleX, y: scaleY)
+        transform = transform.translatedBy(x: -size.width / 2,
+                                           y: -size.height / 2)
+        return ProjectionTransform(transform)
+    }
+}
 
 /// Modifier shared by `FloatingModal` and `EventDetailOverlay` to interpolate
 /// between the "tiny + offset to click point" and "full-size + centred" states.

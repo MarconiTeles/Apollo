@@ -97,9 +97,7 @@ struct CreateEventSheet: View {
     }
 
     private var shape: RoundedRectangle {
-        // Editorial popup: near-square corners — same radius as the
-        // sibling detail/create popups (prototype `PPopup`).
-        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(4.5), style: .continuous)
     }
 
     var body: some View {
@@ -180,17 +178,7 @@ struct CreateEventSheet: View {
         }
         .frame(width: 540)
         .fixedSize(horizontal: false, vertical: true)
-        // Editorial page chrome — near-neutral popup surface,
-        // hairline border, one soft ambient shadow (matches
-        // `TaskDetailSheet`).
-        .background(Editorial.popup, in: shape)
-        .clipShape(shape)
-        .overlay {
-            shape.strokeBorder(Editorial.rule, lineWidth: 1)
-                .allowsHitTesting(false)
-        }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .popupGlass(in: shape)
         .onAppear {
             // EDIT mode: pre-populate every field from the
             // event being edited. Skipped when `editing` is
@@ -777,7 +765,9 @@ struct CreateEventSheet: View {
         }
         .padding(14)
         .frame(width: 260)
-        .background(Editorial.popup)
+        .popupGlass(in: RoundedRectangle(
+            cornerRadius: Editorial.popupRadius(6), style: .continuous
+        ))
     }
 
     private func swatchButton(

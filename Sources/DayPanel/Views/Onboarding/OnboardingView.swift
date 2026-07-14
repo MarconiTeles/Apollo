@@ -1046,7 +1046,7 @@ struct OnboardingView: View {
                             endPoint:   .bottomTrailing
                         )
                     )
-                    .shadow(color: Editorial.accent.opacity(0.45),
+                    .shadow(color: .black.opacity(0.22),
                             radius: 14, x: 0, y: 6)
             }
 
@@ -2298,7 +2298,7 @@ private struct CommandPaletteDemoCard: View {
             )
             .scaleEffect(pressed ? 0.92 : 1.0)
             .shadow(color: pressed
-                    ? Editorial.accent.opacity(0.55)
+                    ? Color.black.opacity(0.22)
                     : Color.clear,
                     radius: 6, x: 0, y: 0)
             .animation(

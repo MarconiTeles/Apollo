@@ -36,6 +36,10 @@ struct CUTask: Identifiable, Codable, Equatable {
     var listName: String
     var isCompleted: Bool
     var description: String?
+    /// Comment count supplied by ClickUp's task payload. `nil` means an older
+    /// cache/endpoint did not provide it; callers must then use the safe
+    /// fallback instead of assuming the task has no comments.
+    var commentCount: Int? = nil
     var assignees: [Assignee] = []
     var tags: [Tag]           = []
     var url: String?

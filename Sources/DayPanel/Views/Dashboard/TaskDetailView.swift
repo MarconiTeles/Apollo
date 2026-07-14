@@ -649,9 +649,10 @@ struct TaskDetailView: View, Equatable {
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
                 .disabled(appState.availableStatuses.isEmpty)
-                .popover(isPresented: $showStatusMenu, arrowEdge: .bottom) {
-                    StatusPickerPopover(
-                        statuses:          appState.availableStatuses,
+                .background {
+                    StatusPickerBubbleAnchor(
+                        isPresented: $showStatusMenu,
+                        statuses: appState.availableStatuses,
                         currentStatusName: task.status
                     ) { status in
                         Task { await appState.updateTaskStatus(task, to: status) }
@@ -858,9 +859,10 @@ struct TaskDetailView: View, Equatable {
                     Button { showStatusMenu.toggle() } label: { pill }
                         .buttonStyle(.plain)
                         .focusEffectDisabled()
-                        .popover(isPresented: $showStatusMenu, arrowEdge: .top) {
-                            StatusPickerPopover(
-                                statuses:          appState.availableStatuses,
+                        .background {
+                            StatusPickerBubbleAnchor(
+                                isPresented: $showStatusMenu,
+                                statuses: appState.availableStatuses,
                                 currentStatusName: task.status
                             ) { status in
                                 Task { await appState.updateTaskStatus(task, to: status) }
@@ -1754,13 +1756,15 @@ struct TaskDetailView: View, Equatable {
         let resolved = appState.depTaskCache[id]
         Button {
             guard let t = resolved else { return }
-            appState.detailTaskOrigin = .zero
-            withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
-                if appState.detailTask != nil {
+            if appState.detailTask != nil {
+                withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
                     appState.pushDetailSubtask(t)
-                } else {
-                    appState.detailTask = t
                 }
+            } else {
+                appState.openTaskDetail(t,
+                                        origin: .zero,
+                                        navigationTasks: appState.tasks,
+                                        style: .bottomSlide)
             }
         } label: {
             HStack(spacing: 8) {
@@ -2586,13 +2590,15 @@ struct SubtaskRow: View, Equatable {
             //    main list), open it as a regular task popup
             //    in `detailTask`. There's no parent on screen
             //    to preserve.
-            appState.detailTaskOrigin = .zero
-            withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
-                if appState.detailTask != nil {
+            if appState.detailTask != nil {
+                withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
                     appState.pushDetailSubtask(task)
-                } else {
-                    appState.detailTask = task
                 }
+            } else {
+                appState.openTaskDetail(task,
+                                        origin: .zero,
+                                        navigationTasks: appState.tasks,
+                                        style: .bottomSlide)
             }
         } label: {
             HStack(alignment: .center, spacing: 10) {

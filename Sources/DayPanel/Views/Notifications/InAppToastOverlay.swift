@@ -69,9 +69,6 @@ private struct ToastCard: View {
     let notification: AppNotification
     let onDismiss:    () -> Void
 
-    /// Prototype `PToast` tone colours — the 3px left bar is the
-    /// only chromatic element; everything else is editorial paper +
-    /// ink. No saturated web hues.
     private var toneColor: Color {
         switch notification.kind {
         case .success: return Color(hex: "#1F7A3A")   // muted forest
@@ -83,13 +80,16 @@ private struct ToastCard: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
+            Circle()
+                .fill(toneColor)
+                .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
                 Text(notification.title)
-                    .font(Editorial.serif(13.5, .medium))
+                    .font(Editorial.sans(13.5, .semibold))
                     .foregroundStyle(Editorial.ink)
                 if let s = notification.subtitle, !s.isEmpty {
                     Text(s)
-                        .font(Editorial.serif(12.5).italic())
+                        .font(Editorial.sans(12))
                         .foregroundStyle(Editorial.inkSoft)
                         .lineLimit(1)
                 }
@@ -97,7 +97,7 @@ private struct ToastCard: View {
                     // Same status-colour-aware rendering as the
                     // bell popup — see NotificationsCenterView.
                     Text(notification.attributedMessage ?? AttributedString(m))
-                        .font(Editorial.serif(12.5).italic())
+                        .font(Editorial.sans(12))
                         .foregroundStyle(Editorial.inkSoft)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
@@ -108,18 +108,17 @@ private struct ToastCard: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(minWidth: 260, maxWidth: 380, alignment: .leading)
-        .background(Editorial.card)
-        .overlay(alignment: .leading) {
-            // 3px tone bar — the prototype's only chromatic cue.
-            Rectangle().fill(toneColor).frame(width: 3)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .strokeBorder(Editorial.rule, lineWidth: 1)
+        .liquidGlass(
+            in: RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
+                                 style: .continuous),
+            tint: toneColor,
+            tintOpacity: 0.022,
+            interactive: false,
+            lightweight: true
         )
-        .shadow(color: .black.opacity(0.18), radius: 24, x: 0, y: 8)
-        .contentShape(Rectangle())
+        .contentShape(RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
+                                       style: .continuous))
+        .capsuleHoverLift(tint: toneColor, scaleX: 1.008, scaleY: 1.025)
         .onTapGesture(perform: onDismiss)
     }
 }

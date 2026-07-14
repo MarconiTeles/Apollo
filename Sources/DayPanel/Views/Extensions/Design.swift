@@ -72,7 +72,7 @@ struct HoverRow: ViewModifier {
                     .fill(hover ? Editorial.rule : .clear)
                     .padding(.horizontal, -inset)
             )
-            .onHover { hover = ScrollGate.shared.active ? false : $0 }
+            .scrollAwareOnHover { hover = $0 }
             .animation(Motion.fast, value: hover)
     }
 }

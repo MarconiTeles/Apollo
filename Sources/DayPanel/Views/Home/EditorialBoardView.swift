@@ -52,20 +52,37 @@ struct EditorialBoardView: View {
             Rectangle().fill(Editorial.rule).frame(height: 1)
             board
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {
             if !selectedTasks.isEmpty {
                 TaskBulkToolbar(tasks: selectedTasks,
                                 appState: appState,
                                 onClear: clearSelection)
-                    .padding(.horizontal, 28)
-                    .padding(.bottom, 34)
-                    .transition(.move(edge: .bottom)
-                        .combined(with: .opacity)
-                        .combined(with: .scale(scale: 0.96, anchor: .bottom)))
-                    .zIndex(20)
+                    .frame(maxWidth: .infinity)
+                .padding(.horizontal, 28)
+                // The board paints edge-to-edge underneath the floating
+                // sidebar, but this command capsule belongs to the usable
+                // canvas. Remove the sidebar's 220pt lane from the centering
+                // proposal so its midpoint aligns with the visible board,
+                // not with the full window behind the glass pane.
+                .padding(.leading, 220)
+                .padding(.bottom, 34)
+                .transition(.move(edge: .bottom)
+                    .combined(with: .opacity)
+                    .combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                .zIndex(20)
             }
         }
         .background(Editorial.paper)
+        .background {
+            EscapeSelectionMonitor(isActive: !selectedTaskIds.isEmpty,
+                                   onEscape: clearSelection)
+                .frame(width: 0, height: 0)
+        }
+        .onExitCommand(perform: clearSelection)
+        .onReceive(NotificationCenter.default.publisher(for: .apolloTaskDropCompleted)) { _ in
+            clearSelection()
+        }
         .onChange(of: boardTasks.map(\.id)) { _, visibleIds in
             let visible = Set(visibleIds)
             selectedTaskIds.formIntersection(visible)
@@ -220,7 +237,7 @@ struct EditorialBoardView: View {
                 task,
                 origin: rect,
                 navigationTasks: orderedVisibleBoardTasks,
-                style: .scaleFromOrigin
+                style: .bottomSlide
             )
             return
         }
@@ -238,14 +255,11 @@ struct EditorialBoardView: View {
     }
 
     private func dragProvider(for task: CUTask) -> NSItemProvider {
-        let ids: [String]
-        if selectedTaskIds.contains(task.id) {
-            ids = selectedTasks.map(\.id)
-        } else {
-            ids = [task.id]
-            selectedTaskIds = [task.id]
-            selectionAnchorId = task.id
-        }
+        let ids = TaskDragSelectionResolver.draggedIDs(
+            dragged: task.id,
+            selected: selectedTaskIds,
+            ordered: orderedVisibleBoardTasks.map(\.id)
+        )
         draggingTaskId = task.id
         draggingTaskIds = ids
         return NSItemProvider(object: MyTasksDragPayload.encode(ids) as NSString)
@@ -271,6 +285,11 @@ struct EditorialBoardView: View {
             }
             .padding(.top, 22)
             .padding(.bottom, 24)
+            .background {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: clearSelection)
+            }
         }
         // FULL-WIDTH + contentMargins (não padding): o viewport do
         // scroll alcança x=0, então colunas roladas pra esquerda
@@ -430,6 +449,7 @@ struct EditorialBoardView: View {
                             appState: appState,
                             status: status,
                             isSelected: selected,
+                            dragPreviewTasks: selected ? selectedTasks : [task],
                             draggingTaskId: $draggingTaskId,
                             draggingTaskIds: $draggingTaskIds,
                             dragOverStatus: $dragOverStatus,
@@ -616,27 +636,33 @@ struct BoardCard: View {
         // white in light mode, charcoal in dark; opaque so the
         // chrome paper / desktop don't bleed through.
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: Editorial.popupRadius(8), style: .continuous)
                 .fill(Editorial.page)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: Editorial.popupRadius(8), style: .continuous)
                 .strokeBorder(Editorial.rule, lineWidth: 0.5)
         )
-        // Hover lift: a drop shadow tinted with the task's status accent
-        // (no scale — the colour, not the size, signals "ready"). Fades to
-        // zero opacity at rest so the card stays flat-Editorial-Calm.
-        .shadow(color: hover ? Color(statusHex: task.statusDisplayHex).opacity(0.5) : .clear,
-                radius: hover ? 4 : 0,
+        // Reference capsule hover: elastic expansion without reflow. Keep the
+        // board's semantic coloured shadow as requested, only making it
+        // broader/softer while the card lifts.
+        .scaleEffect(x: hover ? 1.018 : 1,
+                     y: hover ? 1.055 : 1)
+        .offset(y: hover ? -1 : 0)
+        .shadow(color: hover ? Color(statusHex: task.statusDisplayHex).opacity(0.34) : .clear,
+                radius: hover ? 3 : 0,
                 x: 0,
-                y: hover ? 2 : 0)
-        .animation(.easeOut(duration: 0.16), value: hover)
-        .onHover { entering in
+                y: hover ? 1.5 : 0)
+        .animation(.spring(response: 0.30, dampingFraction: 0.73), value: hover)
+        .scrollAwareOnHover { entering in
             hover = entering && !appState.anyPopupOpen
         }
         .onChange(of: appState.anyPopupOpen) { _, open in
             if open { hover = false }
         }
+        // Keep the lifted card above adjacent cards so their opaque surfaces
+        // cannot cover the soft tail of its shadow.
+        .zIndex(hover ? 10 : 0)
     }
 
     // ── Top row: status dot + breadcrumb caps + priority chip ──────────
@@ -804,6 +830,7 @@ private struct BoardCardRow: View {
     /// The column this card lives in.
     let status: CUStatus
     let isSelected: Bool
+    let dragPreviewTasks: [CUTask]
     /// Shared "which card is being dragged" state, owned by the board.
     @Binding var draggingTaskId: String?
     @Binding var draggingTaskIds: [String]
@@ -824,17 +851,9 @@ private struct BoardCardRow: View {
     var body: some View {
         BoardCard(task: task)
             .captureFrame($cardFrame)
-            .overlay {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Editorial.accent.opacity(0.055))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(Editorial.accent.opacity(0.62), lineWidth: 1.2)
-                        }
-                        .allowsHitTesting(false)
-                }
-            }
+            .taskSelectionSurface(isSelected,
+                                  radius: Editorial.popupRadius(8),
+                                  tint: Color(statusHex: task.statusDisplayHex))
             // The source card dims + shrinks slightly while it's the one
             // under the cursor, so the moving preview reads as "lifted
             // out" and the gap it leaves is obvious as siblings reflow.
@@ -847,25 +866,9 @@ private struct BoardCardRow: View {
             .onDrag {
                 onBeginDrag()
             } preview: {
-                if draggingTaskIds.count > 1 {
-                    HStack(spacing: 9) {
-                        Image(systemName: "rectangle.stack")
-                        Text("\(draggingTaskIds.count) tarefas")
-                            .lineLimit(1)
-                    }
-                    .font(Editorial.sans(12.5, .semibold))
-                    .foregroundStyle(Editorial.ink)
-                    .padding(.horizontal, 14)
-                    .frame(width: 260, height: 44, alignment: .leading)
-                    .background(.regularMaterial,
-                                in: RoundedRectangle(cornerRadius: 11,
-                                                     style: .continuous))
-                    .shadow(color: .black.opacity(0.22), radius: 14, y: 8)
-                } else {
-                    BoardCard(task: task)
-                        .frame(width: 260)
-                        .shadow(color: .black.opacity(0.22), radius: 14, y: 8)
-                }
+                TaskDragStackPreview(tasks: dragPreviewTasks,
+                                     primary: task,
+                                     width: 260)
             }
             // Card-level drop target → live vertical reorder. As the
             // dragged card hovers this one, `dropEntered` slots it into
@@ -885,12 +888,12 @@ private struct BoardCardRow: View {
                 TaskContextMenuItems(actions: contextActions
                     ?? TaskContextMenu.actions(for: task, appState: appState))
             }
-            .onTapGesture {
+            .highPriorityGesture(TapGesture().onEnded {
                 let rect = cardFrame != .zero
                     ? cardFrame
                     : MouseOriginCapture.currentClickRectInMainWindow()
                 onActivate(NSEvent.modifierFlags, rect)
-            }
+            })
     }
 }
 
@@ -955,12 +958,16 @@ private struct CardReorderDropDelegate: DropDelegate {
         draggingTaskId = nil
         draggingTaskIds.removeAll()
         dragOverStatus = nil
+        NotificationCenter.default.post(name: .apolloTaskDropCompleted, object: nil)
         guard !ids.isEmpty else { return false }
 
         let needsStatusChange = ids.contains { id in
             appState.tasks.first(where: { $0.id == id })?.status.lowercased() != statusKey
         }
         if needsStatusChange {
+            let originals = ids.compactMap { appState.tasksById[$0] }.filter {
+                $0.status.lowercased() != statusKey
+            }
             Task { @MainActor in
                 for id in ids {
                     guard let task = appState.tasks.first(where: { $0.id == id }),
@@ -968,6 +975,10 @@ private struct CardReorderDropDelegate: DropDelegate {
                     await appState.updateTaskStatus(task, to: status, silent: true)
                 }
                 onCrossColumnPlace(ids, targetId)
+                appState.pushTaskStatusUndo(originals,
+                    label: originals.count == 1
+                        ? "Mover tarefa para \(status.status.uppercased())"
+                        : "Mover \(originals.count) tarefas para \(status.status.uppercased())")
             }
         }
         // Same-column reorder was already applied live in dropEntered;
@@ -1098,12 +1109,16 @@ private struct BoardDropDelegate: DropDelegate {
         // otherwise it would stay stuck in its ghost placeholder look.
         draggingTaskId = nil
         draggingTaskIds.removeAll()
+        NotificationCenter.default.post(name: .apolloTaskDropCompleted, object: nil)
         guard let provider = info.itemProviders(for: [.text]).first
         else { dragOverStatus = nil; return false }
         provider.loadObject(ofClass: NSString.self) { obj, _ in
             guard let raw = obj as? String else { return }
             let ids = MyTasksDragPayload.decode(raw)
             Task { @MainActor in
+                let originals = ids.compactMap { appState.tasksById[$0] }.filter {
+                    $0.status.lowercased() != targetStatus.status.lowercased()
+                }
                 for id in ids {
                     guard let task = appState.tasks.first(where: { $0.id == id }),
                           task.status.lowercased() != targetStatus.status.lowercased()
@@ -1115,6 +1130,10 @@ private struct BoardDropDelegate: DropDelegate {
                                                     to: targetStatus,
                                                     silent: true)
                 }
+                appState.pushTaskStatusUndo(originals,
+                    label: originals.count == 1
+                        ? "Mover tarefa para \(targetStatus.status.uppercased())"
+                        : "Mover \(originals.count) tarefas para \(targetStatus.status.uppercased())")
                 dragOverStatus = nil
             }
         }
@@ -1132,4 +1151,10 @@ extension Notification.Name {
     /// `CreateTaskSheet` (status hint in `userInfo["status"]`).
     static let editorialBoardCreateCard =
         Notification.Name("dp.editorial.board.createCard")
+
+    /// Successful task/card drops end the transient multi-selection mode on
+    /// whichever full-window task canvas is currently visible. Destinations
+    /// outside that canvas (notably the floating sidebar) post this too.
+    static let apolloTaskDropCompleted =
+        Notification.Name("dp.apollo.taskDropCompleted")
 }

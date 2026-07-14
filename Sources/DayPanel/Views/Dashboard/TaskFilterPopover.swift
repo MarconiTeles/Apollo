@@ -50,7 +50,7 @@ struct TaskFilterPopover: View {
     }
 
     private static let popoverWidth: CGFloat = 340
-    private static let cornerRadius: CGFloat = 6
+    private static let cornerRadius: CGFloat = Editorial.popupRadius(6)
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
@@ -120,14 +120,7 @@ struct TaskFilterPopover: View {
         }
         .frame(width: Self.popoverWidth)
         .fixedSize(horizontal: false, vertical: true)
-        // Editorial card (prototype `PFilters` / `PPopup`):
-        // near-neutral popup surface, hairline border, soft
-        // ambient shadow — no glass, no notch.
-        .background(Editorial.popup, in: shape)
-        .clipShape(shape)
-        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .popupGlass(in: shape)
     }
 
     /// Chrome-less variant for embedding inside another

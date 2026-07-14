@@ -255,6 +255,10 @@ final class TaskRowCellItem: NSCollectionViewItem, SwipeAwareHosting {
 // MARK: - Row content view
 
 final class TaskRowContentView: NSView {
+    /// AppKit occasionally recycles/repositions a collection cell without a
+    /// matching `mouseExited`. Enforce one hovered row globally so a stale
+    /// wash can never coexist with the real row under the pointer.
+    private static weak var activeHoverCell: TaskRowContentView?
     /// Top-down Y to match SwiftUI semantics.
     override var isFlipped: Bool { true }
 
@@ -278,6 +282,28 @@ final class TaskRowContentView: NSView {
     /// to the detail-popup open path.
     var onClick: (() -> Void)?
     var contextActionsProvider: ((CUTask) -> [TaskContextAction]?)?
+
+    /// AppKit label/image subviews normally win hit-testing even though they
+    /// are only visual. That left most of a compact row inert: clicks on the
+    /// title, assignee, date or priority never reached this view's mouse-up
+    /// handler. Keep the three genuinely interactive regions independent and
+    /// route every other point in the card back to the row itself.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if !checkboxHoverZone.isHidden,
+           checkboxHoverZone.frame.contains(point) {
+            return checkboxHoverZone
+        }
+        if !expandHitZone.isHidden,
+           expandHitZone.frame.contains(point) {
+            return expandHitZone
+        }
+        if !statusPill.isHidden,
+           !statusPill.isReadOnly,
+           statusPill.frame.contains(point) {
+            return statusPill
+        }
+        return bounds.contains(point) ? self : nil
+    }
 
     override func mouseDown(with event: NSEvent) {
         // Status pill / DONE pill have their own `mouseDown`
@@ -808,6 +834,12 @@ final class TaskRowContentView: NSView {
             name: NSScrollView.willStartLiveScrollNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollDidStart),
+            name: .apolloScrollDidBegin,
+            object: nil
+        )
         // Mirror notification for scroll END — used to turn
         // off the rasterization shortcut once the live scroll
         // settles (see `scrollDidEnd`).
@@ -942,6 +974,11 @@ final class TaskRowContentView: NSView {
         addSubview(checkboxHoverZone)
         checkboxHoverZone.onHoverChanged = { [weak self] hovered in
             guard let self else { return }
+            if hovered,
+               (ScrollStateObserver.isScrollingNow || ScrollGate.shared.active) {
+                self.forceExitAllHover()
+                return
+            }
             // While a popup is up, ignore hover entries —
             // the DONE pill mustn't pop in over the row
             // sitting behind a popup. Exits still pass so
@@ -962,7 +999,8 @@ final class TaskRowContentView: NSView {
             // it doesn't refire while the cursor stays inside.
             // Still gated on scroll state so drive-by hovers
             // during a fling stay quiet.
-            if hovered, !ScrollStateObserver.isScrollingNow {
+            if hovered, !ScrollStateObserver.isScrollingNow,
+               !ScrollGate.shared.active {
                 Haptics.taskAction()
             }
             self.isIconHovered = hovered
@@ -1019,7 +1057,11 @@ final class TaskRowContentView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         // Suppress hover state changes during a live scroll.
-        guard !ScrollStateObserver.isScrollingNow else { return }
+        guard !ScrollStateObserver.isScrollingNow,
+              !ScrollGate.shared.active else {
+            forceExitAllHover()
+            return
+        }
         // Only the cell-wide tracking area lives here now —
         // checkbox hover is owned by `checkboxHoverZone`.
         if (event.trackingArea?.userInfo as? [String: String])?["zone"] == "cell" {
@@ -1107,6 +1149,7 @@ final class TaskRowContentView: NSView {
             donePill.resetHidden()
             resetContentSlide()
         }
+        if Self.activeHoverCell === self { Self.activeHoverCell = nil }
     }
 
     @objc private func scrollDidEnd() {
@@ -1122,7 +1165,21 @@ final class TaskRowContentView: NSView {
         // Skip incoming HOVER while a popup is up. Hover
         // EXITs (value=false) still pass through so any
         // pre-popup hover gets cleared cleanly.
-        if value, appState?.anyPopupOpen == true { return }
+        if value,
+           (appState?.anyPopupOpen == true
+            || ScrollStateObserver.isScrollingNow
+            || ScrollGate.shared.active) {
+            forceExitAllHover()
+            return
+        }
+        if value {
+            if let previous = Self.activeHoverCell, previous !== self {
+                previous.forceExitAllHover()
+            }
+            Self.activeHoverCell = self
+        } else if Self.activeHoverCell === self {
+            Self.activeHoverCell = nil
+        }
         guard value != isHovered else { return }
         isHovered = value
         // No cell-hover haptic — sweeping the cursor across the
@@ -1177,7 +1234,11 @@ final class TaskRowContentView: NSView {
     }
 
     private func recomputeCheckboxHovered() {
-        if isIconHovered && ScrollStateObserver.isScrollingNow { return }
+        if isIconHovered && (ScrollStateObserver.isScrollingNow
+                             || ScrollGate.shared.active) {
+            forceExitAllHover()
+            return
+        }
         guard isIconHovered != isCheckboxHovered else { return }
         isCheckboxHovered = isIconHovered
         animateDonePill(visible: isIconHovered)
@@ -2276,6 +2337,11 @@ final class DonePillView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard !ScrollStateObserver.isScrollingNow,
+              !ScrollGate.shared.active else {
+            onHoverChanged?(false)
+            return
+        }
         onHoverChanged?(true)
     }
     override func mouseExited(with event: NSEvent) {
@@ -2385,6 +2451,11 @@ final class HoverZoneView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard !ScrollStateObserver.isScrollingNow,
+              !ScrollGate.shared.active else {
+            onHoverChanged?(false)
+            return
+        }
         onHoverChanged?(true)
     }
 
@@ -2438,7 +2509,14 @@ final class ChevronHitView: NSView {
         trackingArea = area
     }
 
-    override func mouseEntered(with event: NSEvent) { onHoverChanged?(true) }
+    override func mouseEntered(with event: NSEvent) {
+        guard !ScrollStateObserver.isScrollingNow,
+              !ScrollGate.shared.active else {
+            onHoverChanged?(false)
+            return
+        }
+        onHoverChanged?(true)
+    }
     override func mouseExited(with event: NSEvent)  { onHoverChanged?(false) }
 
     override func mouseDown(with event: NSEvent) {

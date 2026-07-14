@@ -22,7 +22,10 @@ private struct GlassHoverModifier: ViewModifier {
             .scaleEffect(hovering ? scale : 1)
             .brightness(hovering ? brightness : 0)
             .animation(.easeOut(duration: 0.14), value: hovering)
-            .onHover { hovering = $0 }
+            // During a live trackpad/mouse scroll the pointer crosses several
+            // rows per frame. Suppress those enter/exit animations so Inbox
+            // and notification feeds do not continuously rebuild shadows.
+            .scrollAwareOnHover { hovering = $0 }
     }
 }
 
@@ -81,6 +84,106 @@ extension View {
     }
 }
 
+// MARK: - Popup glass
+
+/// Canonical chrome for dialog-sized and window-sized popup surfaces.
+/// Unlike the legacy Editorial popup it never paints an opaque card beneath
+/// native glass, so refraction and materialization remain visible.
+private struct PopupGlassSurface: ViewModifier {
+    let shape: RoundedRectangle
+
+    @ViewBuilder
+    private func material(content: Content) -> some View {
+        if Materials.tier == .solid {
+            content.background(shape.fill(Editorial.popup))
+        } else if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
+    }
+
+    func body(content: Content) -> some View {
+        material(content: content)
+            .clipShape(shape)
+            .overlay {
+                shape.strokeBorder(
+                    Materials.tier == .solid
+                        ? Editorial.rule
+                        : Color.white.opacity(0.14),
+                    lineWidth: Materials.tier == .solid ? 1 : 0.6
+                )
+                .allowsHitTesting(false)
+            }
+            .shadow(color: .black.opacity(0.20), radius: 36, y: 18)
+            .shadow(color: .black.opacity(0.07), radius: 12, y: 4)
+    }
+}
+
+extension View {
+    /// One-layer popup surface that uses real Liquid Glass on macOS 26 and
+    /// tier-aware native fallbacks elsewhere.
+    func popupGlass(in shape: RoundedRectangle) -> some View {
+        modifier(PopupGlassSurface(shape: shape))
+    }
+
+    /// Opaque detail/body surface. Use with a separate glass header when
+    /// scrolling content should travel behind that single material layer.
+    func solidPopupSurface<S: InsettableShape>(in shape: S) -> some View {
+        self
+            .background(shape.fill(Editorial.page))
+            .clipShape(shape)
+            .overlay {
+                shape.strokeBorder(Editorial.rule, lineWidth: 0.7)
+                    .allowsHitTesting(false)
+            }
+            .shadow(color: .black.opacity(0.20), radius: 18, y: 9)
+            .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
+    }
+}
+
+// MARK: - Capsule hover motion
+
+private struct CapsuleHoverLiftModifier: ViewModifier {
+    // `tint` remains part of the shared API because callers use it for their
+    // glass fill. The elevation itself is deliberately neutral: semantic
+    // coloured shadows are exclusive to Board cards.
+    let tint: Color
+    var scaleX: CGFloat
+    var scaleY: CGFloat
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(x: hovering ? scaleX : 1,
+                         y: hovering ? scaleY : 1)
+            .offset(y: hovering ? -1 : 0)
+            .shadow(color: .black.opacity(hovering ? 0.14 : 0.035),
+                    radius: hovering ? 4 : 1.5,
+                    y: hovering ? 2 : 0.75)
+            // A hovered capsule must paint above neighbouring rows. Without
+            // this, the next row covers the lower half of the blur and makes
+            // a perfectly valid shadow look sharply clipped.
+            .zIndex(hovering ? 10 : 0)
+            .animation(.spring(response: 0.30, dampingFraction: 0.73),
+                       value: hovering)
+            .scrollAwareOnHover { hovering = $0 }
+    }
+}
+
+extension View {
+    /// Reference hover used by list/inbox capsules: a restrained elastic
+    /// expansion with no layout reflow and a compact neutral elevation.
+    /// Coloured elevation is reserved for the Board surface.
+    func capsuleHoverLift(tint: Color,
+                          scaleX: CGFloat = 1.008,
+                          scaleY: CGFloat = 1.025) -> some View {
+        modifier(CapsuleHoverLiftModifier(tint: tint,
+                                          scaleX: scaleX,
+                                          scaleY: scaleY))
+    }
+}
+
 // MARK: - Liquid Glass background
 
 private struct LiquidGlassFillModifier<S: InsettableShape>: ViewModifier {
@@ -88,6 +191,7 @@ private struct LiquidGlassFillModifier<S: InsettableShape>: ViewModifier {
     var tint: Color
     var tintOpacity: Double
     var interactive: Bool
+    var lightweight: Bool
 
     // Tier-aware (Studio Glass, Materials.tier):
     //   C solid    — fill sólido + hairline (Intel / Reduce
@@ -102,9 +206,10 @@ private struct LiquidGlassFillModifier<S: InsettableShape>: ViewModifier {
                 .background(shape.fill(Editorial.card))
                 .overlay(shape.strokeBorder(Editorial.rule, lineWidth: 1))
         } else if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
+            let base: Glass = lightweight ? .clear : .regular
             let glass: Glass = interactive
-                ? .regular.tint(tint.opacity(tintOpacity)).interactive()
-                : .regular.tint(tint.opacity(tintOpacity))
+                ? base.tint(tint.opacity(tintOpacity)).interactive()
+                : base.tint(tint.opacity(tintOpacity))
             // Do not pre-paint a translucent color underneath native glass.
             // That extra layer becomes the material's sampled backdrop and
             // visually flattens refraction into a frosted/opaque fill.
@@ -127,23 +232,27 @@ extension View {
         in shape: S,
         tint: Color = .white,
         tintOpacity: Double = 0.18,
-        interactive: Bool = true
+        interactive: Bool = true,
+        lightweight: Bool = false
     ) -> some View {
         modifier(LiquidGlassFillModifier(shape: shape,
                                          tint: tint,
                                          tintOpacity: tintOpacity,
-                                         interactive: interactive))
+                                         interactive: interactive,
+                                         lightweight: lightweight))
     }
 
     /// Convenience for the most common case — a Capsule-shaped Liquid
     /// Glass pill.
     func liquidGlassCapsule(tint: Color = .white,
                             tintOpacity: Double = 0.18,
-                            interactive: Bool = true) -> some View {
+                            interactive: Bool = true,
+                            lightweight: Bool = false) -> some View {
         liquidGlass(in: Capsule(style: .continuous),
                     tint: tint,
                     tintOpacity: tintOpacity,
-                    interactive: interactive)
+                    interactive: interactive,
+                    lightweight: lightweight)
     }
 
     /// Applies a Liquid Glass "selected" pill ONLY when `active` —
