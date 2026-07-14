@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.8.13</title>
-      <pubDate>Tue, 14 Jul 2026 08:34:28 +0000</pubDate>
-      <sparkle:version>83</sparkle:version>
-      <sparkle:shortVersionString>1.8.13</sparkle:shortVersionString>
+      <title>Apollo 1.8.14</title>
+      <pubDate>Tue, 14 Jul 2026 21:10:03 +0000</pubDate>
+      <sparkle:version>84</sparkle:version>
+      <sparkle:shortVersionString>1.8.14</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[<h2>Apollo 1.8.13</h2><ul><li><b>Listas nativas e muito mais fluidas:</b> nova implementação AppKit para rolagem estável em listas grandes.</li><li><b>Filtros consistentes:</b> Hoje, Minhas tarefas e Quadro compartilham o mesmo pipeline validado.</li><li><b>Seleção e ações em lote:</b> Command, Shift, drag-and-drop múltiplo e barra flutuante de comandos.</li><li><b>Novo fluxo de trabalho:</b> Minhas tarefas cobre toda a lista selecionada e Hoje recebe a Inbox integrada.</li><li><b>Detalhe de tarefa aprimorado:</b> navegação anterior/próxima animada e status editável no cabeçalho.</li><li><b>Correções:</b> hover em modo escuro, bloqueio completo atrás de popups, vídeo de review encerrado ao fechar, alinhamentos, datas e painel Liquid Glass.</li></ul>]]></description>
+      <description><![CDATA[Novo design nativo com Liquid Glass mais leve; Inbox e notificações otimizados; comentários atribuídos; seleção e drag and drop mais previsíveis; animações de tarefas restauradas; progresso real de uploads; novo ícone do Apollo; correções gerais de desempenho, sombras e interação.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.13/Apollo-1.8.13.zip"
-        sparkle:edSignature="yMIaUjB0kMkGAnnmKU5xnUTLUM96RCXhF4YNqKjXW91CzV4kbco58kozksokee09UHgKBQL5JpLKbpin6nwKBw=="
-        length="41888268"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.14/Apollo-1.8.14.zip"
+        sparkle:edSignature="/Fjv4wxNCQoUY6PoJ6kHPQcj2ltF467npaGCGCRvclJ9k2ut3stvavGXLdfs4oqIbA3IJb3ptWLoXYGTlsewDA=="
+        length="43057603"
         type="application/octet-stream" />
     </item>
   </channel>
