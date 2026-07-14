@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.8.12</title>
-      <pubDate>Tue, 14 Jul 2026 03:44:44 +0000</pubDate>
-      <sparkle:version>80</sparkle:version>
-      <sparkle:shortVersionString>1.8.12</sparkle:shortVersionString>
+      <title>Apollo 1.8.14</title>
+      <pubDate>Tue, 14 Jul 2026 21:10:03 +0000</pubDate>
+      <sparkle:version>84</sparkle:version>
+      <sparkle:shortVersionString>1.8.14</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[<h2>Apollo 1.8.12</h2><ul><li><b>Novo visual editorial:</b> identidade roxa, hierarquia mais clara e superfícies mais leves.</li><li><b>Navegação refinada:</b> sidebar, cabeçalho e listas reorganizados para leitura mais rápida.</li><li><b>Tarefas mais legíveis:</b> linhas, estados e detalhes com espaçamento e contraste consistentes.</li><li><b>Review aprimorado:</b> composer de comentários melhor, resolução de feedback e ajustes nas anotações.</li><li><b>Interações mais fluidas:</b> melhorias de rolagem, materiais e resposta visual dos controles.</li></ul>]]></description>
+      <description><![CDATA[Novo design nativo com Liquid Glass mais leve; Inbox e notificações otimizados; comentários atribuídos; seleção e drag and drop mais previsíveis; animações de tarefas restauradas; progresso real de uploads; novo ícone do Apollo; correções gerais de desempenho, sombras e interação.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.12/Apollo-1.8.12.zip"
-        sparkle:edSignature="TNV8vnw/Mjmsgk9KrkrqBy/Lv4dfmGPLqC2M57pIENMyndsMeC2GeaCeH4mc4m8+7vP+/ugF6OXZpl1zzF63DQ=="
-        length="41521388"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.14/Apollo-1.8.14.zip"
+        sparkle:edSignature="/Fjv4wxNCQoUY6PoJ6kHPQcj2ltF467npaGCGCRvclJ9k2ut3stvavGXLdfs4oqIbA3IJb3ptWLoXYGTlsewDA=="
+        length="43057603"
         type="application/octet-stream" />
     </item>
   </channel>
