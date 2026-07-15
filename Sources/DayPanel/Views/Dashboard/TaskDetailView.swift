@@ -1206,16 +1206,28 @@ struct TaskDetailView: View, Equatable {
                     // per-task GET hydrates the attachments.
                     ForEach(0..<4, id: \.self) { _ in AttachmentSkeletonRow() }
                 } else {
-                    ForEach(Self.versionGroupedAttachments(displayedAttachments)) { group in
-                        if group.versions.count <= 1 {
-                            AttachmentChip(attachment: group.newest,
-                                           taskURL: task.url,
-                                           taskId: task.id, listId: task.listId,
-                                           actorId: reviewActorId, actorName: reviewActorName,
-                                           onReplace: { replaceAttachment(group.newest) })
-                                .equatable()
-                        } else {
-                            attachmentVersionGroup(group)
+                    let catalog = appState.taskMediaTransfers.catalog(for: task.id)
+                    let groups = Self.versionGroupedAttachments(displayedAttachments)
+                    if catalog.outputs.isEmpty {
+                        // Non-media task: plain list, no categorization.
+                        ForEach(groups) { group in attachmentGroupRow(group) }
+                    } else {
+                        // Apollo media task: split combinations vs direct videos,
+                        // mirroring the ANEXAR popup's grouping (classified by the
+                        // catalog lineage, so legacy direct videos with " + " in
+                        // their name still land under DIRETOS).
+                        let combos = groups.filter { attachmentIsCombo($0.newest, catalog: catalog) }
+                        let directs = groups.filter { !attachmentIsCombo($0.newest, catalog: catalog) }
+                        if !combos.isEmpty {
+                            attachmentCategoryLabel("COMBINAÇÕES", count: combos.count,
+                                                    systemImage: "square.stack.3d.up.fill")
+                            ForEach(combos) { group in attachmentGroupRow(group) }
+                        }
+                        if !directs.isEmpty {
+                            attachmentCategoryLabel("DIRETOS", count: directs.count,
+                                                    systemImage: "play.rectangle.fill")
+                                .padding(.top, combos.isEmpty ? 0 : 8)
+                            ForEach(directs) { group in attachmentGroupRow(group) }
                         }
                     }
                 }
@@ -1247,6 +1259,51 @@ struct TaskDetailView: View, Equatable {
         panel.message = "Escolha o arquivo que substitui \(att.title)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task { await appState.replaceTaskAttachment(taskId: task.id, old: att, newFileURL: url) }
+    }
+
+    /// One render unit for an attachment group — a lone chip or a versioned set.
+    @ViewBuilder
+    private func attachmentGroupRow(_ group: AttachmentGroup) -> some View {
+        if group.versions.count <= 1 {
+            AttachmentChip(attachment: group.newest,
+                           taskURL: task.url,
+                           taskId: task.id, listId: task.listId,
+                           actorId: reviewActorId, actorName: reviewActorName,
+                           onReplace: { replaceAttachment(group.newest) })
+                .equatable()
+        } else {
+            attachmentVersionGroup(group)
+        }
+    }
+
+    /// True when an attachment is a HOOK×BODY combination. Classified via the
+    /// media catalog lineage (authoritative); falls back to the "A + B" naming
+    /// only for files the catalog doesn't know about.
+    private func attachmentIsCombo(_ att: CUTask.Attachment, catalog: TaskMediaCatalog) -> Bool {
+        if let output = catalog.outputs.first(where: {
+            AppState.mediaAttachmentIdMatches($0.attachmentId ?? "", att.id)
+        }), let lineage = catalog.lineages.first(where: { $0.id == output.lineageId }) {
+            return lineage.isComposition
+        }
+        return att.title.contains(" + ")
+    }
+
+    private func attachmentCategoryLabel(_ text: String, count: Int,
+                                         systemImage: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Editorial.accent)
+            Text(text)
+                .font(Editorial.sans(10, .semibold))
+                .tracking(1.0)
+                .foregroundStyle(Editorial.inkMute)
+            Text("\(count)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
+        }
+        .padding(.bottom, 1)
     }
 
 

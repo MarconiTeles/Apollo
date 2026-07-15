@@ -56,27 +56,42 @@ struct CommentBodyView: View, Equatable {
     ///     comment attachment (merged from its upload event), so Apollo shows the
     ///     embedded card + native REVIEW while ClickUp shows the raw link.
     static func extractReview(_ text: String) -> (clean: String, source: ReviewSource?) {
-        if let re = try? NSRegularExpression(pattern: #"\[[^\]]*\]\(([^)]+)\)"#) {
+        // Capture the link LABEL (group 1) as well as the URL (group 2): the
+        // label is what tells a completed review apart from a media-transfer
+        // entry point. Both now use the same `?att=` viewer URL, so keying on
+        // the URL alone (as before) wrongly turned every attached file into a
+        // "Ver review" button even when no review had been done.
+        if let re = try? NSRegularExpression(pattern: #"\[([^\]]*)\]\(([^)]+)\)"#) {
             let ns = text as NSString
-            let viewer = re.matches(in: text, range: NSRange(location: 0, length: ns.length))
-                .filter { isReviewLink(ns.substring(with: $0.range(at: 1))) }
-            if !viewer.isEmpty {
+            let reviewLinks = re.matches(in: text, range: NSRange(location: 0, length: ns.length))
+                .filter { isReviewLink(ns.substring(with: $0.range(at: 2))) }
+            if !reviewLinks.isEmpty {
+                // A "Ver review" button means a review EXISTS to open — only a
+                // "VER REVIEW"-labelled link qualifies. A "REVISAR" link is just
+                // the media-transfer entry point (no review done yet): it is
+                // stripped, and the embedded attachment card + native REVIEW
+                // button stand on their own.
                 var source: ReviewSource? = nil
-                for m in viewer {
-                    let url = ns.substring(with: m.range(at: 1))
-                    // New single live link (`?att=`) → resolve from KV + media.
-                    if url.contains("att=") {
-                        source = .attLink(url); break
-                    }
-                    // Legacy snapshots.
-                    if url.contains("?z=") || url.contains("?d=") {
+                for m in reviewLinks {
+                    let label = ns.substring(with: m.range(at: 1))
+                    guard label.localizedCaseInsensitiveContains(AppState.reviewLinkText) else { continue }
+                    let url = ns.substring(with: m.range(at: 2))
+                    if url.contains("att=") { source = .attLink(url); break }         // live link
+                    if url.contains("?z=") || url.contains("?d=") {                    // legacy snapshot
                         source = reviewSource(fromLink: url); break
                     }
                 }
-                // The "▶ …" review block is appended at the END — cut there so the
-                // link AND the trailing filename text both drop out of display.
-                let clean = (text.firstIndex(of: "▶").map { String(text[..<$0]) } ?? text)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                // Drop the appended review tail (the "▶ …" block, or the earliest
+                // review-link span when there's no marker) so neither the raw link
+                // nor its trailing filename shows — button or not.
+                var cut = text.endIndex
+                if let arrow = text.firstIndex(of: "▶") { cut = arrow }
+                if let loc = reviewLinks.map({ $0.range.location }).min(),
+                   let idx = Range(NSRange(location: loc, length: 0), in: text)?.lowerBound,
+                   idx < cut {
+                    cut = idx
+                }
+                let clean = String(text[..<cut]).trimmingCharacters(in: .whitespacesAndNewlines)
                 return (clean, source)
             }
         }

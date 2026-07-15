@@ -5333,6 +5333,41 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Post-send sweep for the "cópia aleatória": ClickUp occasionally embeds an
+    /// output's file onto a SIBLING media comment, leaving that output's own
+    /// comment carrying only text (a duplicate of a video already shown on the
+    /// other comment). This deletes such attachment-less media comments — but
+    /// ONLY once every attachment we just published is confirmed visible on some
+    /// comment, so a file that is merely lagging in ClickUp's eventually
+    /// consistent read never causes a good comment to be removed.
+    func reconcileMediaTransferComments(taskId: String,
+                                        publishedAttachmentIds: Set<String>) async {
+        let ids = publishedAttachmentIds.filter { !$0.isEmpty }
+        guard !ids.isEmpty else { return }
+        let uploaderId = clickUpAuthService.userId
+        // Settle + retry: give ClickUp time to embed every file before judging
+        // any comment "empty". Bail out (delete nothing) if a file never shows.
+        for attempt in 0..<4 {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: 800_000_000) }
+            guard let comments = try? await cuSvc.getTaskComments(taskId: taskId) else { continue }
+            let present = Set(comments.flatMap { $0.attachments.map(\.id) + $0.attachmentIds })
+            let allVisible = ids.allSatisfy { id in
+                present.contains { Self.mediaAttachmentIdMatches($0, id) }
+            }
+            guard allVisible else { continue }
+            let orphans = comments.filter { c in
+                (uploaderId == nil || c.userId == uploaderId)
+                    && Self.mediaTransferVersion(in: c.text) != nil
+                    && c.attachments.isEmpty && c.attachmentIds.isEmpty
+            }
+            for orphan in orphans {
+                do { try await cuSvc.deleteTaskComment(commentId: orphan.id) }
+                catch { Log.error("reconcileMediaTransferComments: \(error)") }
+            }
+            return
+        }
+    }
+
     func deleteComment(_ comment: CUComment) async {
         do {
             try await cuSvc.deleteTaskComment(commentId: comment.id)

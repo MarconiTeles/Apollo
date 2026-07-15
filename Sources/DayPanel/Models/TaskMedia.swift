@@ -230,9 +230,12 @@ struct TaskMediaCatalog: Codable, Equatable, Sendable {
 
 struct TaskMediaSelection: Identifiable, Hashable, Sendable {
     let id: UUID
-    let fileURL: URL
+    var fileURL: URL
     var role: TaskMediaRole?
     var contentHash: String?
+    /// Set once the user has trimmed this clip in the flow, so the UI can show
+    /// it's already cut (button + row indicator) instead of looking untouched.
+    var trimmed: Bool = false
 
     init(id: UUID = UUID(), fileURL: URL, role: TaskMediaRole? = nil,
          contentHash: String? = nil) {

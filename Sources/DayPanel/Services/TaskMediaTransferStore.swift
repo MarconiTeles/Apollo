@@ -222,6 +222,11 @@ final class TaskMediaTransferStore: ObservableObject {
             completedBatch.progress = 1
             batches[task.id] = completedBatch
             cleanupPreparedFiles(completedBatch)
+            // Belt-and-suspenders: sweep any attachment-less "copy" comment that
+            // ClickUp may have left behind (its file embedded onto a sibling).
+            let publishedIds = Set(completedBatch.published.values.compactMap(\.attachmentId))
+            Task { await appState.reconcileMediaTransferComments(taskId: task.id,
+                                                                 publishedAttachmentIds: publishedIds) }
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(1.4))
                 guard self?.batches[task.id]?.phase == .sent else { return }
@@ -376,8 +381,13 @@ final class TaskMediaTransferStore: ObservableObject {
         let pending = snapshot.plan.outputs.filter {
             snapshot.published[$0.id]?.commentPosted != true
         }
-        for start in stride(from: 0, to: pending.count, by: 2) {
-            let chunk = Array(pending[start..<min(start + 2, pending.count)])
+        // Publish ONE output per round. Posting a comment+attachment pair
+        // concurrently let ClickUp mis-associate both files onto whichever
+        // comment it embedded first, leaving the other comment attachment-less
+        // (it then rendered as a bare review link — the "comentário duplicado").
+        // Serial keeps each attachment on its own comment.
+        for start in stride(from: 0, to: pending.count, by: 1) {
+            let chunk = Array(pending[start..<min(start + 1, pending.count)])
             let existingPublished = batches[task.id]?.published ?? [:]
             let results = await withTaskGroup(of: PublishResult.self, returning: [PublishResult].self) { group in
                 for output in chunk {
@@ -391,7 +401,19 @@ final class TaskMediaTransferStore: ObservableObject {
                         } else {
                             guard let uploaded = await appState.uploadCommentAttachment(
                                 for: task,
-                                fileURL: file
+                                fileURL: file,
+                                onProgress: { [weak self] fraction in
+                                    // Live byte-level progress: already-posted
+                                    // outputs + this file's upload fraction, so
+                                    // the ring moves in real time instead of
+                                    // sitting at 0% until the whole file lands.
+                                    Task { @MainActor in
+                                        guard let self, var s = self.batches[task.id] else { return }
+                                        let done = Double(s.completed)
+                                        s.progress = min((done + fraction) / Double(max(1, s.total)), 0.999)
+                                        self.batches[task.id] = s
+                                    }
+                                }
                             ) else {
                                 return .failure(output.id, "Falha ao enviar \(output.displayFileName)")
                             }

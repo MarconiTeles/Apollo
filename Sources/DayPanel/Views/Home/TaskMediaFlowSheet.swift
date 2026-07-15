@@ -25,6 +25,7 @@ struct TaskMediaFlowSheet: View {
     private enum Stage {
         case loading
         case classify
+        case trim
         case selectReplacement
         case confirmReplacement
         case mentions
@@ -33,6 +34,7 @@ struct TaskMediaFlowSheet: View {
 
     @State private var stage: Stage = .loading
     @State private var selections: [TaskMediaSelection] = []
+    @State private var trimSelectionId: UUID?
     @State private var replacementURLs: [UUID: URL] = [:]
     @State private var selectedMemberIds: Set<Int> = []
     @State private var memberQuery = ""
@@ -65,8 +67,10 @@ struct TaskMediaFlowSheet: View {
     }
 
     private var hasFooter: Bool {
-        if case .loading = stage { return false }
-        return true
+        switch stage {
+        case .loading, .trim: return false
+        default: return true
+        }
     }
 
     var body: some View {
@@ -157,6 +161,7 @@ struct TaskMediaFlowSheet: View {
 
     private var title: String {
         switch stage {
+        case .trim: return "Cortar clipe"
         case .selectReplacement, .confirmReplacement: return "Substituir arquivo"
         case .mentions: return "Enviar para revisão"
         case .status: return "Processamento em segundo plano"
@@ -170,10 +175,36 @@ struct TaskMediaFlowSheet: View {
         switch stage {
         case .loading: loadingBody
         case .classify: classificationBody
+        case .trim: trimBody
         case .selectReplacement: replacementPicker
         case .confirmReplacement: replacementConfirmation
         case .mentions: mentionsBody
         case .status: statusBody
+        }
+    }
+
+    @ViewBuilder private var trimBody: some View {
+        if let id = trimSelectionId,
+           let selection = selections.first(where: { $0.id == id }) {
+            ClipTrimmerView(
+                url: selection.fileURL,
+                onCancel: {
+                    trimSelectionId = nil
+                    stage = .classify
+                },
+                onApply: { trimmedURL in
+                    if let index = selections.firstIndex(where: { $0.id == id }) {
+                        selections[index].fileURL = trimmedURL
+                        selections[index].contentHash = nil
+                        selections[index].trimmed = true
+                    }
+                    trimSelectionId = nil
+                    stage = .classify
+                }
+            )
+            .id(id)
+        } else {
+            Color.clear.onAppear { stage = .classify }
         }
     }
 
@@ -188,67 +219,102 @@ struct TaskMediaFlowSheet: View {
     }
 
     private var classificationBody: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 16) {
-                // What's already attached to this task — so the user knows the
-                // existing HOOK/BODY inventory and doesn't re-send a duplicate
-                // (every new hook/body multiplies into more combinations).
-                if hasExistingInventory {
+        VStack(spacing: 0) {
+            if hasExistingInventory {
+                // Existing videos scroll…
+                ScrollView {
                     existingInventorySection
+                        .padding(.horizontal, 24)
+                        .padding(.top, 22)
+                        .padding(.bottom, 14)
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    if hasExistingInventory {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Folio("ADICIONANDO AGORA")
-                            Spacer(minLength: 8)
-                            if projectedCount > 0 {
-                                Text("+\(projectedCount) vídeo\(projectedCount == 1 ? "" : "s")")
-                                    .font(Editorial.sans(10, .semibold))
-                                    .foregroundStyle(Editorial.accent)
-                            }
+                // …while the files being added stay pinned above the footer, so
+                // they're never buried under a long list of existing videos.
+                adicionandoAgoraTray
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach($selections) { $selection in
+                            classificationRow(selection: $selection)
                         }
                     }
+                    .padding(24)
+                }
+            }
+        }
+    }
+
+    /// The clips being added — PINNED just above the footer so the user always
+    /// sees what they're about to send, even when "JÁ NESTA TAREFA" is long.
+    private var adicionandoAgoraTray: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Folio("ADICIONANDO AGORA")
+                Spacer(minLength: 8)
+                if projectedCount > 0 {
+                    Text("+\(projectedCount) vídeo\(projectedCount == 1 ? "" : "s")")
+                        .font(Editorial.sans(10, .semibold))
+                        .foregroundStyle(Editorial.accent)
+                }
+            }
+            if selections.count > 3 {
+                // Cap the tray so many files don't crowd out the scroll above.
+                ScrollView {
+                    VStack(spacing: 6) {
+                        ForEach($selections) { $selection in
+                            classificationRow(selection: $selection)
+                        }
+                    }
+                }
+                .frame(maxHeight: 158)
+            } else {
+                VStack(spacing: 6) {
                     ForEach($selections) { $selection in
                         classificationRow(selection: $selection)
                     }
                 }
             }
-            .padding(24)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Editorial.card.opacity(0.6))
+        .overlay(alignment: .top) {
+            Rectangle().fill(Editorial.rule).frame(height: 1)
         }
     }
 
     private func classificationRow(selection: Binding<TaskMediaSelection>) -> some View {
         let classified = selection.wrappedValue.role != nil
         let dup = looksDuplicate(selection.wrappedValue)
-        return HStack(spacing: 14) {
-            Image(systemName: dup ? "exclamationmark.triangle.fill" : "film")
-                .font(.system(size: 16, weight: .regular))
+        let trimmed = selection.wrappedValue.trimmed
+        return HStack(spacing: 10) {
+            Image(systemName: dup ? "exclamationmark.triangle.fill" : trimmed ? "scissors" : "film")
+                .font(.system(size: 13, weight: trimmed ? .semibold : .regular))
                 .foregroundStyle(dup ? Self.dupAmber : Editorial.accent)
-                .frame(width: 34, height: 34)
+                .frame(width: 27, height: 27)
                 .background(Circle().fill(dup ? Self.dupAmber.opacity(0.14) : Editorial.accentSoft))
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(selection.wrappedValue.fileURL.lastPathComponent)
-                    .font(Editorial.sans(12.5, .medium))
+                    .font(Editorial.sans(11.5, .medium))
                     .foregroundStyle(Editorial.ink)
                     .lineLimit(1)
                 Text(dup ? "Já existe um arquivo com esse nome aqui"
-                         : (classified ? "Pronto para compor" : "Confirme o tipo do arquivo"))
-                    .font(Editorial.sans(10.5))
-                    .foregroundStyle(dup ? Self.dupAmber : (classified ? Editorial.accent : Editorial.inkMute))
+                         : classified ? (trimmed ? "Cortado · pronto para compor" : "Pronto para compor")
+                         : trimmed ? "Cortado · escolha HOOK ou BODY"
+                         : "Confirme o tipo do arquivo")
+                    .font(Editorial.sans(9.5))
+                    .foregroundStyle(dup ? Self.dupAmber
+                                     : (classified || trimmed) ? Editorial.accent : Editorial.inkMute)
+                    .lineLimit(1)
             }
-            Spacer(minLength: 12)
-            Picker("Tipo", selection: selection.role) {
-                Text("—").tag(TaskMediaRole?.none)
-                ForEach(TaskMediaRole.allCases) { role in
-                    Text(role.label).tag(TaskMediaRole?.some(role))
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 250)
+            Spacer(minLength: 8)
+            typeControl(selection: selection)
+                .layoutPriority(1)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 58)
+        .padding(.horizontal, 11)
+        .frame(height: 46)
         .background(
             RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius, style: .continuous)
                 .fill(classified ? Editorial.accentSoft.opacity(0.5) : Editorial.card)
@@ -260,11 +326,69 @@ struct TaskMediaFlowSheet: View {
         )
     }
 
+    /// CORTAR (opens the trimmer) + the HOOK/BODY/VIDEO toggles. Nothing is
+    /// selected by default — when Apollo can't infer the type from the filename
+    /// the user marks it here (or trims first, then marks the trimmed clip).
+    private func typeControl(selection: Binding<TaskMediaSelection>) -> some View {
+        let isTrimmed = selection.wrappedValue.trimmed
+        return HStack(spacing: 6) {
+            Button {
+                trimSelectionId = selection.wrappedValue.id
+                stage = .trim
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isTrimmed ? "checkmark" : "scissors")
+                    Text(isTrimmed ? "CORTADO" : "CORTAR")
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                .font(Editorial.sans(9.5, .semibold))
+                .foregroundStyle(isTrimmed ? Color.white : Editorial.accent)
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .background(Capsule().fill(isTrimmed ? Self.cutGreen : Editorial.accentSoft))
+                .overlay(Capsule().strokeBorder(isTrimmed ? Color.clear : Editorial.accent.opacity(0.35)))
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .fixedSize()
+            .help(isTrimmed ? "Clipe cortado — clique para ajustar o corte"
+                            : "Cortar um trecho deste clipe antes de classificar")
+
+            HStack(spacing: 0) {
+                ForEach(Array(TaskMediaRole.allCases.enumerated()), id: \.element) { index, role in
+                    let picked = selection.wrappedValue.role == role
+                    Button {
+                        selection.wrappedValue.role = picked ? nil : role
+                    } label: {
+                        Text(role.label)
+                            .font(Editorial.sans(9.5, picked ? .semibold : .medium))
+                            .foregroundStyle(picked ? Color.white : Editorial.ink)
+                            .frame(width: 46, height: 26)
+                            .background(picked ? Editorial.accent : Color.clear)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    if index < TaskMediaRole.allCases.count - 1 {
+                        Rectangle().fill(Editorial.rule).frame(width: 1, height: 14)
+                    }
+                }
+            }
+            .background(Editorial.card)
+            .clipShape(Capsule())
+            .overlay(Capsule().strokeBorder(Editorial.rule))
+        }
+    }
+
     // MARK: Existing inventory (classify stage)
 
     /// Muted amber for the "possible duplicate" hint — the theme has no warning
     /// token, and the system accent is reserved for affirmative actions.
     private static let dupAmber = Color(hex: "#C0872B")
+    /// Success green for the "CORTADO" state — a done/applied signal distinct
+    /// from the purple accent used for pending actions.
+    private static let cutGreen = Color(hex: "#2E9E5B")
 
     private var catalogAssets: [TaskMediaAsset] { store.catalog(for: request.task.id).assets }
 
@@ -289,34 +413,58 @@ struct TaskMediaFlowSheet: View {
         existingNameKeys.contains(Self.nameKey(selection.fileURL.deletingPathExtension().lastPathComponent))
     }
 
-    /// At-a-glance summary of what the existing sources already produce.
-    private var inventoryCombinationHint: String? {
-        let hooks = inventoryAssets(.hook).count
-        let bodies = inventoryAssets(.body).count
-        let videos = inventoryAssets(.video).count
-        var parts: [String] = []
-        let combos = hooks * bodies
-        if combos > 0 { parts.append("\(combos) combinação\(combos == 1 ? "" : "ões")") }
-        if videos > 0 { parts.append("\(videos) vídeo\(videos == 1 ? "" : "s") completo\(videos == 1 ? "" : "s")") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    /// The actual videos this task already produces — the latest version of each
+    /// lineage (every hook×body combination plus every direct video). Listed one
+    /// by one so the user can SEE and reconcile them, not just trust a number.
+    private var resultVideos: [TaskMediaOutputVersion] {
+        let catalog = store.catalog(for: request.task.id)
+        let byLineage = Dictionary(grouping: catalog.outputs, by: \.lineageId)
+        return byLineage.values
+            .compactMap { versions in versions.max { $0.version < $1.version } }
+            .sorted { $0.fileName.localizedCaseInsensitiveCompare($1.fileName) == .orderedAscending }
+    }
+
+    private func isCompositionOutput(_ output: TaskMediaOutputVersion) -> Bool {
+        store.catalog(for: request.task.id)
+            .lineages.first { $0.id == output.lineageId }?.isComposition == true
+    }
+
+    /// The results, split by kind so combinations and direct videos render as
+    /// two visually distinct groups instead of one intermixed list.
+    private var resultCombos: [TaskMediaOutputVersion] {
+        resultVideos.filter { isCompositionOutput($0) }
+    }
+    private var resultDirects: [TaskMediaOutputVersion] {
+        resultVideos.filter { !isCompositionOutput($0) }
     }
 
     private var existingInventorySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: 13) {
+            // Ingredients — the hooks and bodies already here, so the user can
+            // add a NEW one without re-sending something that's already present.
+            VStack(alignment: .leading, spacing: 10) {
                 Folio("JÁ NESTA TAREFA")
-                Spacer(minLength: 8)
-                if let hint = inventoryCombinationHint {
-                    Text(hint)
-                        .font(Editorial.sans(10, .medium))
-                        .foregroundStyle(Editorial.inkMute)
-                        .lineLimit(1)
+                ForEach([TaskMediaRole.hook, TaskMediaRole.body]) { role in
+                    let assets = inventoryAssets(role)
+                    if !assets.isEmpty {
+                        inventoryRoleRow(role: role, assets: assets)
+                    }
                 }
             }
-            ForEach(TaskMediaRole.allCases) { role in
-                let assets = inventoryAssets(role)
-                if !assets.isEmpty {
-                    inventoryRoleRow(role: role, assets: assets)
+
+            // Results — combinations and direct videos as two clearly separated
+            // groups, each listed one by one so the user can SEE and check them.
+            if !resultCombos.isEmpty || !resultDirects.isEmpty {
+                Rectangle().fill(Editorial.rule).frame(height: 1)
+                if !resultCombos.isEmpty {
+                    outputGroup(label: "COMBINAÇÕES",
+                                systemImage: "square.stack.3d.up.fill",
+                                outputs: resultCombos)
+                }
+                if !resultDirects.isEmpty {
+                    outputGroup(label: "DIRETOS",
+                                systemImage: "play.rectangle.fill",
+                                outputs: resultDirects)
                 }
             }
         }
@@ -326,6 +474,51 @@ struct TaskMediaFlowSheet: View {
             .fill(Editorial.card))
         .overlay(RoundedRectangle(cornerRadius: Editorial.popupRadius(7), style: .continuous)
             .strokeBorder(Editorial.rule))
+    }
+
+    private func outputRow(_ output: TaskMediaOutputVersion) -> some View {
+        let combo = isCompositionOutput(output)
+        return HStack(spacing: 8) {
+            Image(systemName: combo ? "square.stack.3d.up.fill" : "play.rectangle.fill")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(combo ? Editorial.accent : Editorial.inkMute)
+                .frame(width: 15)
+            Text((output.fileName as NSString).deletingPathExtension)
+                .font(Editorial.sans(11, .medium))
+                .foregroundStyle(Editorial.ink)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 6)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Editorial.popupRadius(5), style: .continuous)
+            .fill(Editorial.paper))
+        .overlay(RoundedRectangle(cornerRadius: Editorial.popupRadius(5), style: .continuous)
+            .strokeBorder(Editorial.rule))
+    }
+
+    private func outputGroup(label: String, systemImage: String,
+                             outputs: [TaskMediaOutputVersion]) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Editorial.accent)
+                Folio(label)
+                Text("\(outputs.count)")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(Editorial.accent)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Capsule().fill(Editorial.accentSoft))
+                Spacer(minLength: 8)
+            }
+            VStack(spacing: 5) {
+                ForEach(outputs) { output in
+                    outputRow(output)
+                }
+            }
+        }
     }
 
     private func inventoryRoleRow(role: TaskMediaRole, assets: [TaskMediaAsset]) -> some View {
@@ -693,7 +886,7 @@ struct TaskMediaFlowSheet: View {
 
     @ViewBuilder private var stageFooter: some View {
         switch stage {
-        case .loading:
+        case .loading, .trim:
             EmptyView()
         case .classify:
             footerRow {
@@ -832,7 +1025,7 @@ struct TaskMediaFlowSheet: View {
         let maxVersion = versions.max() ?? minVersion
         let versionText = minVersion == maxVersion ? "V\(minVersion)" : "V\(minVersion)–V\(maxVersion)"
         let count = lineageIds.count
-        return "\(replacementURLs.count) fonte\(replacementURLs.count == 1 ? "" : "s") regenerará\(replacementURLs.count == 1 ? "" : "ão") \(count) vídeo\(count == 1 ? "" : "s") · \(versionText)"
+        return "\(replacementURLs.count) fonte\(replacementURLs.count == 1 ? "" : "s") regenerar\(replacementURLs.count == 1 ? "á" : "ão") \(count) vídeo\(count == 1 ? "" : "s") · \(versionText)"
     }
 
     private var composedLineages: [TaskMediaOutputLineage] {
@@ -1081,13 +1274,16 @@ private struct TaskMediaCapsuleButton: View {
                         radius: hovered ? 7 : 0, x: 0, y: hovered ? 3 : 0)
                 .overlay(alignment: .topTrailing) {
                     if let badge, badge > 0 {
-                        Text("\(badge)")
-                            .font(.system(size: 8.5, weight: .bold, design: .rounded))
-                            .foregroundStyle(Editorial.accent)
-                            .frame(minWidth: 17, minHeight: 17)
-                            .background(Circle().fill(.white))
-                            .overlay(Circle().strokeBorder(Editorial.accent.opacity(0.18)))
-                            .offset(x: 6, y: -6)
+                        ZStack {
+                            Circle().fill(.white)
+                            Circle().strokeBorder(Editorial.accent.opacity(0.18))
+                            Text("\(badge)")
+                                .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(Editorial.accent)
+                        }
+                        .frame(width: 17, height: 17)
+                        .offset(x: 6, y: -6)
                     }
                 }
         }
