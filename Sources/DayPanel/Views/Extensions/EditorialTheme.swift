@@ -48,10 +48,12 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
 
 enum Editorial {
 
-    /// New popup geometry. Callers pass their previous radius so the
-    /// requested 35% increase stays mathematically consistent across small
-    /// menus, standard dialogs and full-window sheets.
-    static let popupRadiusScale: CGFloat = 1.35
+    /// New popup geometry. Callers pass their previous (pre-redesign) radius
+    /// so the increase stays mathematically consistent across small menus,
+    /// standard dialogs and full-window sheets. The scale was bumped a further
+    /// +50% over the original +35% pass (1.35 → 2.025) for the rounder,
+    /// softer popup language.
+    static let popupRadiusScale: CGFloat = 2.025
     static func popupRadius(_ previous: CGFloat) -> CGFloat {
         previous * popupRadiusScale
     }

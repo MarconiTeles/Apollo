@@ -26,6 +26,7 @@ struct EditorialMyTasksView: View {
     /// Gives SwiftUI one responsive frame to paint a truthful skeleton
     /// before constructing the recycled task rows on route/list changes.
     @State private var listMountReady = false
+    @State private var mediaFlowRequest: TaskMediaFlowRequest?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -78,6 +79,10 @@ struct EditorialMyTasksView: View {
             withAnimation(.easeOut(duration: 0.18)) {
                 listMountReady = true
             }
+        }
+        .sheet(item: $mediaFlowRequest) { request in
+            TaskMediaFlowSheet(store: appState.taskMediaTransfers, request: request)
+                .environmentObject(appState)
         }
     }
 
@@ -144,7 +149,10 @@ struct EditorialMyTasksView: View {
                     draggingTaskIds.removeAll()
                     if completed { clearSelection() }
                 },
-                onClearSelection: clearSelection
+                onClearSelection: clearSelection,
+                onMediaAction: { task, mode in
+                    mediaFlowRequest = TaskMediaFlowRequest(task: task, mode: mode)
+                }
             )
         }
     }

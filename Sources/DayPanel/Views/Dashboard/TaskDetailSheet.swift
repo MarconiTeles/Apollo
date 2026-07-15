@@ -349,7 +349,7 @@ struct TaskDetailSheet: View, Equatable {
             mastheadTab(.subtasks,    "Subtarefas",
                         visibleSubtasks.isEmpty ? nil : visibleSubtasks.count)
             mastheadTab(.attachments, "Anexos",
-                        liveTask.attachments.isEmpty ? nil : liveTask.attachments.count)
+                        liveTask.visibleAttachments.isEmpty ? nil : liveTask.visibleAttachments.count)
             mastheadTab(.activity,    "Atividade", nil)
 
             Rectangle().fill(Editorial.rule)

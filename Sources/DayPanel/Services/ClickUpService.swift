@@ -9,6 +9,11 @@ private extension Data {
 }
 
 final class ClickUpService {
+    struct UploadedAttachment: Sendable, Equatable {
+        let id: String?
+        let url: URL
+    }
+
     private let auth: ClickUpAuthService
     init(auth: ClickUpAuthService) { self.auth = auth }
 
@@ -533,7 +538,8 @@ final class ClickUpService {
         //    front-and-centre in ClickUp's own Activity panel.
         if let attsRaw = taskJson?["attachments"] as? [[String: Any]] {
             for attRaw in attsRaw {
-                guard let att = Self.parseAttachment(attRaw) else { continue }
+                guard let att = Self.parseAttachment(attRaw),
+                      !att.isApolloMediaTechnical else { continue }
                 let date  = Self.parseEpochMs(attRaw["date"]) ?? Date()
                 let actor = Self.parseAssignee(attRaw["user"] as? [String: Any])
                 events.append(TaskActivityEvent(
@@ -1027,6 +1033,17 @@ final class ClickUpService {
     /// text + a labeled-link segment). Used by the review flow's top-level
     /// fallback so the "Ver review" hyperlink renders cleanly. Returns the new
     /// comment's id from the POST response (no re-fetch) for an instant insert.
+    /// ClickUp's documented create-comment response carries `id` as a NUMBER;
+    /// live workspaces have been seen returning a string. Accept both —
+    /// treating a created comment as "no id" reads as failure upstream and a
+    /// retry would then post a duplicate.
+    private static func createdCommentId(from data: Data) -> String? {
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if let s = json?["id"] as? String { return s }
+        if let n = json?["id"] as? NSNumber { return n.stringValue }
+        return nil
+    }
+
     func addTaskComment(taskId: String, segments: [[String: Any]],
                         assignee: Int? = nil, notifyAll: Bool = false) async throws -> String? {
         guard let token else { throw CUError.notConfigured }
@@ -1038,7 +1055,7 @@ final class ClickUpService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, _) = try await Self.data(retrying: req)
-        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String
+        return Self.createdCommentId(from: data)
     }
 
     /// Create a comment with text + mentions, optional embedded file attachments,
@@ -1048,7 +1065,9 @@ final class ClickUpService {
     /// REVISAR link always lands. Returns the new comment's id.
     func addTaskComment(taskId: String, text: String, mentionedMembers: [CUMember],
                         attachmentIds: [String] = [],
-                        links: [(label: String, url: String, title: String)], assignee: Int? = nil) async throws -> String? {
+                        links: [(label: String, url: String, title: String)],
+                        assignee: Int? = nil,
+                        requireAttachmentEmbed: Bool = false) async throws -> String? {
         var base = Self.buildCommentSegments(text: text, members: mentionedMembers)
         for l in links {
             base.append(["text": "\n▶\u{00A0}"])
@@ -1060,9 +1079,15 @@ final class ClickUpService {
             for aid in attachmentIds {
                 withAtt.append(["type": "attachment", "attachment_id": aid])
             }
-            if let id = try? await addTaskComment(taskId: taskId, segments: withAtt, assignee: assignee) {
-                return id
+            do {
+                if let id = try await addTaskComment(taskId: taskId, segments: withAtt, assignee: assignee) {
+                    return id
+                }
+            } catch {
+                if requireAttachmentEmbed { throw error }
+                Log.error("addTaskComment: embed-attachment create failed: \(error)")
             }
+            if requireAttachmentEmbed { throw CUError.parse }
             Log.error("addTaskComment: embed-attachment create failed; retrying without embed")
         }
         return try await addTaskComment(taskId: taskId, segments: base, assignee: assignee)
@@ -1171,6 +1196,32 @@ final class ClickUpService {
         _ = try await Self.data(retrying: req)
     }
 
+    /// Finalizes a media-transfer comment after its attachment upload returned
+    /// the permanent URL. The upload is anchored to this same comment via
+    /// `comment_id`, so replacing the placeholder text keeps one chronological
+    /// item containing mention, video and REVISAR link.
+    func updateCommentText(commentId: String, text: String,
+                           assigneeId: Int?) async throws {
+        guard let token else { throw CUError.notConfigured }
+        var body: [String: Any] = [
+            "comment_text": text,
+            "resolved": false,
+        ]
+        if let assigneeId { body["assignee"] = assigneeId }
+        var req = URLRequest(url: URL(string:
+            "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))")!)
+        req.httpMethod = "PUT"
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await Self.data(retrying: req)
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            throw APIError.classify(response: response, data: data, thrown: nil)
+                ?? APIError.serverError(statusCode: http.statusCode)
+        }
+    }
+
     // MARK: - Reactions
 
     func addCommentReaction(commentId: String, emoji: String) async throws {
@@ -1225,7 +1276,7 @@ final class ClickUpService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, _) = try await Self.data(retrying: req)
-        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String
+        return Self.createdCommentId(from: data)
     }
 
     private func postReply(commentId: String, body: [String: Any]) async throws -> CUComment? {
@@ -1236,13 +1287,22 @@ final class ClickUpService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, _) = try await Self.data(retrying: req)
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let cid = json["id"] as? String {
-            let replies = try await getCommentReplies(commentId: commentId)
-            return replies.first { $0.id == cid }
-        }
-        return nil
+        // ClickUp returns the reply id as a NUMBER; reading it as a String
+        // failed silently, so a successful reply looked like an error and the
+        // draft stayed stuck in the composer. `createdCommentId` accepts both.
+        guard let cid = Self.createdCommentId(from: data) else { return nil }
+        let replies = try await getCommentReplies(commentId: commentId)
+        return replies.first { $0.id == cid }
     }
+
+    /// Deletes a task attachment. ClickUp's public v2 docs don't list an
+    /// attachment-delete route, but its web client calls `DELETE
+    /// /attachment/{id}` and it accepts a personal token. Any non-2xx is
+    /// surfaced so the caller can fall back gracefully if a plan/workspace
+    /// rejects it.
+    // Note: ClickUp's public v2 API has no attachment-delete route
+    // (DELETE /attachment/{id} → 404), so Apollo can't remove a task
+    // attachment programmatically — only add/replace-with-a-new-version.
 
     // MARK: - Attachments
     //
@@ -1257,7 +1317,7 @@ final class ClickUpService {
     @discardableResult
     func uploadAttachment(taskId: String, fileURL: URL,
                           commentId: String? = nil,
-                          onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> URL? {
+                          onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> UploadedAttachment? {
         guard let token else { throw CUError.notConfigured }
         guard fileURL.startAccessingSecurityScopedResource() ||
               FileManager.default.isReadableFile(atPath: fileURL.path) else {
@@ -1265,7 +1325,6 @@ final class ClickUpService {
         }
         defer { fileURL.stopAccessingSecurityScopedResource() }
 
-        let fileData = try Data(contentsOf: fileURL)
         // Sanitize the filename before injecting into the
         // Content-Disposition header. ClickUp lets users name a
         // file whatever they want, including bytes that would
@@ -1290,34 +1349,21 @@ final class ClickUpService {
         req.setValue("multipart/form-data; boundary=\(boundary)",
                      forHTTPHeaderField: "Content-Type")
 
-        var body = Data()
-
-        // Optional `comment_id` multipart field — when present,
-        // ClickUp's attachment endpoint anchors the upload to the
-        // specified comment instead of creating a standalone
-        // "uploaded N files" activity entry. The web client uses
-        // this for the chat-style flow where one bubble carries
-        // both text and files. If the field is absent (or the
-        // server ignores it on an older account), the file still
-        // attaches to the task — same as the legacy task-level
-        // upload — which is a graceful fallback rather than a
-        // hard error.
-        if let commentId {
-            body.append("--\(boundary)\r\n")
-            body.append("Content-Disposition: form-data; name=\"comment_id\"\r\n\r\n")
-            body.append("\(commentId)\r\n")
-        }
-
-        body.append("--\(boundary)\r\n")
-        body.append("Content-Disposition: form-data; name=\"attachment\"; filename=\"\(filename)\"\r\n")
-        body.append("Content-Type: \(mime)\r\n\r\n")
-        body.append(fileData)
-        body.append("\r\n--\(boundary)--\r\n")
-        req.httpBody = body
+        // Build the multipart envelope as a temporary file instead of loading
+        // the movie (and then a second multipart copy) into RAM. Two concurrent
+        // background uploads therefore keep memory bounded even for large MOVs.
+        let multipartURL = try Self.makeMultipartBodyFile(
+            sourceURL: fileURL,
+            filename: filename,
+            mime: mime,
+            commentId: commentId,
+            boundary: boundary
+        )
+        defer { try? FileManager.default.removeItem(at: multipartURL) }
 
         let delegate = onProgress.map { UploadProgressDelegate(onProgress: $0) }
         let (data, response) = try await URLSession.shared.upload(for: req,
-                                                                  from: body,
+                                                                  fromFile: multipartURL,
                                                                   delegate: delegate)
         if let http = response as? HTTPURLResponse,
            !(200..<300).contains(http.statusCode) {
@@ -1326,16 +1372,53 @@ final class ClickUpService {
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw CUError.parse }
-        lastUploadedAttachmentId = json["id"] as? String
-        if let s = json["url"]         as? String, let u = URL(string: s) { return u }
-        if let s = json["url_w_query"] as? String, let u = URL(string: s) { return u }
+        let id = json["id"] as? String
+        if let s = json["url"] as? String, let u = URL(string: s) {
+            return UploadedAttachment(id: id, url: u)
+        }
+        if let s = json["url_w_query"] as? String, let u = URL(string: s) {
+            return UploadedAttachment(id: id, url: u)
+        }
         return nil
     }
 
-    /// Attachment id from the most recent `uploadAttachment` call. Lets the
-    /// comment flow embed the file as a comment segment (the upload + the read
-    /// happen back-to-back on the same actor, so this is safe).
-    private(set) var lastUploadedAttachmentId: String?
+    static func makeMultipartBodyFile(sourceURL: URL,
+                                      filename: String,
+                                      mime: String,
+                                      commentId: String?,
+                                      boundary: String) throws -> URL {
+        let target = FileManager.default.temporaryDirectory
+            .appendingPathComponent("apollo-upload-\(UUID().uuidString).multipart")
+        guard FileManager.default.createFile(atPath: target.path, contents: nil) else {
+            throw CUError.parse
+        }
+        let output = try FileHandle(forWritingTo: target)
+        defer { try? output.close() }
+
+        func write(_ string: String) throws {
+            guard let data = string.data(using: .utf8) else { throw CUError.parse }
+            try output.write(contentsOf: data)
+        }
+
+        if let commentId {
+            try write("--\(boundary)\r\n")
+            try write("Content-Disposition: form-data; name=\"comment_id\"\r\n\r\n")
+            try write("\(commentId)\r\n")
+        }
+        try write("--\(boundary)\r\n")
+        try write("Content-Disposition: form-data; name=\"attachment\"; filename=\"\(filename)\"\r\n")
+        try write("Content-Type: \(mime)\r\n\r\n")
+
+        let input = try FileHandle(forReadingFrom: sourceURL)
+        defer { try? input.close() }
+        while true {
+            let chunk = try input.read(upToCount: 1_048_576) ?? Data()
+            if chunk.isEmpty { break }
+            try output.write(contentsOf: chunk)
+        }
+        try write("\r\n--\(boundary)--\r\n")
+        return target
+    }
 
     /// Flattens ClickUp's markdown `[label](url)` link syntax into a
     /// form the RichTextEditor (which relies on `NSDataDetector` for
@@ -1778,6 +1861,15 @@ final class ClickUpService {
                 dateCreated = Date(timeIntervalSince1970: val / 1000)
             }
 
+            // `date_updated` bumps whenever the task changes — including a new
+            // comment — so the Assigned Comments indexer scans by it.
+            var dateUpdated: Date?
+            if let ms = item["date_updated"] as? String, let val = Double(ms) {
+                dateUpdated = Date(timeIntervalSince1970: val / 1000)
+            } else if let ms = item["date_updated"] as? NSNumber {
+                dateUpdated = Date(timeIntervalSince1970: ms.doubleValue / 1000)
+            }
+
             var dateClosed: Date?
             if let ms = item["date_closed"] as? String, let val = Double(ms) {
                 dateClosed = Date(timeIntervalSince1970: val / 1000)
@@ -1897,6 +1989,7 @@ final class ClickUpService {
                 archived:          archived,
                 creator:           creator,
                 dateCreated:       dateCreated,
+                dateUpdated:       dateUpdated,
                 dateClosed:        dateClosed,
                 lastEditorId:      lastEditorId,
                 parentId:          parentId,
@@ -2471,11 +2564,24 @@ final class ClickUpService {
             // dedupes by URL, so collecting from all four shapes
             // is safe.
             var rawAttachments: [[String: Any]] = []
+            // Ids referenced by segments, kept even when the segment carries
+            // no url (an id-only segment can't become a full Attachment via
+            // `attachmentsForTask`, but the id alone still proves the comment
+            // carries the file — the media-transfer verification needs it).
+            var segmentAttachmentIds: [String] = []
             if let arr = item["attachments"] as? [[String: Any]] {
                 rawAttachments.append(contentsOf: arr)
             }
             if let segs = item["comment"] as? [[String: Any]] {
                 for seg in segs {
+                    if let rawId = seg["attachment_id"] as? String, !rawId.isEmpty {
+                        segmentAttachmentIds.append(rawId)
+                    } else if let rawId = seg["attachment_id"] as? NSNumber {
+                        segmentAttachmentIds.append(rawId.stringValue)
+                    } else if let att = seg["attachment"] as? [String: Any],
+                              let rawId = att["id"] as? String, !rawId.isEmpty {
+                        segmentAttachmentIds.append(rawId)
+                    }
                     // Shape 2 — nested object.
                     if let att = seg["attachment"] as? [String: Any] {
                         rawAttachments.append(att)
@@ -2532,6 +2638,7 @@ final class ClickUpService {
                 reactions:    reactions,
                 replyCount:   replyCount,
                 attachments:  attachments,
+                attachmentIds: segmentAttachmentIds,
                 assignee:     participant(item["assignee"]),
                 assignedBy:   participant(item["assigned_by"])
             )

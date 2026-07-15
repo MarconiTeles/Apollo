@@ -779,10 +779,10 @@ struct TaskDetailView: View, Equatable {
             }
 
             kvCell("Anexos") {
-                Text(task.attachments.isEmpty
-                     ? "—" : "\(task.attachments.count) arquivos")
+                Text(displayedAttachments.isEmpty
+                     ? "—" : "\(displayedAttachments.count) arquivos")
                     .font(Editorial.sans(12))
-                    .foregroundStyle(task.attachments.isEmpty
+                    .foregroundStyle(displayedAttachments.isEmpty
                                      ? Editorial.inkMute : Editorial.ink)
             }
 
@@ -1131,7 +1131,7 @@ struct TaskDetailView: View, Equatable {
                     .font(Editorial.sans(10.5, .semibold))
                     .tracking(1.2)
                     .foregroundStyle(Editorial.inkMute)
-                Text("\(task.attachments.count)")
+                Text("\(displayedAttachments.count)")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
                 Spacer(minLength: 0)
@@ -1151,7 +1151,7 @@ struct TaskDetailView: View, Equatable {
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
-                case .loaded(let n) where n == 0 && task.attachments.isEmpty:
+                case .loaded(let n) where n == 0 && displayedAttachments.isEmpty:
                     Text("Nenhum anexo")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -1162,7 +1162,7 @@ struct TaskDetailView: View, Equatable {
                         .lineLimit(2)
                         .truncationMode(.tail)
                         .help(msg)
-                case .none where task.attachments.isEmpty:
+                case .none where displayedAttachments.isEmpty:
                     Text("Aguardando…")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -1201,20 +1201,54 @@ struct TaskDetailView: View, Equatable {
             // disclosure. Non-versioned files render exactly as
             // before, in their original position.
             LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(Self.versionGroupedAttachments(task.attachments)) { group in
-                    if group.versions.count <= 1 {
-                        AttachmentChip(attachment: group.newest,
-                                       taskURL: task.url,
-                                       taskId: task.id, listId: task.listId,
-                                       actorId: reviewActorId, actorName: reviewActorName)
-                            .equatable()
-                    } else {
-                        attachmentVersionGroup(group)
+                if isAttachmentsLoading && displayedAttachments.isEmpty {
+                    // Breathing placeholders instead of an empty list while the
+                    // per-task GET hydrates the attachments.
+                    ForEach(0..<4, id: \.self) { _ in AttachmentSkeletonRow() }
+                } else {
+                    ForEach(Self.versionGroupedAttachments(displayedAttachments)) { group in
+                        if group.versions.count <= 1 {
+                            AttachmentChip(attachment: group.newest,
+                                           taskURL: task.url,
+                                           taskId: task.id, listId: task.listId,
+                                           actorId: reviewActorId, actorName: reviewActorName,
+                                           onReplace: { replaceAttachment(group.newest) })
+                                .equatable()
+                        } else {
+                            attachmentVersionGroup(group)
+                        }
                     }
                 }
             }
         }
     }
+
+    private var isAttachmentsLoading: Bool {
+        if case .loading? = appState.attachmentHydration[task.id] { return true }
+        return false
+    }
+
+    /// Attachments to show: the task's visible files minus any a newer
+    /// media-flow version has superseded. Pure read (UserDefaults) — no state
+    /// mutation, so it can't feed a render loop. The superseded set is filled
+    /// out of the render path (media flow publish / catalog load).
+    private var displayedAttachments: [CUTask.Attachment] {
+        let superseded = AttachmentSupersession.supersededIds(taskId: task.id)
+        guard !superseded.isEmpty else { return task.visibleAttachments }
+        return task.visibleAttachments.filter {
+            !AttachmentSupersession.isSuperseded($0.id, in: superseded)
+        }
+    }
+
+    private func replaceAttachment(_ att: CUTask.Attachment) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Escolha o arquivo que substitui \(att.title)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await appState.replaceTaskAttachment(taskId: task.id, old: att, newFileURL: url) }
+    }
+
 
     // MARK: - Attachment version grouping
 
@@ -1304,7 +1338,8 @@ struct TaskDetailView: View, Equatable {
                 AttachmentChip(attachment: group.newest,
                                taskURL: task.url,
                                taskId: task.id, listId: task.listId,
-                               actorId: reviewActorId, actorName: reviewActorName)
+                               actorId: reviewActorId, actorName: reviewActorName,
+                               onReplace: { replaceAttachment(group.newest) })
                     .equatable()
             }
             Button {
@@ -1338,7 +1373,8 @@ struct TaskDetailView: View, Equatable {
                         AttachmentChip(attachment: old,
                                        taskURL: task.url,
                                        taskId: task.id, listId: task.listId,
-                                       actorId: reviewActorId, actorName: reviewActorName)
+                                       actorId: reviewActorId, actorName: reviewActorName,
+                                       onReplace: { replaceAttachment(old) })
                             .equatable()
                             .opacity(0.72)
                     }
@@ -2855,6 +2891,32 @@ struct SubtaskRow: View, Equatable {
 /// "this opens externally". Hovering brightens the chip's
 /// border and lifts it a hair; clicking opens the file URL
 /// in the user's default browser.
+/// Breathing placeholder that mirrors an AttachmentChip row while the
+/// per-task attachment GET is in flight.
+private struct AttachmentSkeletonRow: View {
+    @State private var dim = false
+    private var bar: Color { Editorial.ink.opacity(0.08) }
+    var body: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 3).fill(bar).frame(width: 38, height: 20)
+            VStack(alignment: .leading, spacing: 6) {
+                RoundedRectangle(cornerRadius: 4).fill(bar).frame(width: 230, height: 11)
+                RoundedRectangle(cornerRadius: 4).fill(bar).frame(width: 58, height: 9)
+            }
+            Spacer(minLength: 0)
+            RoundedRectangle(cornerRadius: 5).fill(bar).frame(width: 84, height: 24)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+        }
+        .opacity(dim ? 0.5 : 1)
+        .animation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: dim)
+        .onAppear { dim = true }
+    }
+}
+
 private struct AttachmentChip: View, Equatable {
     let attachment: CUTask.Attachment
     /// Parent task's ClickUp URL (e.g.
@@ -2875,6 +2937,9 @@ private struct AttachmentChip: View, Equatable {
     var listId: String? = nil
     var actorId: Int? = nil
     var actorName: String = "Revisor"
+    /// Replace action (uploads a new revision). Excluded from `==` (closures
+    /// aren't comparable and only capture the stable attachment + task id).
+    var onReplace: (() -> Void)? = nil
 
     static func == (lhs: AttachmentChip, rhs: AttachmentChip) -> Bool {
         lhs.attachment == rhs.attachment && lhs.taskURL == rhs.taskURL
@@ -3021,6 +3086,22 @@ private struct AttachmentChip: View, Equatable {
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
                     .help("Abrir a interface de revisão deste anexo no ClickUp web (timestamps + anotações de vídeo).")
+                }
+
+                // Substituir — envia uma nova revisão. Nested plain button
+                // takes its own tap before the chip's open-file tap. (Não há
+                // "Excluir": a API pública do ClickUp não deleta anexo.)
+                if let onReplace {
+                    Button(action: onReplace) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Editorial.inkMute)
+                            .frame(width: 26, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Substituir anexo (envia uma nova versão)")
                 }
 
                 Image(systemName: "arrow.up.right")

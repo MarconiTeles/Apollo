@@ -226,6 +226,11 @@ final class AppState: ObservableObject {
     @Published var availableMembers:  [CUMember]      = []
     @Published var availableTags:     [CUTask.Tag]    = []
 
+    /// Long-lived coordinator for quick media batches. It intentionally lives
+    /// above recycled task rows so navigation and cell reuse never reset a
+    /// render/upload that is already running.
+    @MainActor lazy var taskMediaTransfers = TaskMediaTransferStore()
+
     /// Progressive index behind the global Assigned Comments surface.
     /// The public ClickUp API exposes comments per task (not the private
     /// workspace-wide endpoint used by clickup.com), so Apollo builds this
@@ -2989,6 +2994,7 @@ final class AppState: ObservableObject {
             var freshCounts: [String: Int] = [:]
             for task in newTasks {
                 for att in task.attachments {
+                    guard !att.isApolloMediaTechnical else { continue }
                     guard let total = att.totalComments,
                           let uploader = att.uploaderId,
                           uploader == me
@@ -4201,14 +4207,19 @@ final class AppState: ObservableObject {
         for cached in tasksByListId.values {
             for task in cached { byId[task.id] = task }
         }
-        // ClickUp's list payload includes `comment_count`. A definitive zero
-        // cannot contain an assignment or @mention, so skip it. `nil` remains
-        // eligible for compatibility with old caches/endpoints and preserves
-        // the page's completeness guarantee.
+        // ClickUp's public list endpoints (`/list/{id}/task`,
+        // `/team/{id}/task`) do NOT return `comment_count`, so this filter is a
+        // near no-op — it only drops the rare task whose count was hydrated to
+        // a definitive 0 elsewhere. The real speed lever is the ORDER below:
+        // a new comment bumps the task's `date_updated`, so scanning by last
+        // activity surfaces the user's recent assigned comments in the very
+        // first page instead of buried thousands of tasks deep.
         let candidates = byId.values
             .filter { ($0.commentCount ?? 1) > 0 }
             .sorted { lhs, rhs in
-                switch (lhs.dateCreated, rhs.dateCreated) {
+                let l = lhs.dateUpdated ?? lhs.dateCreated
+                let r = rhs.dateUpdated ?? rhs.dateCreated
+                switch (l, r) {
                 case let (left?, right?) where left != right:
                     return left > right
                 case (_?, nil):
@@ -4228,8 +4239,22 @@ final class AppState: ObservableObject {
             return
         }
 
+        // Auto-scan several pages up front (bounded) so results stream in
+        // without the user clicking "Carregar mais" repeatedly. The cap keeps
+        // request volume sane on large workspaces; the tail stays manual.
         await loadNextAssignedCommentsPage()
+        while assignedCommentsHasMore,
+              assignedCommentsScannedTasks < Self.assignedCommentsAutoScanCap {
+            await loadNextAssignedCommentsPage()
+        }
     }
+
+    /// Upper bound on tasks scanned automatically on refresh. With the
+    /// `date_updated` ordering above, the recent assigned comments the user
+    /// cares about live well within this window; older ones load on demand.
+    /// Held at 90 so a single refresh stays under ClickUp's 100 req/min token
+    /// limit even at the higher per-page concurrency.
+    static let assignedCommentsAutoScanCap = 90
 
     /// Loads the next bounded page without discarding results already shown.
     /// At most three requests run concurrently inside a page, preserving the
@@ -4271,7 +4296,10 @@ final class AppState: ObservableObject {
                 }
             }
 
-            for _ in 0..<min(3, page.count) {
+            // 8 concurrent comment fetches per page (was 3). ClickUp's
+            // per-token rate limit (100 req/min) comfortably absorbs this for a
+            // single page, and it cuts each page's wall-clock ~2.5×.
+            for _ in 0..<min(8, page.count) {
                 if let task = iterator.next() { enqueue(task) }
             }
 
@@ -4636,10 +4664,36 @@ final class AppState: ObservableObject {
     @Published var attachmentHydration: [String: HydrationStatus] = [:]
 
     @MainActor
+    /// Replaces an attachment: uploads the new file, then marks the old one as
+    /// superseded so it drops out of the list. ClickUp's public API has no
+    /// delete route (DELETE /attachment/{id} → 404), so the old file still
+    /// exists on the task server-side — it's just hidden in Apollo, leaving one
+    /// entry with the new name. Returns false if the upload fails (in which case
+    /// nothing is hidden — the original is untouched).
+    @discardableResult
+    func replaceTaskAttachment(taskId: String,
+                               old: CUTask.Attachment,
+                               newFileURL: URL) async -> Bool {
+        guard let task = tasksById[taskId] else { return false }
+        guard await uploadCommentAttachment(for: task, fileURL: newFileURL) != nil else {
+            return false
+        }
+        AttachmentSupersession.markSuperseded([old.id], taskId: taskId)
+        await hydrateTaskAttachments(taskId: taskId)
+        return true
+    }
+
+    /// `@MainActor`: this mutates `@Published` state (`attachmentHydration`,
+    /// `tasks`, `detailTask`). Without it, callers on a background executor
+    /// (e.g. a View `.task` whose closure isn't main-isolated) would mutate the
+    /// publisher off-main and deadlock against a concurrent main-thread
+    /// `objectWillChange` (observed as a hang in `ObservableObjectPublisher`).
+    @MainActor
     func hydrateTaskAttachments(taskId: String) async {
         attachmentHydration[taskId] = .loading
         do {
             let fresh = try await cuSvc.getTask(id: taskId)
+            let attachments = fresh.attachments
             // Merge into the main array so later interactions
             // (e.g. closing the popup and re-opening it) see the
             // hydrated attachments without an extra fetch.
@@ -4649,7 +4703,7 @@ final class AppState: ObservableObject {
                 // wholesale replacing it. Status/dates may have
                 // moved on locally via optimistic updates.
                 var merged = tasks[idx]
-                merged.attachments = fresh.attachments
+                merged.attachments = attachments
                 // Checklists + custom fields + dependencies are
                 // ALSO list-endpoint-omitted (or value-less) —
                 // the same getTask call carries them, so hydrate
@@ -4667,7 +4721,7 @@ final class AppState: ObservableObject {
             // checklists + custom fields.
             if detailTask?.id == taskId {
                 var copy = detailTask!
-                copy.attachments   = fresh.attachments
+                copy.attachments   = attachments
                 copy.checklists    = fresh.checklists
                 copy.customFields  = fresh.customFields
                 copy.dependencies  = fresh.dependencies
@@ -4680,14 +4734,14 @@ final class AppState: ObservableObject {
             // back to next.
             for i in detailSubtaskStack.indices where detailSubtaskStack[i].id == taskId {
                 var copy = detailSubtaskStack[i]
-                copy.attachments   = fresh.attachments
+                copy.attachments   = attachments
                 copy.checklists    = fresh.checklists
                 copy.customFields  = fresh.customFields
                 copy.dependencies  = fresh.dependencies
                 copy.linkedTaskIds = fresh.linkedTaskIds
                 detailSubtaskStack[i] = copy
             }
-            attachmentHydration[taskId] = .loaded(count: fresh.attachments.count)
+            attachmentHydration[taskId] = .loaded(count: attachments.count)
             // Time tracking lives on a separate endpoint — fetch
             // it without blocking the attachment banner.
             Task { await hydrateTaskTime(taskId: taskId) }
@@ -5135,6 +5189,150 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Publishes one quick-media result as one complete ClickUp history item.
+    /// The file is uploaded first; this method then creates the final comment
+    /// with the attachment segment and REVISAR link together. It never reports
+    /// success for the placeholder-only state that previously left a V2 comment
+    /// with neither file nor review link.
+    func publishMediaTransferComment(on task: CUTask, text: String,
+                                     mentionMemberIds: [Int],
+                                     attachmentId: String?, attachmentURL: URL,
+                                     fileName: String, fileExtension: String) async -> CUComment? {
+        guard let attachmentId, !attachmentId.isEmpty else {
+            Log.error("publishMediaTransferComment: ClickUp não retornou attachment id")
+            return nil
+        }
+        let members = mentionMemberIds.compactMap { id in
+            availableMembers.first { $0.id == id }
+        }
+        let uploader = clickUpAuthService.userId
+        let uploaderName = availableMembers.first { $0.id == uploader }?.username
+        guard let review = Self.reviewOpenLink(
+            mediaUrl: attachmentURL.absoluteString,
+            ext: fileExtension,
+            title: fileName,
+            taskId: task.id,
+            commentId: "",
+            uploaderId: uploader,
+            uploaderName: uploaderName,
+            attachmentId: attachmentId
+        ) else { return nil }
+
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? " " : text
+
+        // Idempotency: an attachment id is minted once per upload, so a
+        // complete comment already carrying it IS this output's final comment
+        // — adopt it instead of posting a duplicate. This covers a retry after
+        // the create succeeded but its response id failed to parse, and a
+        // relaunch between create and record.
+        if let comments = try? await cuSvc.getTaskComments(taskId: task.id),
+           let existing = comments.first(where: {
+               Self.isCompleteMediaTransferComment($0, attachmentId: attachmentId)
+           }) {
+            await removeIncompleteMediaTransferComments(taskId: task.id,
+                                                        uploaderId: uploader)
+            return existing
+        }
+
+        await removeIncompleteMediaTransferComments(taskId: task.id,
+                                                    uploaderId: uploader)
+        let commentId: String
+        do {
+            guard let created = try await cuSvc.addTaskComment(
+                taskId: task.id,
+                text: body,
+                mentionedMembers: members,
+                attachmentIds: [attachmentId],
+                links: [(label: Self.reviewOpenLinkText, url: review, title: fileName)],
+                assignee: mentionMemberIds.first,
+                requireAttachmentEmbed: true
+            ) else { return nil }
+            commentId = created
+        } catch {
+            Log.error("publishMediaTransferComment: \(error)")
+            return nil
+        }
+
+        // ClickUp's comment read is eventually consistent. Verify the actual
+        // server representation before advancing the batch to ENVIADO.
+        for delay in [0, 250_000_000, 600_000_000, 1_200_000_000] as [UInt64] {
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+            if let comments = try? await cuSvc.getTaskComments(taskId: task.id),
+               let comment = comments.first(where: { $0.id == commentId }),
+               Self.isCompleteMediaTransferComment(comment,
+                                                   attachmentId: attachmentId) {
+                return comment
+            }
+        }
+
+        Log.error("publishMediaTransferComment: comentário \(commentId) incompleto; removendo")
+        try? await cuSvc.deleteTaskComment(commentId: commentId)
+        return nil
+    }
+
+    /// True when the server representation of a comment provably carries the
+    /// uploaded file. ClickUp is inconsistent about WHERE the file shows up
+    /// (full attachment objects vs id-only segments) and about the id itself
+    /// (the upload response may return it without the file extension while
+    /// the comment segment carries `<id>.mov`), so both sources and an
+    /// extension-insensitive compare are accepted.
+    nonisolated static func isCompleteMediaTransferComment(_ comment: CUComment,
+                                                           attachmentId: String) -> Bool {
+        guard comment.text.localizedCaseInsensitiveContains(reviewOpenLinkText) else { return false }
+        let candidates = comment.attachments.map(\.id) + comment.attachmentIds
+        return candidates.contains { mediaAttachmentIdMatches($0, attachmentId) }
+    }
+
+    nonisolated static func mediaAttachmentIdMatches(_ lhs: String, _ rhs: String) -> Bool {
+        guard !lhs.isEmpty, !rhs.isEmpty else { return false }
+        if lhs == rhs { return true }
+        let l = (lhs as NSString).deletingPathExtension
+        let r = (rhs as NSString).deletingPathExtension
+        return !l.isEmpty && l == r
+    }
+
+    /// A residue placeholder from a failed transfer: authored by the uploader,
+    /// matching Apollo's `Vn · name · Vn.ext` pattern, with no attachment and
+    /// no REVISAR link. ANY Apollo version qualifies — an orphaned V2 must not
+    /// survive just because the next publish happens to be a V1/V3 (the old
+    /// version-matched rule left exactly that residue behind).
+    nonisolated static func isIncompleteMediaTransferComment(_ comment: CUComment,
+                                                             uploaderId: Int?) -> Bool {
+        let belongsToUploader = uploaderId == nil || comment.userId == uploaderId
+        return belongsToUploader
+            && mediaTransferVersion(in: comment.text) != nil
+            && !comment.text.localizedCaseInsensitiveContains(reviewOpenLinkText)
+            && comment.attachments.isEmpty
+            && comment.attachmentIds.isEmpty
+    }
+
+    /// Apollo media comments use `Vn · name · Vn.ext`. The repeated version
+    /// token keeps the pattern strict enough to never match ordinary user
+    /// comments.
+    nonisolated static func mediaTransferVersion(in text: String) -> Int? {
+        let pattern = #"(?im)^\s*V(\d+)\s*·\s*.+\s*·\s*V\1\.(?:mov|mp4|m4v|avi|mkv|webm)\s*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text,
+                                           range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return Int(text[range])
+    }
+
+    private func removeIncompleteMediaTransferComments(taskId: String,
+                                                       uploaderId: Int?) async {
+        guard let comments = try? await cuSvc.getTaskComments(taskId: taskId) else { return }
+        let stale = comments.filter {
+            Self.isIncompleteMediaTransferComment($0, uploaderId: uploaderId)
+        }
+        for comment in stale {
+            do {
+                try await cuSvc.deleteTaskComment(commentId: comment.id)
+            } catch {
+                Log.error("removeIncompleteMediaTransferComments: \(error)")
+            }
+        }
+    }
+
     func deleteComment(_ comment: CUComment) async {
         do {
             try await cuSvc.deleteTaskComment(commentId: comment.id)
@@ -5162,9 +5360,10 @@ final class AppState: ObservableObject {
     func uploadCommentAttachment(for task: CUTask,
                                  fileURL: URL,
                                  commentId: String? = nil,
+                                 userFacing: Bool = true,
                                  onProgress: (@Sendable (Double) -> Void)? = nil) async -> (url: URL, id: String?)? {
         let uploadId = UUID()
-        await MainActor.run {
+        if userFacing { await MainActor.run {
             uploadActivities = Self.insertingUploadActivity(
                 UploadActivity(id: uploadId,
                                fileName: fileURL.lastPathComponent,
@@ -5174,9 +5373,10 @@ final class AppState: ObservableObject {
                                state: .uploading),
                 into: uploadActivities
             )
-        }
+        } }
         let progressRelay: @Sendable (Double) -> Void = { [weak self] fraction in
             onProgress?(fraction)
+            guard userFacing else { return }
             Task { @MainActor in
                 guard let self else { return }
                 self.uploadActivities = Self.updatingUploadProgress(
@@ -5187,38 +5387,38 @@ final class AppState: ObservableObject {
             }
         }
         do {
-            let url = try await cuSvc.uploadAttachment(taskId:    task.id,
-                                                       fileURL:   fileURL,
-                                                       commentId: commentId,
-                                                       onProgress: progressRelay)
-            await MainActor.run {
+            let uploaded = try await cuSvc.uploadAttachment(taskId:    task.id,
+                                                            fileURL:   fileURL,
+                                                            commentId: commentId,
+                                                            onProgress: progressRelay)
+            if userFacing { await MainActor.run {
                 uploadActivities = Self.finishingUploadActivity(
                     id: uploadId,
                     succeeded: true,
                     in: uploadActivities
                 )
-            }
-            notifyTask(.success,
+            } }
+            if userFacing { notifyTask(.success,
                        title:    task.title,
                        subtitle: "Anexo enviado",
                        message:  fileURL.lastPathComponent,
-                       taskId:   task.id)
-            guard let url else { return nil }
-            return (url: url, id: cuSvc.lastUploadedAttachmentId)
+                       taskId:   task.id) }
+            guard let uploaded else { return nil }
+            return (url: uploaded.url, id: uploaded.id)
         } catch {
-            await MainActor.run {
+            if userFacing { await MainActor.run {
                 uploadActivities = Self.finishingUploadActivity(
                     id: uploadId,
                     succeeded: false,
                     in: uploadActivities
                 )
-            }
+            } }
             Log.error("uploadCommentAttachment: \(error)")
-            notifyTask(.error,
+            if userFacing { notifyTask(.error,
                        title:    task.title,
                        subtitle: "Falha no anexo",
                        message:  fileURL.lastPathComponent,
-                       taskId:   task.id)
+                       taskId:   task.id) }
             return nil
         }
     }

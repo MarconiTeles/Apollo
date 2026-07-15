@@ -48,6 +48,10 @@ struct CUTask: Identifiable, Codable, Equatable {
     var archived:    Bool      = false
     var creator:     Assignee? = nil
     var dateCreated: Date?     = nil
+    /// Last-activity timestamp from ClickUp's `date_updated`. A new comment
+    /// bumps it, so the Assigned Comments indexer sorts by this to scan the
+    /// tasks most likely to hold recent assigned comments first.
+    var dateUpdated: Date?     = nil
     var dateClosed:  Date?     = nil
     /// Numeric id of the last user to edit the task. Populated when
     /// the API returns it (some endpoints / payloads include it as
@@ -78,6 +82,14 @@ struct CUTask: Identifiable, Codable, Equatable {
     /// up as a single deduplicated list of pills below the
     /// description editor.
     var attachments: [Attachment] = []
+
+    /// Internal source revisions and catalog manifests keep the quick-media
+    /// workflow synchronized through ClickUp, but they are implementation
+    /// records rather than files the user should browse in Apollo's normal
+    /// attachment surfaces.
+    var visibleAttachments: [Attachment] {
+        attachments.filter { !$0.isApolloMediaTechnical }
+    }
 
     /// ClickUp checklists on the task. ClickUp returns these in
     /// the single-task GET payload as a top-level `checklists`
@@ -275,6 +287,11 @@ struct CUTask: Identifiable, Codable, Equatable {
         /// Optional because some attachment shapes (description-
         /// derived links) don't carry an uploader.
         let uploaderId: Int?
+
+        var isApolloMediaTechnical: Bool {
+            title.hasPrefix(TaskMediaTechnicalName.sourcePrefix)
+                || title.hasPrefix(TaskMediaTechnicalName.manifestPrefix)
+        }
 
         /// SF Symbol that best represents this file type.
         var icon: String {

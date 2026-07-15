@@ -21,6 +21,13 @@ struct CUComment: Identifiable, Equatable, Hashable {
     /// so the previous URL-detection-only rendering missed them.
     let attachments:  [CUTask.Attachment]
 
+    /// Raw `attachment_id`s referenced by this comment's segments. ClickUp
+    /// sometimes returns an attachment segment carrying only the id (no url,
+    /// `attachment: null`), which can't become a full `CUTask.Attachment` —
+    /// but the id alone is enough for the media-transfer verification that
+    /// decides whether a published comment really carries its file.
+    var attachmentIds: [String] = []
+
     /// Action-item metadata returned by ClickUp for assigned comments.
     /// Kept on the canonical comment model so every surface can resolve,
     /// reassign and distinguish "Atribuídas a mim" from "Delegados por mim"

@@ -56,6 +56,31 @@ final class UploadActivityTests: XCTestCase {
                        1, accuracy: 0.0001)
     }
 
+    func testMultipartUploadBodyIsStagedAsFileWithOriginalPayload() throws {
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("apollo-multipart-source-\(UUID().uuidString).mov")
+        let payload = Data((0..<2_100_000).map { UInt8($0 % 251) })
+        try payload.write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+
+        let boundary = "Apollo-Test-Boundary"
+        let body = try ClickUpService.makeMultipartBodyFile(
+            sourceURL: source,
+            filename: "vídeo.mov",
+            mime: "video/quicktime",
+            commentId: "comment-42",
+            boundary: boundary
+        )
+        defer { try? FileManager.default.removeItem(at: body) }
+
+        let staged = try Data(contentsOf: body)
+        XCTAssertGreaterThan(staged.count, payload.count)
+        XCTAssertLessThan(staged.count, payload.count + 1_000)
+        XCTAssertNotNil(staged.range(of: payload.prefix(128)))
+        XCTAssertNotNil(staged.range(of: Data("--\(boundary)--\r\n".utf8)))
+        XCTAssertNotNil(staged.range(of: Data("name=\"comment_id\"".utf8)))
+    }
+
     private func makeActivity(index: Int) -> AppState.UploadActivity {
         AppState.UploadActivity(
             id: UUID(),

@@ -57,6 +57,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
     let onBeginDrag: (CUTask) -> [String]
     let onEndDrag: (Bool) -> Void
     let onClearSelection: () -> Void
+    let onMediaAction: (CUTask, TaskMediaFlowMode) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -163,6 +164,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
         private var onBeginDrag: (CUTask) -> [String]
         private var onEndDrag: (Bool) -> Void
         private var onClearSelection: () -> Void
+        private var onMediaAction: (CUTask, TaskMediaFlowMode) -> Void
         private let statusBubble = StatusPickerBubblePresenter()
         weak var collection: NSCollectionView?
 
@@ -173,6 +175,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
             onBeginDrag = parent.onBeginDrag
             onEndDrag = parent.onEndDrag
             onClearSelection = parent.onClearSelection
+            onMediaAction = parent.onMediaAction
         }
 
         func update(parent: MyTasksAppKitList, force: Bool = false) {
@@ -182,6 +185,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
             onBeginDrag = parent.onBeginDrag
             onEndDrag = parent.onEndDrag
             onClearSelection = parent.onClearSelection
+            onMediaAction = parent.onMediaAction
             (collection?.backgroundView as? MyTasksSelectionBackgroundView)?
                 .onClearSelection = onClearSelection
             let newRows = Self.flatten(parent.sections)
@@ -280,6 +284,9 @@ struct MyTasksAppKitList: NSViewRepresentable {
             item.onRequestStatusPicker = { [weak self] task, anchor in
                 self?.showStatusPicker(task: task, anchor: anchor)
             }
+            item.onMediaAction = { [weak self] task, mode in
+                self?.onMediaAction(task, mode)
+            }
             item.contextActionsProvider = { [weak self] clicked in
                 guard let self else { return nil }
                 guard self.selectedIds.contains(clicked.id) else {
@@ -341,8 +348,11 @@ struct MyTasksAppKitList: NSViewRepresentable {
             // header line ~=14pt + 10pt vertical padding; every following
             // group carries the former 18pt inter-section spacer.
             case .header(_, _, _, let first): height = first ? 34 : 52
-            case .task: height = 42
-            case .dropPlaceholder: height = 42
+            // The ANEXAR capsule (26pt) is the tallest row content; the
+            // remaining ~16pt was inter-item padding. Trimmed ~40% (→ ~9.6pt)
+            // for a denser list without touching the capsule geometry.
+            case .task: height = 36
+            case .dropPlaceholder: height = 36
             }
             return NSSize(width: collectionView.bounds.width, height: height)
         }
@@ -543,6 +553,7 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
     var onBeginDrag: ((CUTask) -> String?)?
     var onEndDrag: ((Bool) -> Void)?
     var onRequestStatusPicker: ((CUTask, NSView) -> Void)?
+    var onMediaAction: ((CUTask, TaskMediaFlowMode) -> Void)?
     var contextActionsProvider: ((CUTask) -> [TaskContextAction]?)? {
         didSet { row.contextActionsProvider = contextActionsProvider }
     }
@@ -560,6 +571,10 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
             guard let self, let task else { return }
             onRequestStatusPicker?(task, anchor)
         }
+        row.onMediaAction = { [weak self] mode in
+            guard let self, let task else { return }
+            onMediaAction?(task, mode)
+        }
         row.onBeginDrag = { [weak self] in
             guard let self, let task else { return nil }
             return onBeginDrag?(task)
@@ -575,6 +590,7 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
         onBeginDrag = nil
         onEndDrag = nil
         onRequestStatusPicker = nil
+        onMediaAction = nil
         contextActionsProvider = nil
         row.prepareForReuse()
     }
@@ -587,6 +603,37 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
     }
 
     func setBulkSelected(_ selected: Bool) { row.setBulkSelected(selected) }
+}
+
+private final class MyTasksMediaButton: NSButton {
+    var onHover: ((Bool) -> Void)?
+    private var hoverTracking: NSTrackingArea?
+    private(set) var isPointerInside = false
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let area = NSTrackingArea(rect: bounds,
+                                  options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect],
+                                  owner: self)
+        addTrackingArea(area)
+        hoverTracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isPointerInside = true
+        onHover?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        resetHover()
+    }
+
+    func resetHover() {
+        guard isPointerInside else { return }
+        isPointerInside = false
+        onHover?(false)
+    }
 }
 
 private final class MyTasksNativeRowView: NSView, NSDraggingSource {
@@ -602,11 +649,16 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     private let avatar = MyTasksAvatarView()
     private let assignee = NSTextField(labelWithString: "")
     private let date = NSTextField(labelWithString: "")
+    private let mediaTrackLayer = CALayer()
+    private let mediaProgressLayer = CALayer()
+    private let media = MyTasksMediaButton()
+    private let mediaBadge = NSTextField(labelWithString: "")
     private let more = NSButton()
 
     private var task: CUTask?
     private weak var appState: AppState?
     private var anyPopupCancellable: AnyCancellable?
+    private var mediaCancellable: AnyCancellable?
     private var tracking: NSTrackingArea?
     private var hovered = false
     private var bulkSelected = false
@@ -614,9 +666,14 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     private var dragStarted = false
     private var mouseDownTimestamp: TimeInterval?
     private var statusTint: NSColor = .systemGray
+    private var mediaProgressFraction: CGFloat = 0
+    private var mediaBaseBackground = NSColor.clear.cgColor
+    private var mediaBaseTitleColor = NSColor.labelColor
+    private var mediaUsesAccentFill = false
 
     var onActivate: (() -> Void)?
     var onStatusPicker: ((NSView) -> Void)?
+    var onMediaAction: ((TaskMediaFlowMode) -> Void)?
     var onBeginDrag: (() -> String?)?
     var onEndDrag: ((Bool) -> Void)?
     var contextActionsProvider: ((CUTask) -> [TaskContextAction]?)?
@@ -630,6 +687,13 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         hoverLayer.masksToBounds = false
         layer?.addSublayer(hoverLayer)
         layer?.addSublayer(rule)
+        for capsuleLayer in [mediaTrackLayer, mediaProgressLayer] {
+            capsuleLayer.cornerRadius = 13
+            capsuleLayer.cornerCurve = .continuous
+            layer?.addSublayer(capsuleLayer)
+        }
+        mediaTrackLayer.masksToBounds = false
+        mediaProgressLayer.masksToBounds = true
 
         done.setAccessibilityLabel("Mover tarefa para outro status")
         done.onActivate = { [weak self, weak done] in
@@ -651,10 +715,36 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         layer?.addSublayer(priorityDot)
         addSubview(avatar)
 
+        media.title = "ANEXAR"
+        media.font = NSFont.systemFont(ofSize: 9.5 * Editorial.typeScale, weight: .semibold)
+        media.isBordered = false
+        media.wantsLayer = false
+        media.controlSize = .small
+        media.focusRingType = .none
+        media.target = self
+        media.action = #selector(openMedia(_:))
+        media.setAccessibilityLabel("Anexar ou enviar vídeos")
+        media.onHover = { [weak self] active in self?.setMediaHover(active) }
+        addSubview(media)
+
+        mediaBadge.alignment = .center
+        mediaBadge.font = NSFont.monospacedDigitSystemFont(ofSize: 8.5, weight: .bold)
+        mediaBadge.isBordered = false
+        mediaBadge.drawsBackground = false
+        mediaBadge.wantsLayer = true
+        mediaBadge.layer?.cornerRadius = 8
+        mediaBadge.layer?.cornerCurve = .continuous
+        mediaBadge.layer?.backgroundColor = NSColor.white.cgColor
+        mediaBadge.textColor = .controlAccentColor
+        mediaBadge.isHidden = true
+        mediaBadge.setAccessibilityLabel("Quantidade de vídeos preparados")
+        addSubview(mediaBadge)
+
         more.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Mais")
         more.imageScaling = .scaleProportionallyDown
         more.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
         more.isBordered = false
+        more.focusRingType = .none
         more.bezelStyle = .regularSquare
         more.target = self
         more.action = #selector(openMenu(_:))
@@ -679,6 +769,8 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         super.prepareForReuse()
         task = nil
         appState = nil
+        mediaCancellable?.cancel()
+        mediaCancellable = nil
         avatar.prepareForReuse()
         hovered = false
         pressed = false
@@ -698,11 +790,23 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
                     guard let self else { return }
                     self.done.isEnabled = !open
                     self.more.isEnabled = !open
+                    self.media.isEnabled = !open
                     if open { self.forceExitAllInteraction() }
                 }
         }
         done.isEnabled = !appState.anyPopupOpen
         more.isEnabled = !appState.anyPopupOpen
+        media.isEnabled = !appState.anyPopupOpen
+        mediaCancellable?.cancel()
+        mediaCancellable = appState.taskMediaTransfers.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self, weak appState] _ in
+                DispatchQueue.main.async {
+                    guard let self, let appState, self.task?.id == task.id else { return }
+                    self.updateMediaButton(store: appState.taskMediaTransfers, taskId: task.id)
+                }
+            }
+        updateMediaButton(store: appState.taskMediaTransfers, taskId: task.id)
         title.stringValue = task.title
         title.toolTip = task.title
         title.font = NSFont.systemFont(ofSize: 15 * Editorial.typeScale,
@@ -792,31 +896,15 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         CATransaction.commit()
     }
 
-    /// Elastic no-reflow lift matching the supplied hover reference. The
-    /// collection layout remains unchanged; only this recycled row's layer
-    /// scales around its centre and temporarily rises above its neighbours.
+    /// Raise the hovered row above its neighbours without translating or
+    /// scaling its geometry. Background, radius and shadow provide the hover
+    /// feedback; the task must remain pixel-stable under the pointer.
     private func setHoverMotion(active: Bool, animated: Bool) {
         guard let layer else { return }
-        let target = CATransform3DMakeScale(active ? 1.008 : 1,
-                                            active ? 1.025 : 1,
-                                            1)
-        if animated {
-            let spring = CASpringAnimation(keyPath: "transform")
-            spring.fromValue = layer.presentation()?.value(forKeyPath: "transform")
-                ?? NSValue(caTransform3D: layer.transform)
-            spring.toValue = NSValue(caTransform3D: target)
-            spring.mass = 0.8
-            spring.stiffness = 230
-            spring.damping = 22
-            spring.initialVelocity = 0
-            spring.duration = min(0.42, spring.settlingDuration)
-            layer.add(spring, forKey: "apolloCapsuleHover")
-        } else {
-            layer.removeAnimation(forKey: "apolloCapsuleHover")
-        }
+        layer.removeAnimation(forKey: "apolloCapsuleHover")
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        layer.transform = target
+        layer.transform = CATransform3DIdentity
         layer.zPosition = active ? 20 : 0
         CATransaction.commit()
     }
@@ -831,6 +919,8 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         pressed = false
         dragStarted = false
         done.resetInteraction(animated: false)
+        media.resetHover()
+        setMediaHover(false)
         setHoverMotion(active: false, animated: false)
         if needsUpdate { applyBackground() }
         if Self.activeHoverRow === self { Self.activeHoverRow = nil }
@@ -1009,6 +1099,150 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
                    in: sender)
     }
 
+    @objc private func openMedia(_ sender: NSButton) {
+        guard appState?.anyPopupOpen != true, let task, let appState else { return }
+        switch appState.taskMediaTransfers.phase(for: task.id) {
+        case .ready:
+            onMediaAction?(.send)
+        case .partialFailure:
+            var actions = [
+                TaskContextAction(title: "Tentar novamente",
+                                  systemImage: "arrow.clockwise",
+                                  action: { [weak self] in self?.onMediaAction?(.send) })
+            ]
+            if appState.taskMediaTransfers.replaceablePendingCountByTask[task.id, default: 0] > 0 {
+                actions.append(TaskContextAction(
+                    title: "Substituir vídeos pendentes",
+                    systemImage: "arrow.triangle.2.circlepath",
+                    action: { [weak self] in self?.onMediaAction?(.replacePending) }
+                ))
+            }
+            actions.append(TaskContextAction(
+                title: "Descartar lote",
+                systemImage: "trash",
+                isDestructive: true,
+                action: { [weak self] in
+                    guard let self, let task = self.task else { return }
+                    self.appState?.taskMediaTransfers.discard(taskId: task.id)
+                }
+            ))
+            let menu = TaskContextMenu.makeNSMenu(actions: actions)
+            menu.popUp(positioning: nil,
+                       at: NSPoint(x: sender.bounds.minX, y: sender.bounds.maxY + 3),
+                       in: sender)
+        case .failed where appState.taskMediaTransfers.batches[task.id]?.total == 0:
+            appState.taskMediaTransfers.discard(taskId: task.id)
+            onMediaAction?(.add)
+        case .preparing, .sending, .failed, .sent:
+            onMediaAction?(.status)
+        case nil:
+            let actions = [
+                TaskContextAction(title: "Adicionar arquivos",
+                                  systemImage: "plus.circle",
+                                  action: { [weak self] in self?.onMediaAction?(.add) }),
+                TaskContextAction(title: "Substituir arquivo",
+                                  systemImage: "arrow.triangle.2.circlepath",
+                                  action: { [weak self] in self?.onMediaAction?(.replace) })
+            ]
+            let menu = TaskContextMenu.makeNSMenu(actions: actions)
+            menu.popUp(positioning: nil,
+                       at: NSPoint(x: sender.bounds.minX, y: sender.bounds.maxY + 3),
+                       in: sender)
+        }
+    }
+
+    private func updateMediaButton(store: TaskMediaTransferStore, taskId: String) {
+        let phase = store.phase(for: taskId)
+        let label = store.capsuleLabel(for: taskId)
+        let accent = phase == .ready || phase == .sending || phase == .partialFailure
+        let isActiveProgress = phase == .preparing || phase == .sending
+        let progress = max(0, min(1, CGFloat(store.progress(for: taskId))))
+        mediaUsesAccentFill = accent
+        mediaBaseTitleColor = phase == .preparing
+            ? NSColor.controlAccentColor
+            : (accent ? NSColor.white : NSColor(Editorial.inkSoft))
+        mediaBaseBackground = phase == .preparing
+            ? NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
+            : (accent
+                ? NSColor.controlAccentColor.withAlphaComponent(phase == .sending ? 0.36 : 1).cgColor
+                : NSColor(Editorial.inkFaint.opacity(0.14)).cgColor)
+        media.title = label
+        setMediaTitleColor(mediaBaseTitleColor)
+        mediaTrackLayer.backgroundColor = mediaBaseBackground
+        mediaProgressLayer.backgroundColor = phase == .preparing
+            ? NSColor.controlAccentColor.withAlphaComponent(0.30).cgColor
+            : NSColor.controlAccentColor.cgColor
+        mediaProgressLayer.isHidden = !isActiveProgress
+        setMediaProgress(isActiveProgress ? progress : (phase == .ready ? 1 : 0), animated: true)
+        media.toolTip = media.title == "ANEXAR"
+            ? "Adicionar HOOKs, BODYs ou vídeos completos"
+            : media.title
+        let badgeCount = store.batches[taskId].map {
+            phase == .partialFailure ? $0.pendingCount : $0.total
+        } ?? 0
+        mediaBadge.isHidden = (phase != .ready && phase != .partialFailure) || badgeCount <= 0
+        if !mediaBadge.isHidden {
+            mediaBadge.stringValue = "\(badgeCount)"
+        }
+        needsLayout = true
+    }
+
+    private func setMediaProgress(_ fraction: CGFloat, animated: Bool) {
+        let target = max(0, min(1, fraction))
+        let current = (mediaProgressLayer.presentation()?.value(forKeyPath: "transform.scale.x") as? NSNumber)
+            .map(CGFloat.init(truncating:)) ?? mediaProgressFraction
+        mediaProgressFraction = target
+        mediaProgressLayer.transform = CATransform3DMakeScale(target, 1, 1)
+        guard animated, abs(current - target) > 0.002 else { return }
+        let animation = CABasicAnimation(keyPath: "transform.scale.x")
+        animation.fromValue = current
+        animation.toValue = target
+        animation.duration = 0.22
+        animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        mediaProgressLayer.add(animation, forKey: "apollo.media.progress")
+    }
+
+    private func setMediaTitleColor(_ color: NSColor) {
+        media.attributedTitle = NSAttributedString(
+            string: media.title,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 9.5 * Editorial.typeScale, weight: .semibold),
+                .foregroundColor: color
+            ]
+        )
+    }
+
+    private func setMediaHover(_ active: Bool) {
+        let shouldActivate = active
+            && media.isEnabled
+            && appState?.anyPopupOpen != true
+            && !ScrollStateObserver.isScrollingNow
+            && !ScrollGate.shared.active
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(shouldActivate ? 0.16 : 0.24)
+        CATransaction.setAnimationTimingFunction(
+            CAMediaTimingFunction(controlPoints: shouldActivate ? 0.20 : 0.32,
+                                  shouldActivate ? 0.82 : 0.00,
+                                  shouldActivate ? 0.24 : 0.67,
+                                  1.00)
+        )
+        mediaTrackLayer.borderWidth = 0
+        mediaTrackLayer.backgroundColor = shouldActivate
+            ? (mediaUsesAccentFill
+                ? NSColor.controlAccentColor.withAlphaComponent(0.84).cgColor
+                : NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor)
+            : mediaBaseBackground
+        mediaTrackLayer.shadowColor = NSColor.black.cgColor
+        mediaTrackLayer.shadowOpacity = shouldActivate ? 0.055 : 0
+        mediaTrackLayer.shadowRadius = shouldActivate ? 3 : 0
+        mediaTrackLayer.shadowOffset = CGSize(width: 0, height: shouldActivate ? 1 : 0)
+        mediaTrackLayer.opacity = 1
+        CATransaction.commit()
+        setMediaTitleColor(shouldActivate && !mediaUsesAccentFill
+            ? NSColor.controlAccentColor
+            : mediaBaseTitleColor)
+    }
+
     override func layout() {
         super.layout()
         let h = bounds.height
@@ -1031,14 +1265,33 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         let dateWidth: CGFloat = 92
         let assigneeWidth: CGFloat = 132
         let priorityWidth: CGFloat = 112
+        let mediaWidth: CGFloat = 92
         let moreX = bounds.width - edge - moreWidth
         let dateX = moreX - gap - dateWidth
         let assigneeX = dateX - gap - assigneeWidth
         let priorityX = assigneeX - gap - priorityWidth
+        let mediaX = priorityX - gap - mediaWidth
         let titleX = edge + 10 + 12
+        // Extra breathing room specifically between the task title and the
+        // ANEXAR capsule (+50% over the standard column gap), so the title
+        // never crowds the button.
+        let titleTrailingGap = gap * 1.5
 
         title.frame = NSRect(x: titleX, y: centeredY(for: title, at: centerY),
-                             width: max(0, priorityX - gap - titleX), height: fittedHeight(title))
+                             width: max(0, mediaX - titleTrailingGap - titleX), height: fittedHeight(title))
+
+        media.frame = NSRect(x: mediaX, y: centerY - 13,
+                             width: mediaWidth, height: 26)
+        mediaTrackLayer.frame = media.frame
+        mediaTrackLayer.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: media.frame.size),
+                                            cornerWidth: 13, cornerHeight: 13,
+                                            transform: nil)
+        mediaProgressLayer.bounds = CGRect(origin: .zero, size: media.frame.size)
+        mediaProgressLayer.anchorPoint = CGPoint(x: 0, y: 0.5)
+        mediaProgressLayer.position = CGPoint(x: media.frame.minX, y: media.frame.midY)
+        mediaBadge.frame = NSRect(x: media.frame.maxX - 12,
+                                  y: media.frame.minY - 6,
+                                  width: 20, height: 16)
 
         priority.sizeToFit()
         let priorityH = priority.frame.height

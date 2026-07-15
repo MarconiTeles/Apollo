@@ -25,9 +25,12 @@ final class AssignedCommentsTests: XCTestCase {
         XCTAssertFalse(record.mentions(username: "Joana"))
     }
 
-    func testPopupRadiusIsExactlyThirtyFivePercentRounder() {
-        XCTAssertEqual(Editorial.popupRadius(20), 27, accuracy: 0.0001)
-        XCTAssertEqual(Editorial.popupRadius(6), 8.1, accuracy: 0.0001)
+    func testPopupRadiusScaleMatchesDesignContract() {
+        // Popups were bumped a further +50% over the original +35% pass:
+        // 1.35 → 2.025. Callers still pass their pre-redesign radius.
+        XCTAssertEqual(Editorial.popupRadiusScale, 2.025, accuracy: 0.0001)
+        XCTAssertEqual(Editorial.popupRadius(20), 40.5, accuracy: 0.0001)
+        XCTAssertEqual(Editorial.popupRadius(6), 12.15, accuracy: 0.0001)
     }
 
     func testAssignedCommentsPaginationIsBoundedToThirtyAndPreservesOrder() {

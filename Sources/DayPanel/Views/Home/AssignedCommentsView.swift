@@ -100,54 +100,26 @@ struct AssignedCommentsView: View {
         }
     }
 
+    /// Single-row identity band: title, scope tabs, live scan progress and
+    /// refresh all share one line so the header stays two rows tall (this row
+    /// + the filter toolbar) instead of the previous four.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 17) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("COMENTÁRIOS · CLICKUP")
-                        .font(Editorial.sans(10.5, .semibold))
-                        .tracking(1.5)
-                        .foregroundStyle(Editorial.inkMute)
-                    Text("Comentários atribuídos")
-                        .font(Editorial.sans(26, .semibold))
-                        .tracking(-0.7)
-                        .foregroundStyle(Editorial.ink)
-                }
-                Spacer()
-                if appState.assignedCommentsLoading
-                    || appState.assignedCommentsScannedTasks < appState.assignedCommentsTotalTasks {
-                    HStack(spacing: 8) {
-                        if appState.assignedCommentsLoading {
-                            ProgressView().controlSize(.small)
-                        }
-                        Text("\(appState.assignedCommentsScannedTasks)/\(appState.assignedCommentsTotalTasks)")
-                            .font(Editorial.sans(10.5, .medium))
-                            .monospacedDigit()
-                            .foregroundStyle(Editorial.inkMute)
-                    }
-                    .help("Tarefas verificadas em lotes de 30")
-                }
-                Button {
-                    Task { await appState.refreshAssignedComments() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .frame(width: 30, height: 30)
-                }
-                .buttonStyle(.plain)
-                .focusEffectDisabled()
-                .liquidGlassCapsule(tint: Editorial.accent,
-                                    tintOpacity: 0.05)
-                .help("Atualizar comentários")
-            }
+        HStack(spacing: 12) {
+            Text("Comentários atribuídos")
+                .font(Editorial.sans(21, .semibold))
+                .tracking(-0.5)
+                .foregroundStyle(Editorial.ink)
+                .lineLimit(1)
+                .layoutPriority(1)
 
             HStack(spacing: 6) {
                 ForEach(Tab.allCases, id: \.self) { option in
                     Button { tab = option } label: {
                         Text(option.rawValue)
-                            .font(Editorial.sans(12.5, tab == option ? .semibold : .medium))
+                            .font(Editorial.sans(12, tab == option ? .semibold : .medium))
                             .foregroundStyle(tab == option ? Editorial.ink : Editorial.inkMute)
                             .padding(.horizontal, 14)
-                            .frame(height: 32)
+                            .frame(height: 30)
                     }
                     .buttonStyle(.plain)
                     .liquidGlassSelected(tab == option,
@@ -156,10 +128,37 @@ struct AssignedCommentsView: View {
                                          tintOpacity: 0.07)
                 }
             }
+            .padding(.leading, 6)
+
+            Spacer(minLength: 12)
+
+            if appState.assignedCommentsLoading
+                || appState.assignedCommentsScannedTasks < appState.assignedCommentsTotalTasks {
+                HStack(spacing: 8) {
+                    if appState.assignedCommentsLoading {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text("\(appState.assignedCommentsScannedTasks)/\(appState.assignedCommentsTotalTasks)")
+                        .font(Editorial.sans(10.5, .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(Editorial.inkMute)
+                }
+                .help("Tarefas verificadas em lotes de 30")
+            }
+            Button {
+                Task { await appState.refreshAssignedComments() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .liquidGlassCapsule(tint: Editorial.accent, tintOpacity: 0.05)
+            .help("Atualizar comentários")
         }
         .padding(.horizontal, 28)
-        .padding(.top, 22)
-        .padding(.bottom, 14)
+        .padding(.top, 16)
+        .padding(.bottom, 11)
     }
 
     private var toolbar: some View {
@@ -181,7 +180,7 @@ struct AssignedCommentsView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize(horizontal: true, vertical: false)
-            .frame(height: 32)
+            .frame(height: 34)
             .modifier(AssignedCommentsToolbarCapsule())
 
             Button { includeResolved.toggle() } label: {
@@ -193,7 +192,7 @@ struct AssignedCommentsView: View {
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
-            .frame(height: 32)
+            .frame(height: 34)
             .modifier(AssignedCommentsToolbarCapsule())
 
             Menu {
@@ -211,7 +210,7 @@ struct AssignedCommentsView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize(horizontal: true, vertical: false)
-            .frame(height: 32)
+            .frame(height: 34)
             .modifier(AssignedCommentsToolbarCapsule())
 
             Spacer()
@@ -224,12 +223,12 @@ struct AssignedCommentsView: View {
                     .font(Editorial.sans(12))
                     .frame(width: 210)
             }
-            .padding(.horizontal, 12)
-            .frame(height: 32)
+            .padding(.horizontal, 15)
+            .frame(height: 34)
             .liquidGlassCapsule(tint: Editorial.accent, tintOpacity: 0.035)
         }
         .padding(.horizontal, 28)
-        .padding(.vertical, 12)
+        .padding(.vertical, 9)
     }
 
     /// One geometry for every toolbar action. Menu controls have a smaller
@@ -249,8 +248,8 @@ struct AssignedCommentsView: View {
                 .lineLimit(1)
                 .foregroundStyle(Editorial.ink)
         }
-        .padding(.horizontal, 12)
-        .frame(height: 32)
+        .padding(.horizontal, 16)
+        .frame(height: 34)
         .contentShape(Capsule(style: .continuous))
     }
 
@@ -261,23 +260,24 @@ struct AssignedCommentsView: View {
                   title: "Conecte o ClickUp",
                   caption: "Entre na sua conta para carregar comentários atribuídos.")
         } else if filtered.isEmpty && appState.assignedCommentsLoading {
-            empty(icon: "text.bubble",
-                  title: "Buscando comentários",
-                  caption: "Os resultados aparecem progressivamente durante a varredura.")
-        } else if filtered.isEmpty {
+            // Actively scanning with nothing yet — show a breathing skeleton,
+            // never the "Tudo em ordem" empty state (which read as "you have
+            // zero comments" while the index was still being built).
+            skeletonList
+        } else if filtered.isEmpty && appState.assignedCommentsHasMore {
+            // Auto-scan window finished without a match, but tasks remain — be
+            // honest that the search isn't exhausted instead of claiming order.
             VStack(spacing: 14) {
-                empty(icon: appState.assignedCommentsHasMore
-                        ? "text.bubble" : "checkmark.bubble",
-                      title: appState.assignedCommentsHasMore
-                        ? "Nenhum comentário neste lote" : "Tudo em ordem",
-                      caption: appState.assignedCommentsHasMore
-                        ? "Verifique mais 30 tarefas quando quiser continuar."
-                        : "Nenhum comentário corresponde aos filtros atuais.")
-                if appState.assignedCommentsHasMore {
-                    loadMoreButton
-                        .padding(.bottom, 80)
-                }
+                empty(icon: "text.magnifyingglass",
+                      title: "Nada neste intervalo ainda",
+                      caption: "Ainda há tarefas para verificar. Continue a busca quando quiser.")
+                loadMoreButton
+                    .padding(.bottom, 80)
             }
+        } else if filtered.isEmpty {
+            empty(icon: "checkmark.bubble",
+                  title: "Tudo em ordem",
+                  caption: "Nenhum comentário corresponde aos filtros atuais.")
         } else {
             ScrollView {
                 LazyVStack(spacing: 12) {
@@ -308,6 +308,20 @@ struct AssignedCommentsView: View {
             }
             .scrollIndicators(.never)
         }
+    }
+
+    /// Breathing placeholder cards shown while the index is being built, so
+    /// the surface reads as "loading" rather than "empty".
+    private var skeletonList: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                ForEach(0..<5, id: \.self) { _ in CommentSkeletonCard() }
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 4)
+        }
+        .scrollIndicators(.never)
+        .allowsHitTesting(false)
     }
 
     private var loadMoreButton: some View {
@@ -378,6 +392,41 @@ private struct AssignedCommentsToolbarCapsule: ViewModifier {
     }
 }
 
+/// One loading placeholder that mirrors an `AssignedCommentCard`'s layout and
+/// breathes so the wait reads as progress, not emptiness.
+private struct CommentSkeletonCard: View {
+    @State private var dim = false
+    private var bar: Color { Editorial.ink.opacity(0.09) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Circle().fill(bar).frame(width: 8, height: 8)
+                RoundedRectangle(cornerRadius: 4).fill(bar).frame(width: 150, height: 11)
+                Spacer(minLength: 12)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(bar).frame(width: 88, height: 22)
+            }
+            HStack(alignment: .top, spacing: 12) {
+                Circle().fill(bar).frame(width: 34, height: 34)
+                VStack(alignment: .leading, spacing: 9) {
+                    RoundedRectangle(cornerRadius: 4).fill(bar).frame(width: 120, height: 10)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(bar).frame(maxWidth: .infinity).frame(height: 34)
+                }
+            }
+        }
+        .padding(.horizontal, 17)
+        .padding(.vertical, 14)
+        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Editorial.card))
+        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
+            .strokeBorder(Editorial.rule.opacity(0.5), lineWidth: 0.7))
+        .opacity(dim ? 0.5 : 1)
+        .animation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: dim)
+        .onAppear { dim = true }
+    }
+}
+
 private struct AssignedCommentCard: View {
     @EnvironmentObject private var appState: AppState
     let record: AssignedCommentRecord
@@ -388,7 +437,6 @@ private struct AssignedCommentCard: View {
     let onToggleSaved: () -> Void
     let onRemind: (Date) -> Void
 
-    @State private var hovering = false
     @State private var showThread = false
     @State private var replies: [CUComment] = []
     @State private var draft = ""
@@ -396,7 +444,15 @@ private struct AssignedCommentCard: View {
 
     private var tint: Color { Color(statusHex: record.task.statusDisplayHex) }
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
+        RoundedRectangle(cornerRadius: 11, style: .continuous)
+    }
+
+    // Review context so the shared CommentBodyView can render REVIEW / "Ver
+    // review" affordances exactly like the task Activity tab.
+    private var reviewActorId: Int? { appState.clickUpAuthService.userId }
+    private var reviewActorName: String {
+        let id = appState.clickUpAuthService.userId
+        return appState.availableMembers.first { $0.id == id }?.username ?? "Revisor"
     }
 
     var body: some View {
@@ -405,20 +461,15 @@ private struct AssignedCommentCard: View {
             commentBody
             if showThread { thread }
         }
-        .liquidGlass(in: shape, tint: tint,
-                     tintOpacity: hovering ? 0.075 : 0.035,
-                     interactive: true)
+        // Solid card — no Liquid Glass material. A flat `page` surface with a
+        // hairline and a soft neutral shadow; status colour stays in the dot.
+        .background(shape.fill(Editorial.page))
+        .clipShape(shape)
         .overlay {
-            shape.strokeBorder(Color.white.opacity(0.16), lineWidth: 0.6)
+            shape.strokeBorder(Editorial.rule.opacity(0.7), lineWidth: 0.7)
                 .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(hovering ? 0.18 : 0.05),
-                radius: hovering ? 7 : 2.5, y: hovering ? 3.5 : 1)
-        .scaleEffect(x: hovering ? 1.008 : 1,
-                     y: hovering ? 1.025 : 1)
-        .offset(y: hovering ? -1 : 0)
-        .animation(.spring(response: 0.30, dampingFraction: 0.74), value: hovering)
-        .scrollAwareOnHover { hovering = $0 && !appState.anyPopupOpen }
+        .shadow(color: .black.opacity(0.05), radius: 2.5, y: 1)
         .contextMenu { contextMenu }
         .accessibilityElement(children: .contain)
     }
@@ -507,10 +558,18 @@ private struct AssignedCommentCard: View {
                             .foregroundStyle(Editorial.inkMute)
                     }
                 }
-                Text(record.comment.text)
-                    .font(Editorial.sans(12.5))
-                    .foregroundStyle(Editorial.ink)
-                    .textSelection(.enabled)
+                // Full renderer (same as the task Activity tab): URLs become
+                // typed attachment cards, the REVISAR/Ver-review link becomes a
+                // clickable button, @mentions highlight — never raw markdown.
+                CommentBodyView(text: record.comment.text,
+                                attachments: record.comment.attachments,
+                                mentionUsernames: appState.availableMembers.map(\.username),
+                                reviewTaskId: record.task.id,
+                                reviewListId: record.task.listId,
+                                reviewActorId: reviewActorId,
+                                reviewActorName: reviewActorName,
+                                reviewCommentId: record.comment.id)
+                    .equatable()
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 7) {
@@ -586,9 +645,15 @@ private struct AssignedCommentCard: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(reply.userName ?? "Pessoa")
                             .font(Editorial.sans(10.5, .semibold))
-                        Text(reply.text)
-                            .font(Editorial.sans(11.5))
-                            .foregroundStyle(Editorial.ink)
+                        CommentBodyView(text: reply.text,
+                                        attachments: reply.attachments,
+                                        mentionUsernames: appState.availableMembers.map(\.username),
+                                        reviewTaskId: record.task.id,
+                                        reviewListId: record.task.listId,
+                                        reviewActorId: reviewActorId,
+                                        reviewActorName: reviewActorName,
+                                        reviewCommentId: reply.id)
+                            .equatable()
                     }
                 }
             }
