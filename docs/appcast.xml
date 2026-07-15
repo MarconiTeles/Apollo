@@ -4,6 +4,27 @@
     <title>Apollo updates</title>
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
+<item>
+      <title>Apollo 1.9.0</title>
+      <pubDate>Wed, 15 Jul 2026 18:04:45 +0000</pubDate>
+      <sparkle:version>88</sparkle:version>
+      <sparkle:shortVersionString>1.9.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<h3>Apollo 1.9</h3>
+<ul>
+<li><b>Transferência de mídia</b> — anexe, substitua e agora <b>corte</b> clipes (trimmer estilo QuickTime) direto no card da tarefa.</li>
+<li><b>Painel de anexar</b> — mostra o que já está na tarefa (hooks, bodies e cada vídeo resultante), separado em Combinações e Diretos, com contagem correta; os vídeos a enviar ficam fixos e sempre visíveis.</li>
+<li><b>Aba de Anexos</b> — mesma organização (Combinações / Diretos), carregamento com placeholder e botão Substituir.</li>
+<li><b>Comentários</b> — anexos e links clicáveis, resposta inline; corrigido o comentário-cópia com “Ver review” que surgia sem revisão feita.</li>
+<li><b>Progresso real</b> — o anel de envio acompanha o upload em tempo real.</li>
+<li><b>Estabilidade</b> — correções de travamento e da integração com o ClickUp.</li>
+</ul>]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.9.0/Apollo-1.9.0.zip"
+        sparkle:edSignature="DTPfp3JVDg7eBT5DLBoOItqe7JoRJ+Vp2Ph+NI+OQZHtM6nWaRerFoNU8mEsRjiXpftahfpxDV6ge6gamiX0BQ=="
+        length="44350715"
+        type="application/octet-stream" />
+    </item>
     <item>
       <title>Apollo 1.8.15</title>
       <pubDate>Wed, 15 Jul 2026 00:37:06 +0000</pubDate>
