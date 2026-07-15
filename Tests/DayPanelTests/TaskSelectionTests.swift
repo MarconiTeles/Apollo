@@ -65,6 +65,15 @@ final class TaskSelectionTests: XCTestCase {
         )
     }
 
+    func testTaskDragActivatesOnlyAfterFortyMilliseconds() {
+        XCTAssertFalse(TaskDragActivation.isReady(mouseDownTimestamp: 10,
+                                                   currentTimestamp: 10.039))
+        XCTAssertTrue(TaskDragActivation.isReady(mouseDownTimestamp: 10,
+                                                  currentTimestamp: 10.040))
+        XCTAssertTrue(TaskDragActivation.isReady(mouseDownTimestamp: 10,
+                                                  currentTimestamp: 10.100))
+    }
+
     func testHomeInboxExcludesConnectionAndSyncHealthEntries() {
         for title in ["Sem conexão", "De volta ao online", "Falha na sincronização"] {
             let notification = AppNotification(kind: .warning, title: title)

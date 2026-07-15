@@ -32,6 +32,18 @@ struct MyTasksAppKitSection: Equatable, Identifiable {
     }
 }
 
+/// Keeps a normal click distinct from a drag without making the list feel
+/// sluggish. AppKit already supplies the movement threshold; this adds only
+/// the requested temporal gate before a dragging session may begin.
+enum TaskDragActivation {
+    static let delay: TimeInterval = 0.04
+
+    static func isReady(mouseDownTimestamp: TimeInterval,
+                        currentTimestamp: TimeInterval) -> Bool {
+        currentTimestamp >= mouseDownTimestamp + delay
+    }
+}
+
 /// Pure-AppKit task viewport. Both headers and rows are recycled by
 /// NSCollectionView; there is no NSHostingView per task during scrolling.
 struct MyTasksAppKitList: NSViewRepresentable {
@@ -600,6 +612,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     private var bulkSelected = false
     private var pressed = false
     private var dragStarted = false
+    private var mouseDownTimestamp: TimeInterval?
     private var statusTint: NSColor = .systemGray
 
     var onActivate: (() -> Void)?
@@ -888,11 +901,16 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         guard appState?.anyPopupOpen != true else { return }
         pressed = true
         dragStarted = false
+        mouseDownTimestamp = event.timestamp
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard appState?.anyPopupOpen != true,
-              !dragStarted, let payload = onBeginDrag?(), !payload.isEmpty else { return }
+              !dragStarted,
+              let mouseDownTimestamp,
+              TaskDragActivation.isReady(mouseDownTimestamp: mouseDownTimestamp,
+                                         currentTimestamp: event.timestamp),
+              let payload = onBeginDrag?(), !payload.isEmpty else { return }
         dragStarted = true
         pressed = false
 
@@ -952,7 +970,10 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     }
 
     override func mouseUp(with event: NSEvent) {
-        defer { pressed = false }
+        defer {
+            pressed = false
+            mouseDownTimestamp = nil
+        }
         guard appState?.anyPopupOpen != true else { return }
         guard !dragStarted else { dragStarted = false; return }
         guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
@@ -968,6 +989,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
                          endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
         dragStarted = false
+        mouseDownTimestamp = nil
         onEndDrag?(operation != [])
     }
 
