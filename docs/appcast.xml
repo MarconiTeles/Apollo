@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.8.14</title>
-      <pubDate>Tue, 14 Jul 2026 21:10:03 +0000</pubDate>
-      <sparkle:version>84</sparkle:version>
-      <sparkle:shortVersionString>1.8.14</sparkle:shortVersionString>
+      <title>Apollo 1.8.15</title>
+      <pubDate>Wed, 15 Jul 2026 00:37:06 +0000</pubDate>
+      <sparkle:version>85</sparkle:version>
+      <sparkle:shortVersionString>1.8.15</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Novo design nativo com Liquid Glass mais leve; Inbox e notificações otimizados; comentários atribuídos; seleção e drag and drop mais previsíveis; animações de tarefas restauradas; progresso real de uploads; novo ícone do Apollo; correções gerais de desempenho, sombras e interação.]]></description>
+      <description><![CDATA[Adiciona um atraso de 40 ms antes de ativar o drag de tarefas, separando com mais precisão o clique normal do arraste.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.14/Apollo-1.8.14.zip"
-        sparkle:edSignature="/Fjv4wxNCQoUY6PoJ6kHPQcj2ltF467npaGCGCRvclJ9k2ut3stvavGXLdfs4oqIbA3IJb3ptWLoXYGTlsewDA=="
-        length="43057603"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.15/Apollo-1.8.15.zip"
+        sparkle:edSignature="7QMrDW1GcMbiX6q5yxiO8xbrgVvAzMMyCk6rrvVa+VhmsPu8jCtacybI8OZ6gGKB7oKgKAdhv1Jt/3yWJ7woCA=="
+        length="43057834"
         type="application/octet-stream" />
     </item>
   </channel>
