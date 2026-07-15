@@ -189,9 +189,28 @@ struct TaskMediaFlowSheet: View {
 
     private var classificationBody: some View {
         ScrollView {
-            LazyVStack(spacing: 8) {
-                ForEach($selections) { $selection in
-                    classificationRow(selection: $selection)
+            LazyVStack(alignment: .leading, spacing: 16) {
+                // What's already attached to this task — so the user knows the
+                // existing HOOK/BODY inventory and doesn't re-send a duplicate
+                // (every new hook/body multiplies into more combinations).
+                if hasExistingInventory {
+                    existingInventorySection
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    if hasExistingInventory {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Folio("ADICIONANDO AGORA")
+                            Spacer(minLength: 8)
+                            if projectedCount > 0 {
+                                Text("+\(projectedCount) vídeo\(projectedCount == 1 ? "" : "s")")
+                                    .font(Editorial.sans(10, .semibold))
+                                    .foregroundStyle(Editorial.accent)
+                            }
+                        }
+                    }
+                    ForEach($selections) { $selection in
+                        classificationRow(selection: $selection)
+                    }
                 }
             }
             .padding(24)
@@ -200,20 +219,22 @@ struct TaskMediaFlowSheet: View {
 
     private func classificationRow(selection: Binding<TaskMediaSelection>) -> some View {
         let classified = selection.wrappedValue.role != nil
+        let dup = looksDuplicate(selection.wrappedValue)
         return HStack(spacing: 14) {
-            Image(systemName: "film")
+            Image(systemName: dup ? "exclamationmark.triangle.fill" : "film")
                 .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(Editorial.accent)
+                .foregroundStyle(dup ? Self.dupAmber : Editorial.accent)
                 .frame(width: 34, height: 34)
-                .background(Circle().fill(Editorial.accentSoft))
+                .background(Circle().fill(dup ? Self.dupAmber.opacity(0.14) : Editorial.accentSoft))
             VStack(alignment: .leading, spacing: 3) {
                 Text(selection.wrappedValue.fileURL.lastPathComponent)
                     .font(Editorial.sans(12.5, .medium))
                     .foregroundStyle(Editorial.ink)
                     .lineLimit(1)
-                Text(classified ? "Pronto para compor" : "Confirme o tipo do arquivo")
+                Text(dup ? "Já existe um arquivo com esse nome aqui"
+                         : (classified ? "Pronto para compor" : "Confirme o tipo do arquivo"))
                     .font(Editorial.sans(10.5))
-                    .foregroundStyle(classified ? Editorial.accent : Editorial.inkMute)
+                    .foregroundStyle(dup ? Self.dupAmber : (classified ? Editorial.accent : Editorial.inkMute))
             }
             Spacer(minLength: 12)
             Picker("Tipo", selection: selection.role) {
@@ -237,6 +258,115 @@ struct TaskMediaFlowSheet: View {
                 .strokeBorder(classified ? Editorial.accent.opacity(0.45) : Editorial.rule,
                               lineWidth: 1)
         )
+    }
+
+    // MARK: Existing inventory (classify stage)
+
+    /// Muted amber for the "possible duplicate" hint — the theme has no warning
+    /// token, and the system accent is reserved for affirmative actions.
+    private static let dupAmber = Color(hex: "#C0872B")
+
+    private var catalogAssets: [TaskMediaAsset] { store.catalog(for: request.task.id).assets }
+
+    private var hasExistingInventory: Bool { !catalogAssets.isEmpty }
+
+    private func inventoryAssets(_ role: TaskMediaRole) -> [TaskMediaAsset] {
+        catalogAssets.filter { $0.role == role }
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    /// Lowercased, diacritic-insensitive display names already in the catalog,
+    /// used to flag a freshly picked file that looks like a repeat by name.
+    private var existingNameKeys: Set<String> {
+        Set(catalogAssets.map(\.displayName).map(Self.nameKey))
+    }
+
+    private static func nameKey(_ raw: String) -> String {
+        raw.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current).lowercased()
+    }
+
+    private func looksDuplicate(_ selection: TaskMediaSelection) -> Bool {
+        existingNameKeys.contains(Self.nameKey(selection.fileURL.deletingPathExtension().lastPathComponent))
+    }
+
+    /// At-a-glance summary of what the existing sources already produce.
+    private var inventoryCombinationHint: String? {
+        let hooks = inventoryAssets(.hook).count
+        let bodies = inventoryAssets(.body).count
+        let videos = inventoryAssets(.video).count
+        var parts: [String] = []
+        let combos = hooks * bodies
+        if combos > 0 { parts.append("\(combos) combinação\(combos == 1 ? "" : "ões")") }
+        if videos > 0 { parts.append("\(videos) vídeo\(videos == 1 ? "" : "s") completo\(videos == 1 ? "" : "s")") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private var existingInventorySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Folio("JÁ NESTA TAREFA")
+                Spacer(minLength: 8)
+                if let hint = inventoryCombinationHint {
+                    Text(hint)
+                        .font(Editorial.sans(10, .medium))
+                        .foregroundStyle(Editorial.inkMute)
+                        .lineLimit(1)
+                }
+            }
+            ForEach(TaskMediaRole.allCases) { role in
+                let assets = inventoryAssets(role)
+                if !assets.isEmpty {
+                    inventoryRoleRow(role: role, assets: assets)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Editorial.popupRadius(7), style: .continuous)
+            .fill(Editorial.card))
+        .overlay(RoundedRectangle(cornerRadius: Editorial.popupRadius(7), style: .continuous)
+            .strokeBorder(Editorial.rule))
+    }
+
+    private func inventoryRoleRow(role: TaskMediaRole, assets: [TaskMediaAsset]) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(role.label) ·\(assets.count)")
+                .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                .tracking(0.3)
+                .foregroundStyle(Editorial.accent)
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(Capsule().fill(Editorial.accentSoft))
+                .fixedSize()
+                .padding(.top, 1)
+            FlowLayout(spacing: 6, lineSpacing: 6) {
+                ForEach(assets) { asset in
+                    inventoryChip(asset)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func inventoryChip(_ asset: TaskMediaAsset) -> some View {
+        let revs = asset.revisions.count
+        return HStack(spacing: 5) {
+            Image(systemName: asset.role == .hook ? "bolt.fill"
+                            : asset.role == .body ? "rectangle.stack.fill" : "play.rectangle.fill")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Editorial.inkMute)
+            Text(asset.displayName)
+                .font(Editorial.sans(11, .medium))
+                .foregroundStyle(Editorial.ink)
+                .lineLimit(1)
+            if revs > 1 {
+                Text("R\(asset.activeRevision?.number ?? revs)")
+                    .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(Editorial.accent)
+            }
+        }
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .background(Capsule().fill(Editorial.paper))
+        .overlay(Capsule().strokeBorder(Editorial.rule))
     }
 
     private var replacementPicker: some View {
