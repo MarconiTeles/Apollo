@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.8.15</title>
-      <pubDate>Wed, 15 Jul 2026 00:37:06 +0000</pubDate>
-      <sparkle:version>85</sparkle:version>
-      <sparkle:shortVersionString>1.8.15</sparkle:shortVersionString>
+      <title>Apollo 1.9.2</title>
+      <pubDate>Mon, 20 Jul 2026 22:43:02 +0000</pubDate>
+      <sparkle:version>90</sparkle:version>
+      <sparkle:shortVersionString>1.9.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Adiciona um atraso de 40 ms antes de ativar o drag de tarefas, separando com mais precisão o clique normal do arraste.]]></description>
+      <description><![CDATA[Review por versão (fim do VER REVIEW fantasma e do aprovado sem revisor), backend de reviews mais rápido e estável, envio de vídeos com progresso real (JUNTANDO/ENVIANDO), correção de crash na lista de tarefas, evento em destaque na agenda da Home e refinamentos visuais.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.8.15/Apollo-1.8.15.zip"
-        sparkle:edSignature="7QMrDW1GcMbiX6q5yxiO8xbrgVvAzMMyCk6rrvVa+VhmsPu8jCtacybI8OZ6gGKB7oKgKAdhv1Jt/3yWJ7woCA=="
-        length="43057834"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.9.2/Apollo-1.9.2.zip"
+        sparkle:edSignature="ZQeA6BwoZETBgL1ljTBhYuC9SNwzTvmzVZPGSoFA4twbh2fVHDxiWBbvePy3hIsEk48lOtyjfctrZ0Wu2bslCg=="
+        length="46173565"
         type="application/octet-stream" />
     </item>
   </channel>
