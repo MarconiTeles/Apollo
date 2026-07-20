@@ -21,6 +21,17 @@ struct TimelineView: View {
     /// rows can still travel underneath the overlay during a scroll.
     var topContentInset: CGFloat = 0
 
+    /// Próximo evento a partir de AGORA, independente do dia — mesma seleção
+    /// do antigo hero card do header (escopar só a hoje fazia o destaque
+    /// sumir à meia-noite mesmo com reunião marcada para amanhã).
+    private var nextUpcomingEvent: CalendarEvent? {
+        let now = Date()
+        return appState.events
+            .filter { $0.endDate > now }
+            .sorted { $0.startDate < $1.startDate }
+            .first
+    }
+
     /// Visible date window. Past entries are dropped on the
     /// forward-only variant.
     private var dates: [Date] {
@@ -128,6 +139,19 @@ struct TimelineView: View {
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
 
+                // Evento em destaque (Hoje): o hero card das versões antigas,
+                // agora contido na largura da coluna da agenda em vez de
+                // atravessar as duas listas. Rola junto com o conteúdo.
+                if forwardOnly, let next = nextUpcomingEvent {
+                    NextEventHighlightCard(appState: appState, event: next)
+                        .id("apollo-agenda-next-event")
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        // 70pt entre o painel de destaque e o primeiro dia.
+                        .listRowInsets(EdgeInsets(top: 0, leading: 26,
+                                                  bottom: 70, trailing: 32))
+                }
+
                 ForEach(dates, id: \.self) { date in
                     let dayStart = Calendar.current.startOfDay(for: date)
                     AgendaDaySection(
@@ -149,6 +173,9 @@ struct TimelineView: View {
             .listStyle(.plain)
             .id(forwardListResetToken)
             .scrollContentBackground(.hidden)
+            // Sem barra de rolagem na agenda da Home (pedido de 20/jul) —
+            // o scroll segue funcionando por trackpad/wheel.
+            .scrollIndicators(.hidden)
             // Match the previous `.padding(.top, 24)` /
             // `.padding(.bottom, 60)`. `contentMargins` adds
             // the space INSIDE the scroll area, so it scrolls

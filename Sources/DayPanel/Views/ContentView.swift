@@ -1591,7 +1591,10 @@ struct ContentView: View {
         let chromeHeight: CGFloat = 99
         // The SwiftUI Agenda list begins at the window's top and therefore
         // needs the full chrome reserve plus a comfortable resting gap.
-        let agendaRestingReserve = chromeHeight + 76
+        // A primeira linha da List já reserva 28pt fixos; o -18 aqui fecha o
+        // respiro visível entre o chrome e o evento em destaque em 10pt
+        // (medida pedida em 20/jul).
+        let agendaRestingReserve = chromeHeight - 18
         // InboxAppKitList is already laid out in the post-toolbar content
         // region. Giving it the complete chrome height again doubled the
         // reserve and left a giant empty slab above the first notification.
