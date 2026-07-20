@@ -1043,7 +1043,12 @@ final class AppState: ObservableObject {
 
     // MARK: - Init
 
-    init() {
+    /// `previewMode` creates the exact same observable model used by the app,
+    /// but suppresses every launch side effect that would be inappropriate in
+    /// Xcode's Canvas (notification prompts, persisted notification loading,
+    /// dock badges and test upload queues). Production callers keep using the
+    /// zero-argument initializer and therefore retain the existing behaviour.
+    init(previewMode: Bool = false) {
         appearanceMode      = AppearanceMode(
             rawValue: UserDefaults.standard.string(forKey: "dp_appearanceMode") ?? ""
         ) ?? .system   // default: follow macOS (overridable in Settings)
@@ -1058,47 +1063,53 @@ final class AppState: ObservableObject {
             guard let self else { return [] }
             return await self.googlePeople.search(query: q)
         }
-        // Restore the comment-seen ledger so a comment posted
-        // during the time Apollo was closed doesn't fire a
-        // duplicate notification on relaunch (the previous
-        // session's latest-seen id was persisted and any new
-        // comment is correctly compared against it).
-        if let stored = UserDefaults.standard.dictionary(forKey: Self.commentSeenKey)
-            as? [String: String] {
-            lastSeenCommentByTask = stored
-        }
-        if let storedReplies = UserDefaults.standard.dictionary(forKey: Self.replyCountKey)
-            as? [String: Int] {
-            lastReplyCountByComment = storedReplies
-        }
-        // Load per-status DONE-action mapping (JSON {currentStatus: targetStatus}).
-        if let data = UserDefaults.standard.data(forKey: "dp_doneActionByStatus"),
-           let map  = try? JSONDecoder().decode([String: String].self, from: data) {
-            doneActionByStatus = map
-        }
-        // Migrate legacy single-value setting (`dp_doneActionStatus`) into
-        // the new per-status map so existing users don't lose their pick.
-        else if let legacy = UserDefaults.standard.string(forKey: "dp_doneActionStatus") {
-            doneActionByStatus = ["__default__": legacy]
-            UserDefaults.standard.removeObject(forKey: "dp_doneActionStatus")
+        if !previewMode {
+            // Restore the comment-seen ledger so a comment posted
+            // during the time Apollo was closed doesn't fire a
+            // duplicate notification on relaunch (the previous
+            // session's latest-seen id was persisted and any new
+            // comment is correctly compared against it).
+            if let stored = UserDefaults.standard.dictionary(forKey: Self.commentSeenKey)
+                as? [String: String] {
+                lastSeenCommentByTask = stored
+            }
+            if let storedReplies = UserDefaults.standard.dictionary(forKey: Self.replyCountKey)
+                as? [String: Int] {
+                lastReplyCountByComment = storedReplies
+            }
+            // Load per-status DONE-action mapping (JSON {currentStatus: targetStatus}).
+            if let data = UserDefaults.standard.data(forKey: "dp_doneActionByStatus"),
+               let map  = try? JSONDecoder().decode([String: String].self, from: data) {
+                doneActionByStatus = map
+            }
+            // Migrate legacy single-value setting (`dp_doneActionStatus`) into
+            // the new per-status map so existing users don't lose their pick.
+            else if let legacy = UserDefaults.standard.string(forKey: "dp_doneActionStatus") {
+                doneActionByStatus = ["__default__": legacy]
+                UserDefaults.standard.removeObject(forKey: "dp_doneActionStatus")
+            }
         }
         // Native notifications default to ON — `UserDefaults.bool` would
         // return `false` if the key was never set, which made the
         // feature silently opt-in. Detect "never set" explicitly so
         // first-launch users get macOS banners as soon as macOS grants
         // permission.
-        if let stored = UserDefaults.standard.object(forKey: "dp_nativeNotifs") as? Bool {
+        if previewMode {
+            nativeNotificationsEnabled = false
+        } else if let stored = UserDefaults.standard.object(forKey: "dp_nativeNotifs") as? Bool {
             nativeNotificationsEnabled = stored
         } else {
             nativeNotificationsEnabled = true
             UserDefaults.standard.set(true, forKey: "dp_nativeNotifs")
         }
-        loadNotifications()
+        if !previewMode {
+            loadNotifications()
+        }
         // Deterministic visual-validation seam. It never exists in release
         // behaviour unless the explicit local QA default is enabled. It
         // performs no network request; QA can inspect the real Notifications
         // and floating-pill layouts without publishing synthetic activity.
-        if UserDefaults.standard.bool(forKey: "dp_uiTestUploadQueue") {
+        if !previewMode && UserDefaults.standard.bool(forKey: "dp_uiTestUploadQueue") {
             uploadActivities = [
                 UploadActivity(id: UUID(),
                                fileName: "Roteiro_final.mov",
@@ -1120,14 +1131,18 @@ final class AppState: ObservableObject {
                                state: .failed),
             ]
         }
-        updateDockBadge()
+        if !previewMode {
+            updateDockBadge()
+        }
 
         // Request macOS notification authorization eagerly when the
         // user hasn't been asked yet. Silent if already authorized
         // or already denied — denial flips our preference off so
         // we stop trying.
-        Task { @MainActor in
-            await self.bootstrapNativeNotificationAuthorization()
+        if !previewMode {
+            Task { @MainActor in
+                await self.bootstrapNativeNotificationAuthorization()
+            }
         }
     }
 
@@ -1267,14 +1282,33 @@ final class AppState: ObservableObject {
                 messageHighlights: [AppNotification.Highlight]? = nil,
                 targetKind: AppNotification.TargetKind? = nil,
                 targetId:   String? = nil) {
+        let resolvedTargetId: String? = {
+            guard targetKind == .review, let targetId else { return targetId }
+            return TaskMediaTransferStore
+                .canonicalReviewIdentity(forReviewTarget: targetId)?.reviewId ?? targetId
+        }()
         let n = AppNotification(kind: kind,
                                 title: title,
                                 subtitle: subtitle,
                                 message: message,
                                 messageHighlights: messageHighlights,
                                 targetKind: targetKind,
-                                targetId:   targetId)
+                                targetId:   resolvedTargetId)
         Task { @MainActor in
+            // Review notifications describe one current actionable review,
+            // not one row per physical replacement attachment. V3 and V4 of
+            // the same lineage therefore replace the same persistent entry.
+            if targetKind == .review, let resolvedTargetId {
+                let superseded = notifications.filter {
+                    $0.targetKind == .review && $0.targetId == resolvedTargetId
+                }
+                for old in superseded {
+                    NativeNotifier.shared.remove(appNotifId: old.id)
+                }
+                notifications.removeAll {
+                    $0.targetKind == .review && $0.targetId == resolvedTargetId
+                }
+            }
             notifications.insert(n, at: 0)
             if notifications.count > notifsCap {
                 notifications = Array(notifications.prefix(notifsCap))
@@ -1296,7 +1330,7 @@ final class AppState: ObservableObject {
                   title,
                   String(describing: kind),
                   targetKind.map(String.init(describing:)) ?? "none",
-                  targetId ?? "—")
+                  resolvedTargetId ?? "—")
             // Resolve the per-row tint exactly as
             // `NotificationsCenterView.targetTint` does, so the macOS
             // banner thumbnail uses the same colour as the in-app
@@ -1327,7 +1361,7 @@ final class AppState: ObservableObject {
                 subtitle:   subtitle,
                 body:       message,
                 targetKind: targetKind,
-                targetId:   targetId,
+                targetId:   resolvedTargetId,
                 tintHex:    tintHex
             )
         }
@@ -1498,7 +1532,13 @@ final class AppState: ObservableObject {
         guard let data = UserDefaults.standard.data(forKey: notifsKey),
               let list = try? JSONDecoder().decode([AppNotification].self, from: data)
         else { return }
-        notifications = list
+        notifications = AppNotification.normalizingReviewTargets(in: list) { target in
+            TaskMediaTransferStore
+                .canonicalReviewIdentity(forReviewTarget: target)?.reviewId
+        }
+        if notifications != list {
+            saveNotifications()
+        }
     }
 
     private func saveNotifications() {
@@ -1867,6 +1907,10 @@ final class AppState: ObservableObject {
     // MARK: - Lifecycle
 
     func initialize() async {
+        // Apollo Studio hosts this exact production model but is intentionally
+        // offline. A future canvas change must not be able to opt into the
+        // production lifecycle by calling initialize accidentally.
+        guard !ApolloRuntimeEnvironment.isStudio else { return }
         // Wire the AI agent so its system prompt can read live
         // tasks/events from this AppState.
         await MainActor.run { aiAgent.bind(to: self) }
@@ -3590,6 +3634,116 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Batched status change for a multi-selection. Every optimistic mirror is
+    /// applied in ONE main-actor mutation, so SwiftUI coalesces it into a single
+    /// render → a single AppKit diff → all selected rows move to the new group
+    /// AT ONCE (instead of trickling in one-per-network-round-trip, which read
+    /// as a laggy cascade). The per-task network PUTs then run concurrently.
+    func updateTaskStatuses(_ items: [CUTask], to status: CUStatus,
+                            silent: Bool = false) async {
+        guard !items.isEmpty else { return }
+        guard items.count > 1 else {
+            await updateTaskStatus(items[0], to: status, silent: silent)
+            return
+        }
+
+        // 1) All optimistic mirrors together — one objectWillChange, one diff.
+        await MainActor.run {
+            for task in items {
+                beginPendingMutation(task.id)
+                applyStatusToMirrors(taskId: task.id,
+                                     status: status.status,
+                                     color: status.color,
+                                     completed: status.isClosed)
+            }
+        }
+
+        let online = await MainActor.run { isOnline }
+        guard online else {
+            for task in items {
+                await OfflineQueue.shared.enqueue(
+                    .updateTaskStatus(taskId: task.id, status: status.status),
+                    originatingFromOfflineState: true)
+                await MainActor.run { endPendingMutationDeferred(task.id) }
+            }
+            notifyTask(.info,
+                       title:    "\(items.count) tarefas",
+                       subtitle: "Status na fila offline",
+                       message:  "→ \(status.status.uppercased()) sincroniza quando a internet voltar.",
+                       taskId:   items.first?.id ?? "")
+            return
+        }
+
+        // 2) Network PUTs concurrently — no local mutation between them, so the
+        //    rows never re-shuffle one at a time. Each handles its own rollback.
+        var succeeded = 0
+        var queued = 0
+        var failed = 0
+        await withTaskGroup(of: Int.self) { group in
+            for task in items {
+                let original = task
+                group.addTask {
+                    do {
+                        try await self.cuSvc.updateTaskStatus(id: task.id, to: status.status)
+                        await MainActor.run {
+                            self.bumpTaskSnapshot(for: task.id)
+                            self.touchMutationClock(task.id)
+                            self.endPendingMutationDeferred(task.id)
+                        }
+                        return 0
+                    } catch let api as APIError where api.isTransient {
+                        await OfflineQueue.shared.enqueue(
+                            .updateTaskStatus(taskId: task.id, status: status.status))
+                        await MainActor.run { self.endPendingMutationDeferred(task.id) }
+                        return 1
+                    } catch {
+                        Log.error("updateTaskStatuses ROLLBACK id=\(task.id) " +
+                                  "\(original.status) → \(status.status) reason=\(error)")
+                        await MainActor.run {
+                            self.applyStatusToMirrors(taskId: task.id,
+                                                      status: original.status,
+                                                      color: original.statusColor,
+                                                      completed: original.isCompleted)
+                            self.endPendingMutationNow(task.id)
+                            self.recentTaskMutations[task.id] = nil
+                        }
+                        return 2
+                    }
+                }
+            }
+            for await outcome in group {
+                switch outcome {
+                case 0: succeeded += 1
+                case 1: queued += 1
+                default: failed += 1
+                }
+            }
+        }
+
+        if failed > 0 {
+            notifyTask(.error,
+                       title:    "Falha em \(failed) tarefa\(failed == 1 ? "" : "s")",
+                       subtitle: "Status parcialmente atualizado",
+                       message:  "\(succeeded) concluída\(succeeded == 1 ? "" : "s")"
+                                 + (queued > 0 ? " · \(queued) na fila" : ""),
+                       taskId:   items.first?.id ?? "")
+        } else if queued > 0 {
+            notifyTask(.info,
+                       title:    "\(queued) tarefa\(queued == 1 ? "" : "s") na fila",
+                       subtitle: "Sincronização pendente",
+                       message:  succeeded > 0
+                                 ? "\(succeeded) concluída\(succeeded == 1 ? "" : "s") agora."
+                                 : "O novo status sincroniza quando a conexão estabilizar.",
+                       taskId:   items.first?.id ?? "")
+        } else if !silent {
+            notifyTask(.success,
+                       title:    "\(items.count) tarefas",
+                       subtitle: "Status atualizado",
+                       message:  "→ \(status.status.uppercased())",
+                       taskId:   items.first?.id ?? "")
+        }
+    }
+
     func completeTask(_ task: CUTask) async {
         // Optimistic mark-complete lands first, independent of
         // connectivity.
@@ -4959,12 +5113,23 @@ final class AppState: ObservableObject {
               let o = try? JSONSerialization.jsonObject(with: reviewJSON) as? [String: Any],
               let mediaUrl = o["mediaUrl"] as? String, !mediaUrl.isEmpty
         else { return nil }
+        // O link "VER REVIEW" tem que apontar pra sessão ESTÁVEL da linhagem.
+        // O attachmentId do payload é o anexo FÍSICO da versão aberta (V4 tem
+        // o seu próprio) — usá-lo direto mandava o revisor web para uma sessão
+        // órfã sem versões nem comentários (20/jul). O catálogo resolve a
+        // identidade; o redirect de linhagem do Worker cobre o resto.
+        let taskId = o["taskId"] as? String ?? ""
+        let physicalId = o["attachmentId"] as? String
+        let stableId = TaskMediaTransferStore.persistedCatalog(for: taskId)?
+            .reviewIdentity(attachmentId: physicalId, mediaURL: mediaUrl)?
+            .reviewId
         return reviewOpenLink(mediaUrl: mediaUrl,
                               ext: o["ext"] as? String ?? "",
                               title: o["mediaTitle"] as? String ?? "",
-                              taskId: o["taskId"] as? String ?? "",
+                              taskId: taskId,
                               commentId: o["commentId"] as? String ?? "",
-                              uploaderId: o["uploaderId"] as? Int)
+                              uploaderId: o["uploaderId"] as? Int,
+                              attachmentId: stableId ?? physicalId)
     }
 
     /// Visible label for the "open this file in the web review tool" link that
@@ -5166,9 +5331,16 @@ final class AppState: ObservableObject {
         let uploader = clickUpAuthService.userId
         let uploaderName = availableMembers.first { $0.id == uploader }?.username
         let links: [(label: String, url: String, title: String)] = reviewableFiles.compactMap { f in
+            // Mesma doutrina do reviewLink: o link público aponta pra sessão
+            // estável da linhagem quando o catálogo a conhece (senão o Worker
+            // redireciona pelo mediaUrl).
+            let stableId = TaskMediaTransferStore.persistedCatalog(for: task.id)?
+                .reviewIdentity(attachmentId: nil, mediaURL: f.url)?
+                .reviewId
             guard let link = Self.reviewOpenLink(mediaUrl: f.url, ext: f.ext, title: f.title,
                                                  taskId: task.id, commentId: "", uploaderId: uploader,
-                                                 uploaderName: uploaderName)
+                                                 uploaderName: uploaderName,
+                                                 attachmentId: stableId)
             else { return nil }
             return (label: Self.reviewOpenLinkText, url: link, title: f.title)
         }
@@ -5197,7 +5369,8 @@ final class AppState: ObservableObject {
     func publishMediaTransferComment(on task: CUTask, text: String,
                                      mentionMemberIds: [Int],
                                      attachmentId: String?, attachmentURL: URL,
-                                     fileName: String, fileExtension: String) async -> CUComment? {
+                                     fileName: String, fileExtension: String,
+                                     reviewId: String? = nil, version: Int = 1) async -> CUComment? {
         guard let attachmentId, !attachmentId.isEmpty else {
             Log.error("publishMediaTransferComment: ClickUp não retornou attachment id")
             return nil
@@ -5207,6 +5380,20 @@ final class AppState: ObservableObject {
         }
         let uploader = clickUpAuthService.userId
         let uploaderName = availableMembers.first { $0.id == uploader }?.username
+        let stableReviewId = (reviewId?.isEmpty == false) ? reviewId! : attachmentId
+        guard await ReviewBackend.registerVersion(
+            reviewId: stableReviewId,
+            version: version,
+            attachmentId: attachmentId,
+            mediaURL: attachmentURL,
+            mediaTitle: fileName,
+            ext: fileExtension,
+            taskId: task.id,
+            uploaderId: uploader
+        ) else {
+            Log.error("publishMediaTransferComment: falha ao registrar V\(version) na review \(stableReviewId)")
+            return nil
+        }
         guard let review = Self.reviewOpenLink(
             mediaUrl: attachmentURL.absoluteString,
             ext: fileExtension,
@@ -5215,10 +5402,37 @@ final class AppState: ObservableObject {
             commentId: "",
             uploaderId: uploader,
             uploaderName: uploaderName,
-            attachmentId: attachmentId
+            attachmentId: stableReviewId
         ) else { return nil }
 
-        let body = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? " " : text
+        // Register as soon as the canonical attachment exists. The web review
+        // may be updated while Apollo is on Inbox/Quadro or after a relaunch;
+        // waiting until somebody opens the native review leaves the app blind
+        // to exactly that first remote activity. The EXACT version is
+        // mandatory: a version-less entry only reads the lineage root, whose
+        // answer is never version-authoritative and can therefore never latch
+        // VER REVIEW for the fresh V2/V3/V4 (bug de 20/jul: comentário na V4
+        // recém-enviada ficava invisível).
+        ReviewWatcher.shared.register(
+            att: stableReviewId,
+            mediaUrl: attachmentURL.absoluteString,
+            ext: fileExtension,
+            taskId: task.id,
+            title: fileName,
+            uploaderId: uploader,
+            tintHex: task.statusDisplayHex,
+            currentUpdatedAt: nil,
+            versionId: "v\(version)"
+        )
+
+        // The body is JUST the @-mentions (or nothing). The attachment card
+        // already shows the file name, so repeating "V1 · filename" as text is
+        // redundant — it's dropped. ClickUp only turns a member into a real
+        // mention (chip + notification) when the text contains their
+        // "@username", so we still emit those explicitly.
+        let mentionText = members.isEmpty ? ""
+            : members.map { "@\($0.username)" }.joined(separator: " ")
+        let body = mentionText.isEmpty ? " " : mentionText
 
         // Idempotency: an attachment id is minted once per upload, so a
         // complete comment already carrying it IS this output's final comment
@@ -5356,8 +5570,11 @@ final class AppState: ObservableObject {
             }
             guard allVisible else { continue }
             let orphans = comments.filter { c in
+                // A media-transfer comment is marked by its REVISAR link (the
+                // body no longer carries a "V1 · filename" version string); an
+                // orphan is one that carries the link but lost its attachment.
                 (uploaderId == nil || c.userId == uploaderId)
-                    && Self.mediaTransferVersion(in: c.text) != nil
+                    && c.text.localizedCaseInsensitiveContains(Self.reviewOpenLinkText)
                     && c.attachments.isEmpty && c.attachmentIds.isEmpty
             }
             for orphan in orphans {
@@ -6108,12 +6325,56 @@ extension AppState {
     /// no cache reads — safe for the SwiftUI preview canvas.
     /// (The `#Preview` blocks in ContentView referenced this
     /// and the DEBUG build didn't compile without it.)
-    static var preview: AppState {
-        let s = AppState()
+    static func preview(_ scenario: ApolloPreviewScenario = .populated) -> AppState {
+        let s = AppState(previewMode: true)
         s.showMockData = true
-        s.events = CalendarEvent.mock()
-        s.tasks  = CUTask.mock()
+        s.activeListId = ApolloPreviewFixtures.listId
+        s.activeListName = ApolloPreviewFixtures.listName
+        s.clickUpAuthService.isConnected = true
+        s.clickUpAuthService.workspaceName = "Moon Ventures"
+        s.clickUpAuthService.userName = "Marconi Reis"
+        s.clickUpAuthService.userId = ApolloPreviewFixtures.currentUserId
+        s.availableStatuses = ApolloPreviewFixtures.statuses
+        s.availableMembers = ApolloPreviewFixtures.members
+        s.availableTags = ApolloPreviewFixtures.tags
+        s.selectedDate = Date()
+
+        switch scenario {
+        case .populated:
+            s.events = ApolloPreviewFixtures.events
+            s.tasks = ApolloPreviewFixtures.tasks
+            s.notifications = ApolloPreviewFixtures.notifications
+            s.assignedCommentRecords = ApolloPreviewFixtures.assignedComments
+            s.assignedCommentsScannedTasks = ApolloPreviewFixtures.tasks.count
+            s.assignedCommentsTotalTasks = ApolloPreviewFixtures.tasks.count
+            s.assignedCommentsHasMore = false
+        case .empty:
+            s.events = []
+            s.tasks = []
+            s.notifications = []
+            s.assignedCommentRecords = []
+            s.assignedCommentsScannedTasks = 0
+            s.assignedCommentsTotalTasks = 0
+            s.assignedCommentsHasMore = false
+        case .loading:
+            s.events = ApolloPreviewFixtures.events
+            s.tasks = ApolloPreviewFixtures.tasks
+            s.notifications = ApolloPreviewFixtures.notifications
+            s.syncStatus = .syncing
+            s.assignedCommentsLoading = true
+            s.assignedCommentsScannedTasks = 30
+            s.assignedCommentsTotalTasks = 90
+            s.assignedCommentsHasMore = true
+        case .error:
+            s.events = ApolloPreviewFixtures.events
+            s.tasks = ApolloPreviewFixtures.tasks
+            s.notifications = ApolloPreviewFixtures.notifications
+            s.syncStatus = .error("Falha local simulada pelo Apollo Studio")
+            s.assignedCommentsError = "Não foi possível carregar os comentários."
+        }
         return s
     }
+
+    static var preview: AppState { preview(.populated) }
 }
 #endif

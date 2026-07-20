@@ -1,7 +1,7 @@
 import AVFoundation
 import CoreGraphics
 import XCTest
-@testable import DayPanel
+@testable import ApolloRuntime
 
 final class TaskVideoComposerGeometryTests: XCTestCase {
     func testRealCompositionExportsHEVCWithCombinedDurationAndBodyCanvas() async throws {

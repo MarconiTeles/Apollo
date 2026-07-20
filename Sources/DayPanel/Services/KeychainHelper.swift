@@ -31,7 +31,48 @@ import Security
 /// `false` and delete the JSON file on first launch.
 enum KeychainHelper {
 
+    // Apollo Studio uses a process-local store. It never reaches Security.framework
+    // and never reads the legacy DayPanel JSON snapshot from the user's Library.
+    private static let studioLock = NSLock()
+    private static var studioValues: [String: String] = [:]
+
+    private static func studioLoad(_ key: String) -> String? {
+        studioLock.lock()
+        defer { studioLock.unlock() }
+        return studioValues[key]
+    }
+
+    private static func studioSave(_ value: String, for key: String) {
+        studioLock.lock()
+        defer { studioLock.unlock() }
+        studioValues[key] = value
+    }
+
+    private static func studioDelete(_ key: String) {
+        studioLock.lock()
+        defer { studioLock.unlock() }
+        studioValues.removeValue(forKey: key)
+    }
+
     // MARK: - Configuration
+
+    /// Test builds use the local chmod-0600 credential snapshot. This keeps
+    /// the long-standing `./build.sh debug` workflow isolated from the
+    /// production Keychain ACL and, critically, prevents a newly rebuilt test
+    /// bundle from presenting macOS authorization dialogs. Release builds keep
+    /// the real Keychain as their canonical store.
+    private static let usesLegacyStoreOnly: Bool = {
+        // DEBUG is the primary guard. The bundle flag is a second, runtime
+        // guard written by build.sh so a locally packaged test app remains
+        // Keychain-free even if its compilation conditions are ever changed.
+        #if DEBUG
+        return true
+        #else
+        return Bundle.main.object(
+            forInfoDictionaryKey: "ApolloUseLegacySecretStoreOnly"
+        ) as? Bool == true
+        #endif
+    }()
 
     /// `kSecAttrService` for every item we store. Acts as a
     /// namespace inside the user's login Keychain so a future
@@ -150,6 +191,16 @@ enum KeychainHelper {
     // MARK: - Public API (call-compatible with the old helper)
 
     static func save(_ value: String, for key: String) {
+        if ApolloRuntimeEnvironment.isStudio {
+            studioSave(value, for: key)
+            return
+        }
+        if usesLegacyStoreOnly {
+            var d = readLegacy()
+            d[key] = value
+            writeLegacy(d)
+            return
+        }
         _ = keychainSave(value, for: key)
         if writeLegacyMirror {
             var d = readLegacy()
@@ -159,6 +210,12 @@ enum KeychainHelper {
     }
 
     static func load(for key: String) -> String? {
+        if ApolloRuntimeEnvironment.isStudio {
+            return studioLoad(key)
+        }
+        if usesLegacyStoreOnly {
+            return readLegacy()[key]
+        }
         // Keychain wins. If it returns nil and the legacy file
         // still has the value, this is the first read after the
         // 1.4.11 migration — mirror it into Keychain so future
@@ -172,6 +229,17 @@ enum KeychainHelper {
     }
 
     static func delete(for key: String) {
+        if ApolloRuntimeEnvironment.isStudio {
+            studioDelete(key)
+            return
+        }
+        if usesLegacyStoreOnly {
+            var d = readLegacy()
+            if d.removeValue(forKey: key) != nil {
+                writeLegacy(d)
+            }
+            return
+        }
         _ = keychainDelete(key)
         var d = readLegacy()
         if d.removeValue(forKey: key) != nil {

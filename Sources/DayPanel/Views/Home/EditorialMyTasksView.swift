@@ -27,16 +27,41 @@ struct EditorialMyTasksView: View {
     /// before constructing the recycled task rows on route/list changes.
     @State private var listMountReady = false
     @State private var mediaFlowRequest: TaskMediaFlowRequest?
+    @ObservedObject private var reviewQueuePresenter = TaskReviewQueuePresenter.shared
+    @ObservedObject private var columnLayout = MyTasksColumnLayout.shared
+    /// The column boundary currently hovered or dragged — drives the accent guide.
+    @State private var activeBoundary: MyTasksColumnLayout.Column?
+
+    /// Sticky chrome height (52pt toolbar band + title row + column-header
+    /// row) — one continuous glass element up to the window top. Rows start
+    /// below it but scroll through underneath.
+    // 132pt is the measured toolbar + route title + column-header chrome.
+    // The additional 30pt is deliberate breathing room before the first
+    // status group, while rows can still scroll back underneath the material.
+    private let chromeInset: CGFloat = 162
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // The table owns the full canvas. The chrome is layered above it
-            // so rows remain visible through the translucent material while
-            // scrolling, matching a native macOS titlebar rather than a
-            // separate opaque section above the content.
-            content
-            header
-                .zIndex(2)
+        GeometryReader { geo in
+            let m = columnLayout.metrics(totalWidth: geo.size.width)
+            ZStack(alignment: .top) {
+                // The table owns the full canvas. The chrome (title + column
+                // header) is layered above it so rows stay visible while
+                // scrolling, matching a native macOS titlebar.
+                content
+                // Full-height accent guide at the boundary being hovered/dragged.
+                if let col = activeBoundary, let hx = m.handleX[col] {
+                    Rectangle()
+                        // Finder-style divider feedback: deliberately faint
+                        // neutral gray, never the app accent.
+                        .fill(Editorial.rule.opacity(0.7))
+                        .frame(width: 1, height: geo.size.height)
+                        .position(x: hx, y: geo.size.height / 2)
+                        .allowsHitTesting(false)
+                        .zIndex(1)
+                }
+                stickyChrome(totalWidth: geo.size.width)
+                    .zIndex(2)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {
@@ -84,6 +109,20 @@ struct EditorialMyTasksView: View {
             TaskMediaFlowSheet(store: appState.taskMediaTransfers, request: request)
                 .environmentObject(appState)
         }
+        .sheet(item: $reviewQueuePresenter.request) { request in
+            TaskReviewsFlowSheet(request: request)
+                .environmentObject(appState)
+        }
+        .apolloStudioNode("tasks.page",
+                          title: "Página de tarefas",
+                          kind: .page,
+                          parent: "app.root",
+                          properties: [
+                            .init(kind: .verticalPadding,
+                                  title: "Altura do chrome", value: chromeInset),
+                            .init(kind: .backgroundColor,
+                                  title: "Canvas", token: "Editorial.paper"),
+                          ])
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -112,7 +151,41 @@ struct EditorialMyTasksView: View {
         .padding(.horizontal, 28)
         .padding(.vertical, 18)
         .frame(maxWidth: .infinity)
-        .background(Editorial.paper)
+    }
+
+    /// Title row + the resizable column-header row, stacked as one sticky band
+    /// above the list. Liquid Glass: the rows scroll through underneath (the
+    /// NSScrollView's top contentInset starts them below, but scrolled content
+    /// passes behind and refracts) — same recipe as the popup header bars.
+    @ViewBuilder
+    private func stickyChrome(totalWidth: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            // Linha "MINHAS TAREFAS · LISTA · N | tagline" REMOVIDA (inútil,
+            // só ocupava altura). Sobra a reserva da toolbar (52pt) + a linha
+            // de colunas — o header enxuto.
+            Color.clear.frame(height: 52)
+            if showsColumnHeader {
+                MyTasksColumnHeader(layout: columnLayout,
+                                    totalWidth: totalWidth,
+                                    activeBoundary: $activeBoundary)
+                    .frame(height: 30)
+            }
+        }
+        // ContentView keeps this route's usable table canvas 220pt to the
+        // right of the floating sidebar. The material itself must not inherit
+        // that inset: it is one continuous Finder-style band behind the pane.
+        .finderHeaderMaterial(leadingExtension: 220)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
+                .padding(.leading, -220)
+        }
+    }
+
+    /// The column header only makes sense once the real task list is on screen.
+    private var showsColumnHeader: Bool {
+        appState.clickUpAuthService.userId != nil
+            && listMountReady
+            && !appState.availableStatuses.isEmpty
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -135,7 +208,7 @@ struct EditorialMyTasksView: View {
                 sections: nativeSections,
                 selectedTaskIds: selectedTaskIds,
                 appState: appState,
-                topContentInset: 72,
+                topContentInset: chromeInset,
                 // Reserve the bulk-action capsule only while it actually
                 // exists. A permanent 112pt NSScrollView inset left visible
                 // rows inside a non-interactive bottom band.
@@ -154,6 +227,16 @@ struct EditorialMyTasksView: View {
                     mediaFlowRequest = TaskMediaFlowRequest(task: task, mode: mode)
                 }
             )
+            .apolloStudioNode("tasks.list",
+                              title: "Lista de tarefas",
+                              kind: .list,
+                              parent: "tasks.page",
+                              properties: [
+                                .init(kind: .verticalPadding,
+                                      title: "Inset superior", value: chromeInset),
+                                .init(kind: .height,
+                                      title: "Altura da linha", value: 36),
+                              ])
         }
     }
 
@@ -862,14 +945,13 @@ private struct MyTasksStatusDropDelegate: DropDelegate {
             let raw = object as? String ?? ""
             let ids = MyTasksDragPayload.decode(raw)
             Task { @MainActor in
-                let originals = ids.compactMap { appState.tasksById[$0] }.filter {
-                    $0.status.lowercased() != statusKey
-                }
-                for id in ids {
-                    guard let task = appState.tasks.first(where: { $0.id == id }),
-                          task.status.lowercased() != statusKey else { continue }
-                    await appState.updateTaskStatus(task, to: targetStatus, silent: true)
-                }
+                let toMove = ids
+                    .compactMap { id in appState.tasks.first(where: { $0.id == id }) }
+                    .filter { $0.status.lowercased() != statusKey }
+                let originals = toMove
+                // Batched so every dropped row moves to the new group AT ONCE,
+                // instead of one-per-network-round-trip (the ~1s/row cascade).
+                await appState.updateTaskStatuses(toMove, to: targetStatus, silent: true)
                 appState.pushTaskStatusUndo(originals,
                     label: originals.count == 1
                         ? "Mover tarefa para \(targetStatus.status.uppercased())"
@@ -881,5 +963,89 @@ private struct MyTasksStatusDropDelegate: DropDelegate {
             }
         }
         return true
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// MARK: Column header (ClickUp-style, resizable)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// The named column-header row. Labels + resize handles are positioned from the
+/// SAME `MyTasksColumnLayout.metrics(totalWidth:)` the AppKit rows use, so header
+/// and rows stay pixel-aligned. Dragging a handle resizes that column live and
+/// persists on release; hovering shows the ↔ cursor and the accent guide line.
+private struct MyTasksColumnHeader: View {
+    @ObservedObject var layout: MyTasksColumnLayout
+    let totalWidth: CGFloat
+    @Binding var activeBoundary: MyTasksColumnLayout.Column?
+
+    private static let space = "mtColumns"
+    private let hit: CGFloat = 12
+
+    var body: some View {
+        let m = layout.metrics(totalWidth: totalWidth)
+        ZStack(alignment: .topLeading) {
+            // TAREFA stays left-aligned, with its leading inset trimmed 35%.
+            columnLabel("TAREFA", x: m.titleX * 0.65)
+            // Data columns: label centred over its own column span.
+            centeredLabel("ANEXAR", x: m.mediaX, width: m.mediaWidth)
+            centeredLabel("PRIORIDADE", x: m.priorityX, width: m.priorityWidth)
+            centeredLabel("RESPONSÁVEL", x: m.assigneeX, width: m.assigneeWidth)
+            centeredLabel("PRAZO", x: m.dateX, width: m.dateWidth)
+
+            ForEach(MyTasksColumnLayout.Column.allCases) { column in
+                handle(column, x: m.handleX[column] ?? 0)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .coordinateSpace(name: Self.space)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.rule).frame(height: 1)
+        }
+    }
+
+    private func columnLabel(_ text: String, x: CGFloat) -> some View {
+        Text(text)
+            .font(Editorial.sans(9, .semibold))
+            .tracking(0.7)
+            .foregroundStyle(Editorial.inkMute)
+            .fixedSize()
+            .offset(x: x, y: 10)
+    }
+
+    /// Label horizontally centred over its column's span.
+    private func centeredLabel(_ text: String, x: CGFloat, width: CGFloat) -> some View {
+        Text(text)
+            .font(Editorial.sans(9, .semibold))
+            .tracking(0.7)
+            .foregroundStyle(Editorial.inkMute)
+            .lineLimit(1)
+            .frame(width: max(width, 10), alignment: .center)
+            .offset(x: x, y: 10)
+    }
+
+    private func handle(_ column: MyTasksColumnLayout.Column, x: CGFloat) -> some View {
+        Color.clear
+            .frame(width: hit)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .offset(x: x - hit / 2)
+            .onHover { inside in
+                if inside {
+                    NSCursor.resizeLeftRight.push()
+                    activeBoundary = column
+                } else {
+                    NSCursor.pop()
+                    if activeBoundary == column { activeBoundary = nil }
+                }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space))
+                    .onChanged { value in
+                        activeBoundary = column
+                        layout.drag(column, toX: value.location.x, totalWidth: totalWidth)
+                    }
+                    .onEnded { _ in layout.commit() }
+            )
     }
 }

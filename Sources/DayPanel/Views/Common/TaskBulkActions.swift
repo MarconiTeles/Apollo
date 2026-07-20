@@ -205,9 +205,9 @@ enum TaskBulkActions {
                         },
                         action: {
                             Task {
-                                for task in tasks {
-                                    await appState.updateTaskStatus(task, to: status)
-                                }
+                                // Batched so all selected rows move to the new
+                                // group at once, not one-per-network-round-trip.
+                                await appState.updateTaskStatuses(tasks, to: status)
                                 await registerSnapshotUndo(tasks,
                                     label: bulkLabel("Alterar status", count: tasks.count),
                                     appState: appState)

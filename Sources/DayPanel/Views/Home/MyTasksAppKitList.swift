@@ -47,6 +47,7 @@ enum TaskDragActivation {
 /// Pure-AppKit task viewport. Both headers and rows are recycled by
 /// NSCollectionView; there is no NSHostingView per task during scrolling.
 struct MyTasksAppKitList: NSViewRepresentable {
+    @Environment(\.apolloStudioSession) private var studioSession
     let sections: [MyTasksAppKitSection]
     let selectedTaskIds: Set<String>
     let appState: AppState
@@ -76,7 +77,12 @@ struct MyTasksAppKitList: NSViewRepresentable {
         layout.scrollDirection = .vertical
         layout.minimumLineSpacing = 0
         layout.minimumInteritemSpacing = 0
-        layout.sectionInset = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        // The top breathing room belongs to the SCROLLING document, not to
+        // NSScrollView's clipping inset. It is visible at rest, then scrolls
+        // away so rows can genuinely pass underneath the pinned translucent
+        // header (Finder behaviour).
+        layout.sectionInset = NSEdgeInsets(top: topContentInset,
+                                           left: 0, bottom: 0, right: 0)
         layout.itemSize = NSSize(width: 800, height: 44)
 
         let collection = WidthTrackingCollectionView(frame: .zero)
@@ -106,26 +112,52 @@ struct MyTasksAppKitList: NSViewRepresentable {
         collection.backgroundView = background
         context.coordinator.collection = collection
         scroll.documentView = collection
+        context.coordinator.configureStudio(session: studioSession, scrollView: scroll)
         context.coordinator.update(parent: self, force: true)
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         applyInsets(to: scroll)
+        if let collection = scroll.documentView as? NSCollectionView,
+           let layout = collection.collectionViewLayout as? NSCollectionViewFlowLayout,
+           abs(layout.sectionInset.top - topContentInset) > 0.5 {
+            var sectionInset = layout.sectionInset
+            sectionInset.top = topContentInset
+            layout.sectionInset = sectionInset
+            layout.invalidateLayout()
+        }
         context.coordinator.update(parent: self)
+        context.coordinator.configureStudio(session: studioSession, scrollView: scroll)
+    }
+
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        coordinator.stopStudioReporting()
     }
 
     private func applyInsets(to scroll: NSScrollView) {
-        let value = NSEdgeInsets(top: topContentInset, left: 0,
+        // A clip-view top inset would reserve an opaque/non-drawing strip and
+        // stop rows exactly at the header edge. Keep only the conditional
+        // bottom reservation for the floating bulk toolbar.
+        let value = NSEdgeInsets(top: 0, left: 0,
                                  bottom: bottomContentInset, right: 0)
         let current = scroll.contentInsets
         if current.top != value.top || current.left != value.left
             || current.bottom != value.bottom || current.right != value.right {
             scroll.contentInsets = value
-            scroll.scrollerInsets = value
+        }
+        let scrollerValue = NSEdgeInsets(top: topContentInset, left: 0,
+                                         bottom: bottomContentInset, right: 0)
+        let currentScroller = scroll.scrollerInsets
+        if currentScroller.top != scrollerValue.top
+            || currentScroller.left != scrollerValue.left
+            || currentScroller.bottom != scrollerValue.bottom
+            || currentScroller.right != scrollerValue.right {
+            scroll.scrollerInsets = scrollerValue
         }
     }
 
+    @MainActor
     final class Coordinator: NSObject,
                              NSCollectionViewDataSource,
                              NSCollectionViewDelegateFlowLayout {
@@ -166,6 +198,11 @@ struct MyTasksAppKitList: NSViewRepresentable {
         private var onClearSelection: () -> Void
         private var onMediaAction: (CUTask, TaskMediaFlowMode) -> Void
         private let statusBubble = StatusPickerBubblePresenter()
+        private var columnCancellable: AnyCancellable?
+        private weak var studioSession: ApolloStudioSession?
+        private weak var studioScrollView: NSScrollView?
+        private var studioScrollObserver: NSObjectProtocol?
+        private let studioOwnerID: StudioNodeID = "tasks.list"
         weak var collection: NSCollectionView?
 
         init(parent: MyTasksAppKitList) {
@@ -176,6 +213,105 @@ struct MyTasksAppKitList: NSViewRepresentable {
             onEndDrag = parent.onEndDrag
             onClearSelection = parent.onClearSelection
             onMediaAction = parent.onMediaAction
+            super.init()
+            // Live column resize: when the user drags a divider, mark visible
+            // rows dirty so each re-reads the shared metrics on its next layout.
+            // The row WIDTH is unchanged (only internal x's), so we deliberately
+            // do NOT invalidate the flow layout (that would re-enter onResize).
+            columnCancellable = MyTasksColumnLayout.shared.$widths
+                .removeDuplicates()
+                .sink { [weak self] _ in self?.relayoutVisibleRows() }
+        }
+
+        private func relayoutVisibleRows() {
+            guard let collection else { return }
+            for path in collection.indexPathsForVisibleItems() {
+                (collection.item(at: path) as? MyTasksTaskItem)?.view.needsLayout = true
+            }
+        }
+
+        func configureStudio(session: ApolloStudioSession?, scrollView: NSScrollView) {
+            guard studioSession !== session || studioScrollView !== scrollView else {
+                reportVisibleStudioNodesSoon()
+                return
+            }
+            stopStudioReporting()
+            studioSession = session
+            studioScrollView = scrollView
+            guard session != nil else { return }
+            scrollView.contentView.postsBoundsChangedNotifications = true
+            studioScrollObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.reportVisibleStudioNodes() }
+            }
+            reportVisibleStudioNodesSoon()
+        }
+
+        func stopStudioReporting() {
+            if let studioScrollObserver {
+                NotificationCenter.default.removeObserver(studioScrollObserver)
+            }
+            studioScrollObserver = nil
+            studioSession?.removeExternalNodes(owner: studioOwnerID)
+            studioSession = nil
+            studioScrollView = nil
+        }
+
+        private func reportVisibleStudioNodesSoon() {
+            guard studioSession != nil else { return }
+            DispatchQueue.main.async { [weak self] in self?.reportVisibleStudioNodes() }
+        }
+
+        private func reportVisibleStudioNodes() {
+            guard let studioSession,
+                  let collection,
+                  let clip = studioScrollView?.contentView
+            else { return }
+            collection.layoutSubtreeIfNeeded()
+            let paths = collection.indexPathsForVisibleItems().sorted { $0.item < $1.item }
+            let nodes: [StudioNodeDescriptor] = paths.compactMap { path in
+                guard rows.indices.contains(path.item),
+                      let attributes = collection.layoutAttributesForItem(at: path)
+                else { return nil }
+                var frame = collection.convert(attributes.frame, to: clip)
+                frame.origin.x -= clip.bounds.minX
+                frame.origin.y -= clip.bounds.minY
+                switch rows[path.item] {
+                case .task(let task):
+                    return StudioNodeDescriptor(
+                        id: StudioNodeID(rawValue: "tasks.row.\(task.id)"),
+                        parentID: studioOwnerID,
+                        title: task.title,
+                        kind: .row,
+                        frame: frame,
+                        source: MyTasksNativeRowView.studioSource,
+                        properties: [
+                            .init(kind: .height, title: "Altura", value: frame.height),
+                            .init(kind: .cornerRadius,
+                                  title: "Raio hover",
+                                  token: "Editorial.notificationCapsuleRadius"),
+                        ]
+                    )
+                case .header(let status, _, _, _):
+                    return StudioNodeDescriptor(
+                        id: StudioNodeID(rawValue: "tasks.section.\(status.id)"),
+                        parentID: studioOwnerID,
+                        title: status.status.uppercased(),
+                        kind: .header,
+                        frame: frame,
+                        source: MyTasksHeaderView.studioSource,
+                        properties: [
+                            .init(kind: .height, title: "Altura", value: frame.height),
+                        ]
+                    )
+                case .dropPlaceholder:
+                    return nil
+                }
+            }
+            studioSession.replaceExternalNodes(owner: studioOwnerID, nodes: nodes)
         }
 
         func update(parent: MyTasksAppKitList, force: Bool = false) {
@@ -230,6 +366,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
             } else {
                 rebindVisibleCells()
             }
+            reportVisibleStudioNodesSoon()
         }
 
         private static func flatten(_ sections: [MyTasksAppKitSection]) -> [Row] {
@@ -437,12 +574,12 @@ struct MyTasksAppKitList: NSViewRepresentable {
             }
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                for id in ids {
-                    guard let task = self.appState.tasks.first(where: { $0.id == id }),
-                          task.status.caseInsensitiveCompare(status.status) != .orderedSame
-                    else { continue }
-                    await self.appState.updateTaskStatus(task, to: status, silent: true)
-                }
+                // Batched so every dropped row moves to the new group AT ONCE,
+                // instead of one-per-network-round-trip (the ~1s/row cascade).
+                let toMove = ids
+                    .compactMap { id in self.appState.tasks.first(where: { $0.id == id }) }
+                    .filter { $0.status.caseInsensitiveCompare(status.status) != .orderedSame }
+                await self.appState.updateTaskStatuses(toMove, to: status, silent: true)
                 if !changing.isEmpty {
                     self.appState.pushTaskStatusUndo(changing,
                         label: changing.count == 1
@@ -637,8 +774,16 @@ private final class MyTasksMediaButton: NSButton {
 }
 
 private final class MyTasksNativeRowView: NSView, NSDraggingSource {
+    static let studioSource = StudioSourceLocation(file: String(describing: #fileID),
+                                                   line: #line)
     private static weak var activeHoverRow: MyTasksNativeRowView?
     override var isFlipped: Bool { true }
+
+    private enum ReviewVisualState: Equatable {
+        case hidden
+        case update
+        case reviewed
+    }
 
     private let hoverLayer = CALayer()
     private let rule = CALayer()
@@ -649,8 +794,13 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     private let avatar = MyTasksAvatarView()
     private let assignee = NSTextField(labelWithString: "")
     private let date = NSTextField(labelWithString: "")
+    private let reviewTrackLayer = CALayer()
+    private let review = MyTasksMediaButton()
     private let mediaTrackLayer = CALayer()
     private let mediaProgressLayer = CALayer()
+    /// Máscara retangular que revela o preenchimento de progresso — a largura
+    /// anima, o pill mantém o formato (nada de scale X deformando as pontas).
+    private let mediaProgressMask = CALayer()
     private let media = MyTasksMediaButton()
     private let mediaBadge = NSTextField(labelWithString: "")
     private let more = NSButton()
@@ -659,6 +809,8 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     private weak var appState: AppState?
     private var anyPopupCancellable: AnyCancellable?
     private var mediaCancellable: AnyCancellable?
+    private var reviewCancellable: AnyCancellable?
+    private var watchedReviewTaskId: String?
     private var tracking: NSTrackingArea?
     private var hovered = false
     private var bulkSelected = false
@@ -670,6 +822,8 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     private var mediaBaseBackground = NSColor.clear.cgColor
     private var mediaBaseTitleColor = NSColor.labelColor
     private var mediaUsesAccentFill = false
+    private var reviewVisualState: ReviewVisualState = .hidden
+    private var reviewAnimationGeneration = 0
 
     var onActivate: (() -> Void)?
     var onStatusPicker: ((NSView) -> Void)?
@@ -687,13 +841,22 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         hoverLayer.masksToBounds = false
         layer?.addSublayer(hoverLayer)
         layer?.addSublayer(rule)
-        for capsuleLayer in [mediaTrackLayer, mediaProgressLayer] {
+        for capsuleLayer in [reviewTrackLayer, mediaTrackLayer, mediaProgressLayer] {
             capsuleLayer.cornerRadius = 13
             capsuleLayer.cornerCurve = .continuous
             layer?.addSublayer(capsuleLayer)
         }
+        reviewTrackLayer.masksToBounds = false
         mediaTrackLayer.masksToBounds = false
         mediaProgressLayer.masksToBounds = true
+        // O preenchimento de progresso fica SEMPRE do tamanho do pill (raio 13
+        // intacto) e é revelado por uma MÁSCARA retangular de largura animada.
+        // Antes o pill era escalado no eixo X (transform.scale.x), o que
+        // achatava as pontas arredondadas e deformava o botão durante o
+        // PREPARANDO/ENVIANDO.
+        mediaProgressMask.backgroundColor = NSColor.white.cgColor
+        mediaProgressMask.anchorPoint = CGPoint(x: 0, y: 0.5)
+        mediaProgressLayer.mask = mediaProgressMask
 
         done.setAccessibilityLabel("Mover tarefa para outro status")
         done.onActivate = { [weak self, weak done] in
@@ -714,6 +877,21 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         }
         layer?.addSublayer(priorityDot)
         addSubview(avatar)
+
+        review.title = "VER REVIEW"
+        review.font = NSFont.systemFont(ofSize: 9.2 * Editorial.typeScale, weight: .semibold)
+        review.isBordered = false
+        review.wantsLayer = false
+        review.controlSize = .small
+        review.focusRingType = .none
+        review.target = self
+        review.action = #selector(openReview(_:))
+        review.setAccessibilityLabel("Ver nova review")
+        review.toolTip = "Abrir a review atualizada"
+        review.onHover = { [weak self] active in self?.setReviewHover(active) }
+        review.isHidden = true
+        addSubview(review)
+        reviewTrackLayer.isHidden = true
 
         media.title = "ANEXAR"
         media.font = NSFont.systemFont(ofSize: 9.5 * Editorial.typeScale, weight: .semibold)
@@ -767,10 +945,25 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        if let watchedReviewTaskId {
+            TaskReviewUpdateStore.shared.unwatch(taskId: watchedReviewTaskId)
+        }
+        watchedReviewTaskId = nil
         task = nil
         appState = nil
         mediaCancellable?.cancel()
         mediaCancellable = nil
+        reviewCancellable?.cancel()
+        reviewCancellable = nil
+        reviewAnimationGeneration += 1
+        reviewVisualState = .hidden
+        review.isHidden = true
+        review.isEnabled = false
+        review.alphaValue = 1
+        reviewTrackLayer.isHidden = true
+        reviewTrackLayer.opacity = 1
+        reviewTrackLayer.transform = CATransform3DIdentity
+        reviewTrackLayer.shadowOpacity = 0
         avatar.prepareForReuse()
         hovered = false
         pressed = false
@@ -781,6 +974,10 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     }
 
     func bind(task: CUTask, appState: AppState) {
+        if let watchedReviewTaskId, watchedReviewTaskId != task.id {
+            TaskReviewUpdateStore.shared.unwatch(taskId: watchedReviewTaskId)
+        }
+        watchedReviewTaskId = task.id
         self.task = task
         self.appState = appState
         if anyPopupCancellable == nil {
@@ -790,12 +987,14 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
                     guard let self else { return }
                     self.done.isEnabled = !open
                     self.more.isEnabled = !open
+                    self.review.isEnabled = !open && self.reviewVisualState == .update
                     self.media.isEnabled = !open
                     if open { self.forceExitAllInteraction() }
                 }
         }
         done.isEnabled = !appState.anyPopupOpen
         more.isEnabled = !appState.anyPopupOpen
+        review.isEnabled = !appState.anyPopupOpen && reviewVisualState == .update
         media.isEnabled = !appState.anyPopupOpen
         mediaCancellable?.cancel()
         mediaCancellable = appState.taskMediaTransfers.objectWillChange
@@ -807,6 +1006,18 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
                 }
             }
         updateMediaButton(store: appState.taskMediaTransfers, taskId: task.id)
+        let reviewStore = TaskReviewUpdateStore.shared
+        reviewStore.watch(task: task)
+        reviewCancellable?.cancel()
+        reviewCancellable = reviewStore.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self, self.task?.id == task.id else { return }
+                    self.updateReviewButton(taskId: task.id)
+                }
+            }
+        updateReviewButton(taskId: task.id)
         title.stringValue = task.title
         title.toolTip = task.title
         title.font = NSFont.systemFont(ofSize: 15 * Editorial.typeScale,
@@ -819,10 +1030,8 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
                                         weight: .semibold, tracking: 0.9)
             let color = NSColor(Color(hex: task.priorityHex))
             priority.textColor = color
-            priorityDot.backgroundColor = resolvedCGColor(Color(nsColor: color))
-            priorityDot.cornerRadius = 3
             priority.isHidden = false
-            priorityDot.isHidden = false
+            priorityDot.isHidden = true   // dot removed — the coloured label carries the signal
         } else {
             priority.stringValue = ""
             priority.isHidden = true
@@ -919,6 +1128,8 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         pressed = false
         dragStarted = false
         done.resetInteraction(animated: false)
+        review.resetHover()
+        setReviewHover(false)
         media.resetHover()
         setMediaHover(false)
         setHoverMotion(active: false, animated: false)
@@ -942,6 +1153,10 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         hovered = false
         pressed = false
         done.resetInteraction(animated: false)
+        review.resetHover()
+        setReviewHover(false)
+        media.resetHover()
+        setMediaHover(false)
         setHoverMotion(active: false, animated: false)
         if hadRowHover { applyBackground() }
     }
@@ -1136,18 +1351,263 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         case .preparing, .sending, .failed, .sent:
             onMediaAction?(.status)
         case nil:
-            let actions = [
-                TaskContextAction(title: "Adicionar arquivos",
-                                  systemImage: "plus.circle",
-                                  action: { [weak self] in self?.onMediaAction?(.add) }),
-                TaskContextAction(title: "Substituir arquivo",
-                                  systemImage: "arrow.triangle.2.circlepath",
-                                  action: { [weak self] in self?.onMediaAction?(.replace) })
-            ]
-            let menu = TaskContextMenu.makeNSMenu(actions: actions)
-            menu.popUp(positioning: nil,
-                       at: NSPoint(x: sender.bounds.minX, y: sender.bounds.maxY + 3),
-                       in: sender)
+            let taskId = task.id
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await appState.taskMediaTransfers.loadCatalog(for: task, appState: appState)
+                guard self.task?.id == taskId,
+                      appState.anyPopupOpen != true else { return }
+
+                if appState.taskMediaTransfers.catalog(for: taskId)
+                    .hasReplaceablePublishedMedia {
+                    self.presentMediaEntryMenu(from: sender)
+                } else {
+                    // Empty tasks skip a menu with an impossible action and go
+                    // straight to the system file picker.
+                    self.onMediaAction?(.add)
+                }
+            }
+        }
+    }
+
+    private func presentMediaEntryMenu(from sender: NSButton) {
+        let actions = [
+            TaskContextAction(title: "Adicionar arquivos",
+                              systemImage: "plus.circle",
+                              action: { [weak self] in self?.onMediaAction?(.add) }),
+            TaskContextAction(title: "Substituir arquivo",
+                              systemImage: "arrow.triangle.2.circlepath",
+                              action: { [weak self] in self?.onMediaAction?(.replace) })
+        ]
+        let menu = TaskContextMenu.makeNSMenu(actions: actions)
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: sender.bounds.minX, y: sender.bounds.maxY + 3),
+                   in: sender)
+    }
+
+    @objc private func openReview(_ sender: NSButton) {
+        guard appState?.anyPopupOpen != true,
+              let task, let appState
+        else { return }
+
+        let updates = TaskReviewUpdateStore.shared.updates(for: task.id)
+        guard !updates.isEmpty else { return }
+        if updates.count > 1 {
+            TaskReviewQueuePresenter.shared.present(task: task, updates: updates)
+            return
+        }
+        guard let update = updates.first else { return }
+
+        // Opening is not acknowledgement. Keep the update alive until the
+        // reviewer explicitly concludes it and presses "Fechar" in ReviewKit.
+        ReviewWatcher.shared.register(
+            att: update.activeAtt,
+            mediaUrl: update.attachment.url,
+            ext: update.attachment.ext,
+            taskId: task.id,
+            title: update.attachment.title,
+            uploaderId: update.attachment.uploaderId,
+            tintHex: nil,
+            currentUpdatedAt: update.meta.updatedAt,
+            versionId: update.meta.evaluatedVersionId
+        )
+        let actorId = appState.clickUpAuthService.userId ?? 0
+        let actorName = appState.availableMembers
+            .first { $0.id == actorId }?.username ?? "Revisor"
+        ReviewPresenter.shared.present(
+            ReviewLink.params(attachment: update.attachment,
+                              taskId: task.id,
+                              listId: task.listId,
+                              uploaderId: update.attachment.uploaderId,
+                              actorId: actorId,
+                              actorName: actorName,
+                              reviewId: update.meta.reviewId,
+                              versionId: update.meta.evaluatedVersionId
+                                ?? update.meta.currentVersionId),
+            completionAcknowledgement: ReviewCompletionAcknowledgement(
+                taskId: task.id,
+                activeAtt: update.activeAtt
+            )
+        )
+    }
+
+    private func updateReviewButton(taskId: String) {
+        let next: ReviewVisualState
+        switch TaskReviewUpdateStore.shared.capsuleState(for: taskId) {
+        case .update?: next = .update
+        case .reviewed?: next = .reviewed
+        case nil: next = .hidden
+        }
+
+        guard next != reviewVisualState else { return }
+        reviewAnimationGeneration += 1
+        let generation = reviewAnimationGeneration
+        let previous = reviewVisualState
+        reviewVisualState = next
+
+        switch next {
+        case .update:
+            presentReviewCapsule(
+                title: "VER REVIEW",
+                titleColor: .white,
+                fill: .controlAccentColor,
+                interactive: appState?.anyPopupOpen != true,
+                from: previous,
+                generation: generation
+            )
+        case .reviewed:
+            presentReviewCapsule(
+                title: "REVISADO",
+                titleColor: reviewSuccessInk,
+                fill: reviewSuccessFill,
+                interactive: false,
+                from: previous,
+                generation: generation
+            )
+            pulseReviewSuccess(generation: generation)
+        case .hidden:
+            dismissReviewCapsule(taskId: taskId, generation: generation)
+        }
+        needsLayout = true
+    }
+
+    private var reviewSuccessFill: NSColor {
+        NSColor(srgbRed: 0.84, green: 0.96, blue: 0.88, alpha: 1)
+    }
+
+    private var reviewSuccessInk: NSColor {
+        NSColor(srgbRed: 0.045, green: 0.34, blue: 0.17, alpha: 1)
+    }
+
+    private func presentReviewCapsule(title: String,
+                                      titleColor: NSColor,
+                                      fill: NSColor,
+                                      interactive: Bool,
+                                      from previous: ReviewVisualState,
+                                      generation: Int) {
+        review.isHidden = false
+        reviewTrackLayer.isHidden = false
+        review.isEnabled = interactive
+        review.setAccessibilityLabel(title == "REVISADO"
+            ? "Review concluída"
+            : "Ver nova review")
+        review.toolTip = title == "REVISADO"
+            ? "Review concluída"
+            : "Abrir a review atualizada"
+
+        let wasHidden = previous == .hidden
+        if wasHidden {
+            review.title = title
+            setReviewTitleColor(titleColor)
+            review.alphaValue = 0
+            reviewTrackLayer.opacity = 0
+            reviewTrackLayer.transform = CATransform3DMakeScale(0.94, 0.94, 1)
+        } else {
+            crossfadeReviewTitle(title, color: titleColor,
+                                 generation: generation)
+        }
+
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(wasHidden ? 0.30 : 0.36)
+        CATransaction.setAnimationTimingFunction(
+            CAMediaTimingFunction(controlPoints: 0.18, 0.84, 0.24, 1.00)
+        )
+        reviewTrackLayer.backgroundColor = fill.cgColor
+        reviewTrackLayer.opacity = 1
+        reviewTrackLayer.transform = CATransform3DIdentity
+        CATransaction.commit()
+
+        if wasHidden {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.28
+                context.timingFunction = CAMediaTimingFunction(
+                    controlPoints: 0.18, 0.84, 0.24, 1.00
+                )
+                review.animator().alphaValue = 1
+            }
+        }
+    }
+
+    private func crossfadeReviewTitle(_ title: String,
+                                      color: NSColor,
+                                      generation: Int) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.10
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            review.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            DispatchQueue.main.async {
+                guard let self,
+                      self.reviewAnimationGeneration == generation,
+                      self.reviewVisualState != .hidden else { return }
+                self.review.title = title
+                self.setReviewTitleColor(color)
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.24
+                    context.timingFunction = CAMediaTimingFunction(
+                        controlPoints: 0.18, 0.84, 0.24, 1.00
+                    )
+                    self.review.animator().alphaValue = 1
+                }
+            }
+        }
+    }
+
+    private func pulseReviewSuccess(generation: Int) {
+        reviewTrackLayer.shadowColor = NSColor.systemGreen.cgColor
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.30)
+        CATransaction.setAnimationTimingFunction(
+            CAMediaTimingFunction(controlPoints: 0.18, 0.84, 0.24, 1.00)
+        )
+        reviewTrackLayer.shadowOpacity = 0.18
+        reviewTrackLayer.shadowRadius = 8
+        reviewTrackLayer.shadowOffset = CGSize(width: 0, height: 2)
+        CATransaction.commit()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.58) { [weak self] in
+            guard let self,
+                  self.reviewAnimationGeneration == generation,
+                  self.reviewVisualState == .reviewed else { return }
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.42)
+            CATransaction.setAnimationTimingFunction(
+                CAMediaTimingFunction(name: .easeOut)
+            )
+            self.reviewTrackLayer.shadowOpacity = 0.04
+            self.reviewTrackLayer.shadowRadius = 3
+            CATransaction.commit()
+        }
+    }
+
+    private func dismissReviewCapsule(taskId: String, generation: Int) {
+        review.isEnabled = false
+        review.resetHover()
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.26)
+        CATransaction.setAnimationTimingFunction(
+            CAMediaTimingFunction(controlPoints: 0.40, 0.00, 0.67, 1.00)
+        )
+        reviewTrackLayer.opacity = 0
+        reviewTrackLayer.transform = CATransform3DMakeScale(0.96, 0.96, 1)
+        reviewTrackLayer.shadowOpacity = 0
+        CATransaction.commit()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            review.animator().alphaValue = 0
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.27) { [weak self] in
+            guard let self,
+                  self.task?.id == taskId,
+                  self.reviewAnimationGeneration == generation,
+                  self.reviewVisualState == .hidden else { return }
+            self.review.isHidden = true
+            self.reviewTrackLayer.isHidden = true
+            self.review.alphaValue = 1
+            self.reviewTrackLayer.opacity = 1
+            self.reviewTrackLayer.transform = CATransform3DIdentity
         }
     }
 
@@ -1189,27 +1649,76 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
 
     private func setMediaProgress(_ fraction: CGFloat, animated: Bool) {
         let target = max(0, min(1, fraction))
-        let current = (mediaProgressLayer.presentation()?.value(forKeyPath: "transform.scale.x") as? NSNumber)
-            .map(CGFloat.init(truncating:)) ?? mediaProgressFraction
+        let fullWidth = mediaProgressLayer.bounds.width
+        let currentWidth = (mediaProgressMask.presentation()?
+            .value(forKeyPath: "bounds.size.width") as? NSNumber)
+            .map(CGFloat.init(truncating:)) ?? (mediaProgressFraction * fullWidth)
         mediaProgressFraction = target
-        mediaProgressLayer.transform = CATransform3DMakeScale(target, 1, 1)
-        guard animated, abs(current - target) > 0.002 else { return }
-        let animation = CABasicAnimation(keyPath: "transform.scale.x")
-        animation.fromValue = current
-        animation.toValue = target
+        let targetWidth = target * fullWidth
+        // Largura da MÁSCARA anima; o pill do preenchimento nunca é escalado,
+        // então o raio das pontas fica intacto (sem deformar o botão).
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        mediaProgressMask.bounds = CGRect(x: 0, y: 0,
+                                          width: targetWidth,
+                                          height: mediaProgressLayer.bounds.height)
+        mediaProgressMask.position = .init(x: 0, y: mediaProgressLayer.bounds.midY)
+        CATransaction.commit()
+        guard animated, abs(currentWidth - targetWidth) > 0.5 else { return }
+        let animation = CABasicAnimation(keyPath: "bounds.size.width")
+        animation.fromValue = currentWidth
+        animation.toValue = targetWidth
         animation.duration = 0.22
         animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        mediaProgressLayer.add(animation, forKey: "apollo.media.progress")
+        mediaProgressMask.add(animation, forKey: "apollo.media.progress")
     }
 
     private func setMediaTitleColor(_ color: NSColor) {
+        let baseSize: CGFloat = media.title.count > 11 ? 8.0 : 9.5
         media.attributedTitle = NSAttributedString(
             string: media.title,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 9.5 * Editorial.typeScale, weight: .semibold),
+                .font: NSFont.systemFont(ofSize: baseSize * Editorial.typeScale,
+                                         weight: .semibold),
                 .foregroundColor: color
             ]
         )
+    }
+
+    private func setReviewTitleColor(_ color: NSColor) {
+        review.attributedTitle = NSAttributedString(
+            string: review.title,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 9.2 * Editorial.typeScale,
+                                         weight: .semibold),
+                .foregroundColor: color
+            ]
+        )
+    }
+
+    private func setReviewHover(_ active: Bool) {
+        guard reviewVisualState == .update else {
+            if reviewVisualState == .reviewed {
+                reviewTrackLayer.backgroundColor = reviewSuccessFill.cgColor
+                setReviewTitleColor(reviewSuccessInk)
+            }
+            return
+        }
+        let shouldActivate = active
+            && review.isEnabled
+            && !review.isHidden
+            && appState?.anyPopupOpen != true
+            && !ScrollStateObserver.isScrollingNow
+            && !ScrollGate.shared.active
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(shouldActivate ? 0.16 : 0.22)
+        CATransaction.setAnimationTimingFunction(
+            CAMediaTimingFunction(controlPoints: 0.20, 0.82, 0.24, 1.00)
+        )
+        reviewTrackLayer.backgroundColor = NSColor.controlAccentColor
+            .withAlphaComponent(shouldActivate ? 0.82 : 1).cgColor
+        CATransaction.commit()
+        setReviewTitleColor(.white)
     }
 
     private func setMediaHover(_ active: Bool) {
@@ -1260,28 +1769,22 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         // inoperative in normal use.
         done.frame = NSRect(x: edge - 7, y: centerY - 12, width: 24, height: 24)
 
-        let moreWidth: CGFloat = 18
-        let gap: CGFloat = 14
-        let dateWidth: CGFloat = 92
-        let assigneeWidth: CGFloat = 132
-        let priorityWidth: CGFloat = 112
-        let mediaWidth: CGFloat = 92
-        let moreX = bounds.width - edge - moreWidth
-        let dateX = moreX - gap - dateWidth
-        let assigneeX = dateX - gap - assigneeWidth
-        let priorityX = assigneeX - gap - priorityWidth
-        let mediaX = priorityX - gap - mediaWidth
-        let titleX = edge + 10 + 12
-        // Extra breathing room specifically between the task title and the
-        // ANEXAR capsule (+50% over the standard column gap), so the title
-        // never crowds the button.
-        let titleTrailingGap = gap * 1.5
+        // Column x/widths come from the shared, user-resizable layout model so
+        // the SwiftUI column header and these rows are always in lockstep.
+        let m = MyTasksColumnLayout.shared.metrics(totalWidth: bounds.width)
 
-        title.frame = NSRect(x: titleX, y: centeredY(for: title, at: centerY),
-                             width: max(0, mediaX - titleTrailingGap - titleX), height: fittedHeight(title))
+        title.frame = NSRect(x: m.titleX, y: centeredY(for: title, at: centerY),
+                             width: m.titleWidth, height: fittedHeight(title))
 
-        media.frame = NSRect(x: mediaX, y: centerY - 13,
-                             width: mediaWidth, height: 26)
+        review.frame = NSRect(x: m.reviewX, y: centerY - 13,
+                              width: m.reviewWidth, height: 26)
+        reviewTrackLayer.frame = review.frame
+        reviewTrackLayer.shadowPath = CGPath(
+            roundedRect: CGRect(origin: .zero, size: review.frame.size),
+            cornerWidth: 13, cornerHeight: 13, transform: nil)
+
+        media.frame = NSRect(x: m.mediaX, y: centerY - 13,
+                             width: m.mediaWidth, height: 26)
         mediaTrackLayer.frame = media.frame
         mediaTrackLayer.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: media.frame.size),
                                             cornerWidth: 13, cornerHeight: 13,
@@ -1289,28 +1792,32 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         mediaProgressLayer.bounds = CGRect(origin: .zero, size: media.frame.size)
         mediaProgressLayer.anchorPoint = CGPoint(x: 0, y: 0.5)
         mediaProgressLayer.position = CGPoint(x: media.frame.minX, y: media.frame.midY)
+        // Máscara acompanha o novo tamanho do pill mantendo a fração atual.
+        mediaProgressMask.bounds = CGRect(x: 0, y: 0,
+                                          width: media.frame.width * mediaProgressFraction,
+                                          height: media.frame.height)
+        mediaProgressMask.position = CGPoint(x: 0, y: media.frame.height / 2)
         mediaBadge.frame = NSRect(x: media.frame.maxX - 12,
                                   y: media.frame.minY - 6,
                                   width: 20, height: 16)
 
         priority.sizeToFit()
         let priorityH = priority.frame.height
-        priorityDot.frame = CGRect(x: priorityX, y: centerY - 3, width: 6, height: 6)
-        priority.frame = NSRect(x: priorityX + 11, y: centerY - priorityH / 2,
-                                width: max(0, priorityWidth - 11), height: priorityH)
+        priority.frame = NSRect(x: m.priorityX, y: centerY - priorityH / 2,
+                                width: max(0, m.priorityWidth), height: priorityH)
 
-        avatar.frame = NSRect(x: assigneeX, y: centerY - 10, width: 20, height: 20)
+        avatar.frame = NSRect(x: m.assigneeX, y: centerY - 10, width: 20, height: 20)
         assignee.sizeToFit()
         let assigneeH = assignee.frame.height
-        assignee.frame = NSRect(x: assigneeX + 27, y: centerY - assigneeH / 2,
-                                width: assigneeWidth - 27, height: assigneeH)
+        assignee.frame = NSRect(x: m.assigneeX + 27, y: centerY - assigneeH / 2,
+                                width: max(0, m.assigneeWidth - 27), height: assigneeH)
 
         date.sizeToFit()
         let dateSize = date.frame.size
-        date.frame = NSRect(x: dateX + max(0, dateWidth - dateSize.width),
+        date.frame = NSRect(x: m.dateX + max(0, m.dateWidth - dateSize.width),
                             y: centerY - dateSize.height / 2,
-                            width: min(dateSize.width, dateWidth), height: dateSize.height)
-        more.frame = NSRect(x: moreX, y: centerY - 9, width: 18, height: 18)
+                            width: min(dateSize.width, m.dateWidth), height: dateSize.height)
+        more.frame = NSRect(x: m.moreX, y: centerY - 9, width: 18, height: 18)
     }
 
     private func fittedHeight(_ field: NSTextField) -> CGFloat {
@@ -1584,6 +2091,8 @@ private final class MyTasksHeaderItem: NSCollectionViewItem {
 }
 
 private final class MyTasksHeaderView: NSView {
+    static let studioSource = StudioSourceLocation(file: String(describing: #fileID),
+                                                   line: #line)
     override var isFlipped: Bool { true }
     private let chevron = NSImageView()
     private let title = NSTextField(labelWithString: "")
@@ -1651,3 +2160,56 @@ private final class MyTasksHeaderView: NSView {
 
     override func mouseDown(with event: NSEvent) { onToggle?() }
 }
+
+#if DEBUG
+/// Direct Xcode Canvas host for Apollo's production AppKit task viewport.
+///
+/// The preview renders the actual `NSCollectionView` headers, rows, hover
+/// layers and drag/drop implementation. The fixture state is local-only and
+/// never initializes ClickUp, Google Calendar, Keychain or synchronization.
+@MainActor
+private struct MyTasksAppKitListCanvasPreview: View {
+    @StateObject private var appState = AppState.preview(.populated)
+
+    private var sections: [MyTasksAppKitSection] {
+        ApolloPreviewFixtures.statuses.map { status in
+            MyTasksAppKitSection(
+                status: status,
+                tasks: appState.tasks.filter {
+                    $0.status.caseInsensitiveCompare(status.status) == .orderedSame
+                },
+                collapsed: false
+            )
+        }
+    }
+
+    var body: some View {
+        MyTasksAppKitList(
+            sections: sections,
+            selectedTaskIds: [],
+            appState: appState,
+            topContentInset: 24,
+            bottomContentInset: 24,
+            onActivate: { _, _, _ in },
+            onToggleStatus: { _ in },
+            onBeginDrag: { [$0.id] },
+            onEndDrag: { _ in },
+            onClearSelection: {},
+            onMediaAction: { _, _ in }
+        )
+        .frame(width: 1_180, height: 780)
+        .background(Editorial.paper)
+        .preferredColorScheme(.light)
+        .defaultAppStorage(ApolloPreviewFixtures.defaults)
+    }
+}
+
+#Preview("AppKit real · Tarefas") {
+    MyTasksAppKitListCanvasPreview()
+}
+
+#Preview("AppKit real · Tarefas dark") {
+    MyTasksAppKitListCanvasPreview()
+        .preferredColorScheme(.dark)
+}
+#endif

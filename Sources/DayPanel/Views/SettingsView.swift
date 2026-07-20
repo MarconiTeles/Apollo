@@ -19,7 +19,8 @@ struct SettingsView: View {
     @State private var section: SettingsSection = .integracoes
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Editorial.popupRadius(8), style: .continuous)
+        // Mesmo arredondamento da janela de Anexar (TaskMediaFlowSheet).
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(9), style: .continuous)
     }
 
     /// Full-bleed: fills the window minus the prototype's
@@ -101,10 +102,17 @@ struct SettingsView: View {
             .padding(.horizontal, 16).padding(.vertical, 12)
         }
         .frame(width: 260)
-        .liquidGlass(in: Rectangle(),
-                     tint: Editorial.ink,
-                     tintOpacity: 0.012,
-                     interactive: false)
+        // Material OFICIAL do header (mesma receita de Tarefas).
+        .officialHeaderMaterial(in: Rectangle())
+        .apolloStudioNode("settings.sidebar",
+                          title: "Navegação de configurações",
+                          kind: .sidebar,
+                          parent: "settings.panel",
+                          properties: [
+                            .init(kind: .width, title: "Largura", value: 260),
+                            .init(kind: .material,
+                                  title: "Material", token: "OfficialHeaderMaterial"),
+                          ])
     }
 
     // MARK: Content
@@ -158,6 +166,10 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Editorial.page)
+        .apolloStudioNode("settings.content",
+                          title: "Conteúdo de configurações",
+                          kind: .section,
+                          parent: "settings.panel")
     }
 
     // MARK: Account identity (real)
@@ -572,6 +584,18 @@ private struct SetNavItem: View {
         .focusEffectDisabled()
         .scrollAwareOnHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: hover)
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "settings.nav.\(item.rawValue)"),
+            title: item.label,
+            kind: .button,
+            parent: "settings.sidebar",
+            properties: [
+                .init(kind: .verticalPadding,
+                      title: "Padding vertical", value: 10),
+                .init(kind: .animationDuration,
+                      title: "Hover", value: 0.12),
+            ]
+        )
     }
 }
 
@@ -595,6 +619,16 @@ private struct SetSection<Content: View>: View {
                 .padding(.top, 4)
         }
         .padding(.bottom, 36)
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "settings.section.\(title.lowercased())"),
+            title: title,
+            kind: .section,
+            parent: "settings.content",
+            properties: [
+                .init(kind: .verticalPadding,
+                      title: "Distância entre seções", value: 36),
+            ]
+        )
     }
 }
 
@@ -632,6 +666,17 @@ private struct SetRow<Control: View>: View {
                 Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
             }
         }
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "settings.row.\(label.lowercased())"),
+            title: label,
+            kind: .row,
+            parent: "settings.content",
+            properties: [
+                .init(kind: .verticalPadding,
+                      title: "Padding vertical", value: 16),
+                .init(kind: .spacing, title: "Espaçamento", value: 24),
+            ]
+        )
     }
 }
 

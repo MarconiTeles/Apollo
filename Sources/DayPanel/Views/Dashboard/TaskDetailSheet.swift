@@ -119,11 +119,12 @@ struct TaskDetailSheet: View, Equatable {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Editorial.popupRadius(4.5), style: .continuous)
+        // Mesmo arredondamento da janela de Anexar (TaskMediaFlowSheet).
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(9), style: .continuous)
     }
 
     private var headerShape: UnevenRoundedRectangle {
-        let radius = Editorial.popupRadius(4.5)
+        let radius = Editorial.popupRadius(9)
         return UnevenRoundedRectangle(topLeadingRadius: radius,
                                       bottomLeadingRadius: 0,
                                       bottomTrailingRadius: 0,
@@ -191,10 +192,8 @@ struct TaskDetailSheet: View, Equatable {
 
             masthead
                 .frame(minHeight: mastheadHeight)
-                .liquidGlass(in: headerShape,
-                             tint: Editorial.ink,
-                             tintOpacity: 0.01,
-                             interactive: false)
+                // Material OFICIAL do header (mesma receita de Tarefas).
+                .officialHeaderMaterial(in: headerShape)
                 .overlay(alignment: .bottom) {
                     Rectangle().fill(Editorial.rule).frame(height: 1)
                 }
@@ -377,6 +376,18 @@ struct TaskDetailSheet: View, Equatable {
         }
         .padding(.horizontal, 40)
         .padding(.vertical, 14)
+        .apolloStudioNode("task-detail.header",
+                          title: "Cabeçalho da tarefa",
+                          kind: .header,
+                          parent: "task-detail.panel",
+                          properties: [
+                            .init(kind: .horizontalPadding,
+                                  title: "Padding horizontal", value: 40),
+                            .init(kind: .verticalPadding,
+                                  title: "Padding vertical", value: 14),
+                            .init(kind: .material,
+                                  title: "Material", token: "Materials.titlebar"),
+                          ])
     }
 
     private func detailNavigationButton(
@@ -473,6 +484,14 @@ struct TaskDetailSheet: View, Equatable {
             .padding(.top, 12)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .apolloStudioNode("task-detail.title",
+                          title: "Título da tarefa",
+                          kind: .section,
+                          parent: "task-detail.overview",
+                          properties: [
+                            .init(kind: .fontSize, title: "Título", value: 38),
+                            .init(kind: .spacing, title: "Espaçamento", value: 12),
+                          ])
     }
 
     private var overviewMain: some View {
@@ -513,6 +532,10 @@ struct TaskDetailSheet: View, Equatable {
             .padding(.bottom, 32)
         }
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .apolloStudioNode("task-detail.overview",
+                          title: "Visão geral da tarefa",
+                          kind: .section,
+                          parent: "task-detail.panel")
     }
 
     // MARK: - Other tabs
@@ -549,6 +572,10 @@ struct TaskDetailSheet: View, Equatable {
             .padding(.bottom, 32)
         }
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .apolloStudioNode("task-detail.subtasks",
+                          title: "Subtarefas",
+                          kind: .section,
+                          parent: "task-detail.panel")
     }
 
     private var attachmentsTab: some View {
@@ -568,6 +595,10 @@ struct TaskDetailSheet: View, Equatable {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.horizontal, 56)
         .padding(.vertical, 32)
+        .apolloStudioNode("task-detail.attachments",
+                          title: "Anexos",
+                          kind: .section,
+                          parent: "task-detail.panel")
     }
 
     private var activityTab: some View {
@@ -579,6 +610,10 @@ struct TaskDetailSheet: View, Equatable {
             .padding(.horizontal, 56)
             .padding(.bottom, 28)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .apolloStudioNode("task-detail.activity",
+                              title: "Atividade e comentários",
+                              kind: .section,
+                              parent: "task-detail.panel")
     }
 
 }

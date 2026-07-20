@@ -4,6 +4,15 @@ import PackageDescription
 let package = Package(
     name: "DayPanel",
     platforms: [.macOS(.v14)],
+    products: [
+        // Apollo's production executable keeps the historical product name so
+        // build.sh, packaging and Sparkle remain unchanged.
+        .executable(name: "DayPanel", targets: ["DayPanel"]),
+        // Shared by the production executable and the offline Apollo Studio
+        // development host. Keeping the real views in one module prevents the
+        // editor from drifting into a visual approximation of the app.
+        .library(name: "ApolloRuntime", targets: ["ApolloRuntime"]),
+    ],
     dependencies: [
         // Sparkle 2.x — secure auto-update framework. Pulled
         // in via SPM; the framework binaries land in the
@@ -29,8 +38,8 @@ let package = Package(
         .package(path: "../apollo-review-swift"),
     ],
     targets: [
-        .executableTarget(
-            name: "DayPanel",
+        .target(
+            name: "ApolloRuntime",
             dependencies: [
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "ReviewKit", package: "apollo-review-swift"),
@@ -42,11 +51,17 @@ let package = Package(
             exclude: [
                 "Resources/Info.plist",
                 "Resources/APOLLO_ICON_06.png",
+                "Resources/APOLLO.icon",
                 "Resources/Apollo.entitlements",
                 "Resources/SparkleEntitlements/Downloader.entitlements",
                 "Resources/SparkleEntitlements/Installer.entitlements",
                 "Resources/SparkleEntitlements/Updater.entitlements"
             ]
+        ),
+        .executableTarget(
+            name: "DayPanel",
+            dependencies: ["ApolloRuntime"],
+            path: "Sources/DayPanelApp"
         ),
         // Invariants that were expensive to (re)discover in
         // production: deterministic task ordering, page-order
@@ -56,7 +71,7 @@ let package = Package(
         // `swift test`.
         .testTarget(
             name: "DayPanelTests",
-            dependencies: ["DayPanel"],
+            dependencies: ["ApolloRuntime"],
             path: "Tests/DayPanelTests"
         )
     ]

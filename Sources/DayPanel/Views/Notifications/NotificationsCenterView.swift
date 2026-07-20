@@ -120,10 +120,8 @@ struct NotificationsCenterView: View {
 
             header
                 .frame(height: topBarHeight)
-                .liquidGlass(in: topBarShape,
-                             tint: Editorial.ink,
-                             tintOpacity: 0.01,
-                             interactive: false)
+                // Material OFICIAL do header (mesma receita de Tarefas).
+                .officialHeaderMaterial(in: topBarShape)
                 .overlay(alignment: .bottom) {
                     Rectangle().fill(Editorial.rule).frame(height: 1)
                 }
@@ -132,10 +130,7 @@ struct NotificationsCenterView: View {
             if hasFeedContent {
                 footer
                     .frame(height: bottomBarHeight)
-                    .liquidGlass(in: bottomBarShape,
-                                 tint: Editorial.ink,
-                                 tintOpacity: 0.01,
-                                 interactive: false)
+                    .officialHeaderMaterial(in: bottomBarShape)
                     .overlay(alignment: .top) {
                         Rectangle().fill(Editorial.rule).frame(height: 1)
                     }
@@ -152,6 +147,15 @@ struct NotificationsCenterView: View {
         .frame(width: 440)
         .frame(maxHeight: .infinity)
         .solidPopupSurface(in: shape)
+        .apolloStudioNode("notifications.feed",
+                          title: "Feed de notificações",
+                          kind: .list,
+                          parent: "notifications.panel",
+                          properties: [
+                            .init(kind: .width, title: "Largura", value: 440),
+                            .init(kind: .cornerRadius,
+                                  title: "Raio", token: "Editorial.popupRadius"),
+                          ])
     }
 
     private var footerReserve: CGFloat {
@@ -239,6 +243,18 @@ struct NotificationsCenterView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
+        .apolloStudioNode("notifications.header",
+                          title: "Barra superior de notificações",
+                          kind: .header,
+                          parent: "notifications.panel",
+                          properties: [
+                            .init(kind: .horizontalPadding,
+                                  title: "Padding horizontal", value: 20),
+                            .init(kind: .verticalPadding,
+                                  title: "Padding vertical", value: 14),
+                            .init(kind: .material,
+                                  title: "Material", token: "Materials.popupBar"),
+                          ])
     }
 
     private var headerBadgeCount: Int {
@@ -413,6 +429,18 @@ struct NotificationRow: View, Equatable {
         .buttonStyle(.plain)
         .focusEffectDisabled()
         .capsuleHoverLift(tint: targetTint)
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "notifications.row.\(notification.id.uuidString)"),
+            title: notification.title,
+            kind: .row,
+            parent: "notifications.feed",
+            properties: [
+                .init(kind: .horizontalPadding, title: "Padding H", value: 15),
+                .init(kind: .verticalPadding, title: "Padding V", value: 9),
+                .init(kind: .height, title: "Altura mínima", value: 58),
+                .init(kind: .cornerRadius, title: "Raio", token: "Editorial.notificationCapsuleRadius"),
+            ]
+        )
     }
 
     private var targetIcon: String {

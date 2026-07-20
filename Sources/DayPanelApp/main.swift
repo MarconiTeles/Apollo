@@ -1,0 +1,3 @@
+import ApolloRuntime
+
+ApolloRuntimeLauncher.runProductionApp()

@@ -50,11 +50,12 @@ struct EventDetailView: View {
 
     private var color: Color { Color(googleSnapHex: event.colorHex) }
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Editorial.popupRadius(4.5), style: .continuous)
+        // Mesmo arredondamento da janela de Anexar (TaskMediaFlowSheet).
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(9), style: .continuous)
     }
 
     private var headerShape: UnevenRoundedRectangle {
-        let radius = Editorial.popupRadius(4.5)
+        let radius = Editorial.popupRadius(9)
         return UnevenRoundedRectangle(topLeadingRadius: radius,
                                       bottomLeadingRadius: 0,
                                       bottomTrailingRadius: 0,
@@ -230,6 +231,18 @@ struct EventDetailView: View {
         .padding(.horizontal, 28)
         .padding(.top, 20)
         .padding(.bottom, 16)
+        .apolloStudioNode("event-detail.header",
+                          title: "Cabeçalho do evento",
+                          kind: .header,
+                          parent: "event-detail.panel",
+                          properties: [
+                            .init(kind: .horizontalPadding,
+                                  title: "Padding horizontal", value: 28),
+                            .init(kind: .fontSize,
+                                  title: "Título", value: 26),
+                            .init(kind: .material,
+                                  title: "Material", token: "Materials.titlebar"),
+                          ])
     }
 
     /// Real status kicker — the user's own RSVP when they're a
@@ -274,6 +287,17 @@ struct EventDetailView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
         }
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "event-detail.row.\(label.lowercased())"),
+            title: label,
+            kind: .row,
+            parent: "event-detail.content",
+            properties: [
+                .init(kind: .verticalPadding,
+                      title: "Padding vertical", value: 10),
+                .init(kind: .spacing, title: "Espaçamento", value: 12),
+            ]
+        )
     }
 
     // MARK: - Meeting button (prototype: full-width ink CTA)
@@ -307,6 +331,10 @@ struct EventDetailView: View {
                 .help("Copiar link")
             }
         }
+        .apolloStudioNode("event-detail.meeting",
+                          title: "Entrar na reunião",
+                          kind: .button,
+                          parent: "event-detail.content")
     }
 
     private func meetingProvider(_ url: URL) -> String {
@@ -342,6 +370,10 @@ struct EventDetailView: View {
                 }
             }
         }
+        .apolloStudioNode("event-detail.attendees",
+                          title: "Convidados",
+                          kind: .section,
+                          parent: "event-detail.content")
     }
 
     private var attendeeCounts: String {

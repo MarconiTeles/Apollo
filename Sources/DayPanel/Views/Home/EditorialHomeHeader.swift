@@ -25,15 +25,23 @@ struct EditorialHomeHeader: View {
         // the next event; the numeric summary strip was removed to
         // keep the top of Today focused on actionable content.
         VStack(alignment: .leading, spacing: 0) {
-            if let next = nextEvent {
-                nextEventCard(next)
-                    .padding(.top, 22)
-            }
+            // Next-event highlight card removed — the agenda column already
+            // carries the upcoming event; the header keeps only the labels.
             sectionLabels
                 .padding(.top, 22)
                 .padding(.bottom, 12)
         }
         .padding(.horizontal, 28)
+        .apolloStudioNode("inbox.header",
+                          title: "Header do Inbox",
+                          kind: .header,
+                          parent: "inbox.page",
+                          properties: [
+                            .init(kind: .horizontalPadding,
+                                  title: "Padding horizontal", value: 28),
+                            .init(kind: .verticalPadding,
+                                  title: "Respiro superior", value: 22),
+                          ])
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -107,15 +115,11 @@ struct EditorialHomeHeader: View {
           // connected user is actually an attendee of this event.
           rsvpRow(ev)
         }
-        .padding(.horizontal, 22)
-        // Vertical padding trimmed (20 → 14) as part of the ~30% height
-        // reduction; the card stays balanced because the inner spacings
-        // and type sizes were scaled down proportionally.
-        .padding(.vertical, 14)
-        // The next-event card uses the exact same material recipe as the
-        // floating sidebar, only with its own geometry.
-        .floatingPanelGlass(in: RoundedRectangle(cornerRadius: 11,
-                                                  style: .continuous))
+        // Background removed — the event sits flush on the page. The inner
+        // horizontal inset goes too, so the content lines up with the section
+        // labels below instead of being indented by a phantom card.
+        .padding(.vertical, 6)
+        .padding(.leading, 60)
     }
 
     // ────────────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import SwiftUI
 
 struct EditorialHomeInboxColumn: View {
     @EnvironmentObject var appState: AppState
+    var topInset: CGFloat = 14
 
     private var inboxNotifications: [AppNotification] {
         appState.notifications.filter(\.isHomeInboxEligible)
@@ -29,11 +30,22 @@ struct EditorialHomeInboxColumn: View {
                         } else {
                             appState.markNotificationRead(notification.id)
                         }
-                    }
+                    },
+                    topInset: topInset
                 )
             }
         }
         .background(Editorial.paper)
+        .apolloStudioNode("inbox.feed",
+                          title: "Feed do Inbox",
+                          kind: .list,
+                          parent: "inbox.page",
+                          properties: [
+                            .init(kind: .verticalPadding,
+                                  title: "Inset superior", value: topInset),
+                            .init(kind: .backgroundColor,
+                                  title: "Canvas", token: "Editorial.paper"),
+                          ])
     }
 
     private var emptyState: some View {

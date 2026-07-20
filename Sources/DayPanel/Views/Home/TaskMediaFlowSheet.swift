@@ -28,6 +28,10 @@ struct TaskMediaFlowSheet: View {
         case trim
         case selectReplacement
         case confirmReplacement
+        /// Pós-preparo bem-sucedido: pergunta se o usuário já quer enviar
+        /// (SIM → .mentions; AGORA NÃO → fecha e volta pras tarefas), em vez
+        /// de jogar de volta pra lista e exigir um clique em ENVIAR na linha.
+        case readyPrompt
         case mentions
         case status
     }
@@ -38,6 +42,8 @@ struct TaskMediaFlowSheet: View {
     @State private var replacementURLs: [UUID: URL] = [:]
     @State private var selectedMemberIds: Set<Int> = []
     @State private var memberQuery = ""
+    /// Espelho local dos favoritos (UserDefaults) pra UI reagir na hora.
+    @State private var favoriteIds: Set<Int> = MentionPreferences.favoriteIds
     @State private var outputNames: [UUID: String] = [:]
     @State private var localError: String?
     @State private var preparing = false
@@ -163,6 +169,7 @@ struct TaskMediaFlowSheet: View {
         switch stage {
         case .trim: return "Cortar clipe"
         case .selectReplacement, .confirmReplacement: return "Substituir arquivo"
+        case .readyPrompt: return "Vídeos preparados"
         case .mentions: return "Enviar para revisão"
         case .status: return "Processamento em segundo plano"
         default: return "Anexar vídeos"
@@ -178,9 +185,34 @@ struct TaskMediaFlowSheet: View {
         case .trim: trimBody
         case .selectReplacement: replacementPicker
         case .confirmReplacement: replacementConfirmation
+        case .readyPrompt: readyPromptBody
         case .mentions: mentionsBody
         case .status: statusBody
         }
+    }
+
+    /// Pós-preparo: os vídeos estão prontos — pergunta se já quer enviar,
+    /// sem jogar o usuário de volta pra lista de tarefas.
+    private var readyPromptBody: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 34, weight: .medium))
+                .foregroundStyle(Editorial.accent)
+                .frame(width: 88, height: 88)
+                .background(Circle().fill(Editorial.accentSoft))
+            Text("\(pendingOutputs.count) vídeo\(pendingOutputs.count == 1 ? "" : "s") preparado\(pendingOutputs.count == 1 ? "" : "s")")
+                .font(Editorial.sans(14, .semibold))
+                .foregroundStyle(Editorial.ink)
+            Text("Quer enviar agora? Você ainda vai escolher quem marcar no comentário. Se preferir, envie depois pelo botão ENVIAR na tarefa.")
+                .font(Editorial.sans(11.5))
+                .foregroundStyle(Editorial.inkSoft)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+            Spacer()
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder private var trimBody: some View {
@@ -805,38 +837,101 @@ struct TaskMediaFlowSheet: View {
                     .frame(height: 38)
                     .background(Capsule().fill(Editorial.paper))
                     .overlay(Capsule().strokeBorder(Editorial.rule))
-                LazyVStack(spacing: 6) {
-                    ForEach(filteredMembers, id: \.id) { member in
-                        let picked = selectedMemberIds.contains(member.id)
-                        Button { toggle(member.id) } label: {
-                            HStack(spacing: 12) {
-                                Circle()
-                                    .fill(Color(hex: member.color ?? "#5B5B62"))
-                                    .frame(width: 24, height: 24)
-                                    .overlay(Text(member.initials ?? String(member.username.prefix(2)).uppercased())
-                                        .font(.system(size: 8, weight: .bold)).foregroundStyle(.white))
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(member.username).font(Editorial.sans(12.5, .medium))
-                                    if let email = member.email {
-                                        Text(email).font(Editorial.sans(10.5)).foregroundStyle(Editorial.inkMute)
-                                    }
-                                }
-                                Spacer()
-                                Image(systemName: picked ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(picked ? Editorial.accent : Editorial.inkMute)
+
+                // Sem busca ativa: seção superior com FAVORITOS (se houver;
+                // senão FREQUENTES, por contagem de marcações) e depois a
+                // lista completa. Buscando: lista achatada filtrada.
+                if memberQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+                    let favorites = favoriteMembers
+                    let top = favorites.isEmpty ? frequentMembers : favorites
+                    if !top.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Folio(favorites.isEmpty ? "FREQUENTES" : "FAVORITOS")
+                            LazyVStack(spacing: 6) {
+                                ForEach(top, id: \.id) { memberRow($0) }
                             }
-                            .contentShape(Rectangle())
-                            .padding(.horizontal, 12)
-                            .frame(height: 48)
-                            .background(RoundedRectangle(cornerRadius: Editorial.popupRadius(5.5), style: .continuous)
-                                .fill(picked ? Editorial.accentSoft.opacity(0.5) : Color.clear))
                         }
-                        .buttonStyle(.plain)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        if !top.isEmpty { Folio("TODOS") }
+                        LazyVStack(spacing: 6) {
+                            ForEach(filteredMembers.filter { m in
+                                !top.contains(where: { $0.id == m.id })
+                            }, id: \.id) { memberRow($0) }
+                        }
+                    }
+                } else {
+                    LazyVStack(spacing: 6) {
+                        ForEach(filteredMembers, id: \.id) { memberRow($0) }
                     }
                 }
             }
             .padding(24)
         }
+    }
+
+    /// Linha de membro com seleção (checkmark) e estrela de favorito.
+    private func memberRow(_ member: CUMember) -> some View {
+        let picked = selectedMemberIds.contains(member.id)
+        let isFavorite = favoriteIds.contains(member.id)
+        return Button { toggle(member.id) } label: {
+            HStack(spacing: 12) {
+                Circle()
+                    .fill(Color(hex: member.color ?? "#5B5B62"))
+                    .frame(width: 24, height: 24)
+                    .overlay(Text(member.initials ?? String(member.username.prefix(2)).uppercased())
+                        .font(.system(size: 8, weight: .bold)).foregroundStyle(.white))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(member.username).font(Editorial.sans(12.5, .medium))
+                    if let email = member.email {
+                        Text(email).font(Editorial.sans(10.5)).foregroundStyle(Editorial.inkMute)
+                    }
+                }
+                Spacer()
+                // Estrela: marca/desmarca favorito sem mexer na seleção.
+                Button {
+                    var favs = MentionPreferences.favoriteIds
+                    if favs.contains(member.id) { favs.remove(member.id) }
+                    else { favs.insert(member.id) }
+                    MentionPreferences.favoriteIds = favs
+                    favoriteIds = favs
+                } label: {
+                    Image(systemName: isFavorite ? "star.fill" : "star")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(isFavorite ? Color.yellow : Editorial.inkFaint)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help(isFavorite ? "Remover dos favoritos" : "Marcar como favorito")
+                Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(picked ? Editorial.accent : Editorial.inkMute)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 12)
+            .frame(height: 48)
+            .background(RoundedRectangle(cornerRadius: Editorial.popupRadius(5.5), style: .continuous)
+                .fill(picked ? Editorial.accentSoft.opacity(0.5) : Color.clear))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var favoriteMembers: [CUMember] {
+        appState.availableMembers
+            .filter { favoriteIds.contains($0.id) }
+            .sorted { $0.username.localizedCaseInsensitiveCompare($1.username) == .orderedAscending }
+    }
+
+    /// Top 5 por contagem de marcações anteriores (excluindo favoritos, que
+    /// já têm a própria seção quando existem).
+    private var frequentMembers: [CUMember] {
+        let counts = MentionPreferences.mentionCounts
+        return appState.availableMembers
+            .filter { (counts[String($0.id)] ?? 0) > 0 }
+            .sorted { (counts[String($0.id)] ?? 0) > (counts[String($1.id)] ?? 0) }
+            .prefix(5)
+            .map { $0 }
     }
 
     private var statusBody: some View {
@@ -914,6 +1009,16 @@ struct TaskMediaFlowSheet: View {
                 primaryButton(preparing ? "PREPARANDO…" : "SUBSTITUIR \(replacementURLs.count)",
                               disabled: preparing || replacementURLs.isEmpty) {
                     prepareReplacement()
+                }
+            }
+        case .readyPrompt:
+            footerRow {
+                secondaryButton("Agora não") { dismiss() }
+                Spacer()
+                primaryButton("ENVIAR AGORA", disabled: false,
+                              badge: pendingOutputs.count) {
+                    initializeOutputNames()
+                    stage = .mentions
                 }
             }
         case .mentions:
@@ -1168,7 +1273,9 @@ struct TaskMediaFlowSheet: View {
         Task {
             await store.prepareAdd(task: request.task, selections: selections, appState: appState)
             preparing = false
-            if store.phase(for: request.task.id) == .ready { dismiss() }
+            // Pronto → pergunta "enviar agora?" no próprio diálogo, em vez de
+            // fechar e exigir o clique em ENVIAR na linha da tarefa.
+            if store.phase(for: request.task.id) == .ready { stage = .readyPrompt }
             else { localError = store.batches[request.task.id]?.errorMessage }
         }
     }
@@ -1181,7 +1288,7 @@ struct TaskMediaFlowSheet: View {
                                             replacementURLs: replacementURLs,
                                             appState: appState)
             preparing = false
-            if store.phase(for: request.task.id) == .ready { dismiss() }
+            if store.phase(for: request.task.id) == .ready { stage = .readyPrompt }
             else { localError = store.batches[request.task.id]?.errorMessage }
         }
     }
@@ -1222,17 +1329,52 @@ struct TaskMediaFlowSheet: View {
     }
 
     private func send() {
-        stage = .status
-        Task {
-            await store.send(task: request.task,
-                             mentionMemberIds: Array(selectedMemberIds),
-                             outputNames: outputNames,
+        // Alimenta a seção FREQUENTES das próximas marcações.
+        MentionPreferences.registerMentions(selectedMemberIds)
+        let task = request.task
+        let members = Array(selectedMemberIds)
+        let names = outputNames
+        let store = self.store
+        let appState = self.appState
+        // Fecha JÁ — o envio segue em segundo plano (o store vive no nível do
+        // app; a cápsula da linha mostra ENVIANDO x/y e reabrir a tarefa cai
+        // no modo .status para acompanhar/repetir).
+        dismiss()
+        Task.detached(priority: .userInitiated) {
+            await store.send(task: task,
+                             mentionMemberIds: members,
+                             outputNames: names,
                              appState: appState)
         }
     }
 }
 
-private struct TaskMediaCapsuleButton: View {
+/// Favoritos + contagem de marcações do fluxo de mídia (persistidos em
+/// UserDefaults). Favoritos têm seção própria na tela de marcação; sem
+/// favoritos, os mais marcados aparecem como FREQUENTES.
+enum MentionPreferences {
+    private static let favoritesKey = "apollo.mentions.favorites"
+    private static let countsKey    = "apollo.mentions.counts"
+
+    static var favoriteIds: Set<Int> {
+        get { Set((UserDefaults.standard.array(forKey: favoritesKey) as? [Int]) ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: favoritesKey) }
+    }
+
+    /// [memberId (string) : nº de vezes marcado].
+    static var mentionCounts: [String: Int] {
+        get { UserDefaults.standard.dictionary(forKey: countsKey) as? [String: Int] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: countsKey) }
+    }
+
+    static func registerMentions<S: Sequence>(_ ids: S) where S.Element == Int {
+        var counts = mentionCounts
+        for id in ids { counts[String(id), default: 0] += 1 }
+        mentionCounts = counts
+    }
+}
+
+struct TaskMediaCapsuleButton: View {
     let label: String
     let primary: Bool
     let disabled: Bool

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 
 // Apollo · Editorial+ board ("Quadro"). Direct port of the Claude-design
@@ -46,11 +47,48 @@ struct EditorialBoardView: View {
     /// launches. Defaults to `true` so existing behaviour is unchanged.
     @AppStorage("dp_board_showSubtasks_v1") private var showSubtasks: Bool = true
 
+    /// Altura medida da faixa de header COMPLETA (toolbar + breadcrumb +
+    /// fileira de labels — construção idêntica ao header de Tarefas). Usada
+    /// como recuo do TOPO dos cards, que rolam POR TRÁS dela.
+    @State private var headerChromeHeight: CGFloat = 140
+
+    /// Relay não-observado pela raiz do board. O scroll horizontal publica
+    /// aqui, e somente a pequena subárvore dos labels observa o valor. Assim
+    /// mover horizontalmente não invalida/recalcula todas as colunas e cards.
+    @State private var boardScrollRelay = BoardHorizontalScrollRelay()
+
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Rectangle().fill(Editorial.rule).frame(height: 1)
-            board
+        // `labelsRow` deliberately has the intrinsic width of every status
+        // column so its pills can track the horizontal document 1:1. Without
+        // this outer viewport boundary that intrinsic width leaked through the
+        // ZStack and became the board's own layout width. The window merely
+        // clipped that oversized board: horizontal/vertical ScrollViews then
+        // believed most of their content was already visible, and the global
+        // toolbar's trailing controls were laid out beyond the right edge.
+        //
+        // GeometryReader owns the *viewport* only. The scroll document remains
+        // unconstrained inside `board`, preserving 260pt columns, 20pt gaps,
+        // drag/drop and the labels' shared horizontal offset.
+        GeometryReader { viewport in
+            ZStack(alignment: .top) {
+                board
+                    .frame(width: viewport.size.width,
+                           height: viewport.size.height)
+                headerChrome
+                    .frame(width: viewport.size.width, alignment: .leading)
+                    .background(
+                        GeometryReader { g in
+                            Color.clear
+                                .onAppear { headerChromeHeight = g.size.height }
+                                .onChange(of: g.size.height) { _, h in
+                                    headerChromeHeight = h
+                                }
+                        }
+                    )
+            }
+            .frame(width: viewport.size.width,
+                   height: viewport.size.height,
+                   alignment: .top)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {
@@ -90,11 +128,65 @@ struct EditorialBoardView: View {
                 selectionAnchorId = nil
             }
         }
+        .apolloStudioNode("board.page",
+                          title: "Página de quadros",
+                          kind: .page,
+                          parent: "app.root",
+                          properties: [
+                            .init(kind: .backgroundColor,
+                                  title: "Canvas", token: "Editorial.paper"),
+                          ])
     }
 
     // ────────────────────────────────────────────────────────────────────
     // MARK: Header
     // ────────────────────────────────────────────────────────────────────
+
+    /// A faixa de header sobreposta ao board: reserva de toolbar (52pt) +
+    /// breadcrumb — SÓ CONTEÚDO, sem material próprio. O material do header
+    /// inteiro (toolbar + breadcrumb + labels) é UM único VisualEffectView
+    /// ancorado na banda dos labels com topExtension até y=0 (ver
+    /// `labelsBand`): dois materiais encostados criavam uma emenda visível
+    /// entre o breadcrumb e a faixa dos labels, e capturas independentes
+    /// divergiam na extremidade esquerda.
+    private var headerChrome: some View {
+        // CONSTRUÇÃO IDÊNTICA ao header de Tarefas (MyTasksView): os labels
+        // são CONTEÚDO do header (na frente do material, nítidos), e o
+        // material é UM só — fixo, na largura da janela, aplicado como
+        // background do bloco inteiro. A linha de breadcrumb ("QUADRO · …
+        // N cards · tagline") foi REMOVIDA (inútil); o seletor de SUBTAREFAS
+        // vive inline na própria linha dos labels, pinado à direita.
+        VStack(alignment: .leading, spacing: 0) {
+            Color.clear.frame(height: 52)   // reserva da toolbar
+            labelsRow
+                .padding(.top, 6)
+                .padding(.bottom, 10)
+                .overlay(alignment: .trailing) {
+                    subtaskToggle
+                        .padding(.trailing, 24)
+                        .padding(.bottom, 4)
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .finderHeaderMaterial(bottomRule: true)
+    }
+
+    /// Fileira de labels de status DENTRO do header fixo, alinhada 1:1 com as
+    /// colunas (largura 260 + spacing 20). Somente `BoardLabelsTrack` observa o
+    /// offset horizontal; a raiz do board permanece estável durante o scroll.
+    private var labelsRow: some View {
+        BoardLabelsTrack(
+            items: visibleStatuses.map { status in
+                BoardColumnHeaderItem(
+                    status: status,
+                    count: columnCards(status.status.lowercased()).count
+                )
+            },
+            scrollRelay: boardScrollRelay
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
+    }
 
     private var header: some View {
         // Outer row centers the breadcrumb cluster, the tagline and the
@@ -132,6 +224,18 @@ struct EditorialBoardView: View {
         .padding(.horizontal, 28)
         .padding(.top, 22)
         .padding(.bottom, 14)
+        .apolloStudioNode("board.header",
+                          title: "Header dos quadros",
+                          kind: .header,
+                          parent: "board.page",
+                          properties: [
+                            .init(kind: .horizontalPadding,
+                                  title: "Padding horizontal", value: 28),
+                            .init(kind: .verticalPadding,
+                                  title: "Padding superior", value: 22),
+                            .init(kind: .material,
+                                  title: "Material", token: "Materials.finderHeader"),
+                          ])
     }
 
     /// Pill switch + label that flips `showSubtasks`. Matches the
@@ -276,6 +380,14 @@ struct EditorialBoardView: View {
     /// neighbouring columns out of view.
     private var board: some View {
         ScrollView(.horizontal, showsIndicators: false) {
+            // Colunas de CARDS ocupando a janela INTEIRA (viewport até y=0).
+            // O descanso do conteúdo abaixo do header vem de contentMargins
+            // DENTRO de cada coluna — assim um card rolando pra cima viaja
+            // pela margem até o topo real da janela SEM sair do viewport
+            // (se o viewport começasse abaixo do header, o LazyVStack
+            // descartava o card ao cruzar o limite e ele "sumia" antes de
+            // passar por trás do header). Os labels de status vivem no
+            // header fixo (labelsRow) e acompanham via um relay isolado.
             HStack(alignment: .top, spacing: 20) {
                 ForEach(visibleStatuses, id: \.status) { st in
                     column(for: st)
@@ -283,14 +395,15 @@ struct EditorialBoardView: View {
                         .frame(maxHeight: .infinity, alignment: .top)
                 }
             }
-            .padding(.top, 22)
-            .padding(.bottom, 24)
             .background {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture(perform: clearSelection)
             }
         }
+        // Publica o offset somente para a subárvore dos labels. Nenhum @State
+        // da raiz muda durante o gesto horizontal.
+        .modifier(BoardScrollXReader { boardScrollRelay.send($0) })
         // FULL-WIDTH + contentMargins (não padding): o viewport do
         // scroll alcança x=0, então colunas roladas pra esquerda
         // DESENHAM sob o pane de vidro flutuante da sidebar — o
@@ -416,14 +529,7 @@ struct EditorialBoardView: View {
         let statusKey = status.status.lowercased()
         let cards = orderedCards(columnCards(statusKey), statusKey: statusKey)
         let isDropTarget = dragOverStatus == statusKey
-        return VStack(alignment: .leading, spacing: 12) {
-            // Header stays PINNED at the top of the column even
-            // when its cards scroll — the column's own height is
-            // the available chrome height, and only the inner
-            // card list scrolls.
-            columnHeader(status: status, count: cards.count)
-                .padding(.horizontal, 10)   // align with the inset card list
-
+        return
             // Per-column vertical scroll. Each status column
             // scrolls independently; columns with few cards stay
             // tight at the top while a busy column can hold dozens
@@ -491,7 +597,19 @@ struct EditorialBoardView: View {
                 .padding(.bottom, 8)
             }
             .frame(maxHeight: .infinity)
-        }
+            // A coluna é SÓ-CARDS. Os labels de status são renderizados numa
+            // camada SEPARADA (acima da banda do material), no mesmo ScrollView
+            // horizontal (ver `board`), então ficam na FRENTE do material do
+            // header enquanto os cards passam ATRÁS dele.
+            // Margens de CONTEÚDO (não padding externo!): o viewport alcança
+            // y=0, o conteúdo descansa abaixo do header/banda e, ao rolar,
+            // viaja por dentro da margem até o topo da janela — sempre dentro
+            // do viewport, então o LazyVStack não descarta o card no caminho.
+            .contentMargins(.top, headerChromeHeight + 20,
+                            for: .scrollContent)
+            .contentMargins(.bottom, 24, for: .scrollContent)
+            // Sem clip: sombras/hover podem desenhar além dos limites.
+            .scrollClipDisabled()
         // Soft drop-target wash: tint the whole column when a card from
         // another status hovers it. Horizontal padding moved INSIDE (header +
         // card list) so the card shadow has room before the scroll clip.
@@ -507,6 +625,16 @@ struct EditorialBoardView: View {
                         lineWidth: 1)
         )
         .animation(.easeOut(duration: 0.12), value: isDropTarget)
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "board.column.\(statusKey)"),
+            title: "Coluna \(status.status)",
+            kind: .section,
+            parent: "board.page",
+            properties: [
+                .init(kind: .spacing, title: "Espaçamento", value: 12),
+                .init(kind: .cornerRadius, title: "Raio", value: 8),
+            ]
+        )
         .onDrop(of: [.text], delegate: BoardDropDelegate(
             targetStatus: status,
             appState: appState,
@@ -516,11 +644,103 @@ struct EditorialBoardView: View {
         ))
     }
 
-    private func columnHeader(status: CUStatus, count: Int) -> some View {
+    /// "¶ Adicionar card" — dashed dropzone placeholder at the bottom
+    /// of every column. Tapping fires the same "+" intent as the
+    /// column header.
+    private func addCardPlaceholder(for status: CUStatus) -> some View {
+        Button {
+            NotificationCenter.default.post(
+                name: .editorialBoardCreateCard,
+                object: nil,
+                userInfo: ["status": status.status]
+            )
+        } label: {
+            HStack {
+                Text("¶ Adicionar card")
+                    .font(Editorial.serif(12).italic())
+                    .foregroundStyle(Editorial.inkFaint)
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    .foregroundStyle(Editorial.rule)
+            )
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// MARK: - Isolated horizontal header tracking
+// ────────────────────────────────────────────────────────────────────────
+
+/// Imperative event channel by design: publishing an offset must not make the
+/// `EditorialBoardView` root observe a changing value. Only
+/// `BoardLabelsTrack` subscribes to this subject.
+private final class BoardHorizontalScrollRelay {
+    let offsets = CurrentValueSubject<CGFloat, Never>(0)
+
+    var current: CGFloat { offsets.value }
+
+    func send(_ offset: CGFloat) {
+        guard offsets.value != offset else { return }
+        offsets.send(offset)
+    }
+}
+
+private struct BoardColumnHeaderItem: Identifiable {
+    let status: CUStatus
+    let count: Int
+
+    var id: String { status.status.lowercased() }
+}
+
+/// The only SwiftUI subtree invalidated on each horizontal scroll tick.
+/// Status counts are computed by the parent only when task data changes and
+/// arrive here as inert values, so card filtering/sorting never runs per frame.
+private struct BoardLabelsTrack: View {
+    let items: [BoardColumnHeaderItem]
+    let scrollRelay: BoardHorizontalScrollRelay
+
+    @State private var scrollX: CGFloat
+
+    init(items: [BoardColumnHeaderItem],
+         scrollRelay: BoardHorizontalScrollRelay) {
+        self.items = items
+        self.scrollRelay = scrollRelay
+        _scrollX = State(initialValue: scrollRelay.current)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 20) {
+            ForEach(items) { item in
+                BoardColumnHeaderView(status: item.status, count: item.count)
+                    .padding(.horizontal, 10)   // align with the card list
+                    .frame(width: 260, alignment: .leading)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .offset(x: -scrollX)
+        .onReceive(scrollRelay.offsets.removeDuplicates()) { scrollX = $0 }
+    }
+}
+
+/// Mechanical extraction of the former `columnHeader` method. Geometry,
+/// materials, hit targets and actions intentionally remain byte-for-byte
+/// equivalent; only ownership moved into the labels-only subtree.
+private struct BoardColumnHeaderView: View {
+    let status: CUStatus
+    let count: Int
+
+    var body: some View {
         // `statusHex` (not raw `hex`) so the colour gets the dark-mode
         // vibrancy/brightening like every other status surface.
         let color = Color(statusHex: status.displayHex)
-        return HStack(spacing: 9) {
+        HStack(spacing: 9) {
             // Status label sits in a Liquid Glass pill tinted with the
             // status accent colour — matches the prototype, where each
             // column heading read as a coloured glass chip.
@@ -570,35 +790,17 @@ struct EditorialBoardView: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
-    }
-
-    /// "¶ Adicionar card" — dashed dropzone placeholder at the bottom
-    /// of every column. Tapping fires the same "+" intent as the
-    /// column header.
-    private func addCardPlaceholder(for status: CUStatus) -> some View {
-        Button {
-            NotificationCenter.default.post(
-                name: .editorialBoardCreateCard,
-                object: nil,
-                userInfo: ["status": status.status]
-            )
-        } label: {
-            HStack {
-                Text("¶ Adicionar card")
-                    .font(Editorial.serif(12).italic())
-                    .foregroundStyle(Editorial.inkFaint)
-                Spacer()
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                    .foregroundStyle(Editorial.rule)
-            )
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "board.status.\(status.status.lowercased())"),
+            title: "Status \(status.status)",
+            kind: .header,
+            parent: StudioNodeID(rawValue: "board.column.\(status.status.lowercased())"),
+            properties: [
+                .init(kind: .horizontalPadding, title: "Padding H", value: 4),
+                .init(kind: .verticalPadding, title: "Padding V", value: 2),
+                .init(kind: .material, title: "Material", token: "StatusGlassPill"),
+            ]
+        )
     }
 }
 
@@ -663,6 +865,20 @@ struct BoardCard: View {
         // Keep the lifted card above adjacent cards so their opaque surfaces
         // cannot cover the soft tail of its shadow.
         .zIndex(hover ? 10 : 0)
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "board.card.\(task.id)"),
+            title: task.title,
+            kind: .card,
+            parent: StudioNodeID(rawValue: "board.column.\(task.status.lowercased())"),
+            properties: [
+                .init(kind: .horizontalPadding, title: "Padding H", value: 12),
+                .init(kind: .verticalPadding, title: "Padding V", value: 12),
+                .init(kind: .spacing, title: "Espaçamento", value: 10),
+                .init(kind: .cornerRadius, title: "Raio", token: "Editorial.popupRadius"),
+                .init(kind: .shadowRadius, title: "Sombra hover", value: 3),
+                .init(kind: .animationDuration, title: "Hover", value: 0.30),
+            ]
+        )
     }
 
     // ── Top row: status dot + breadcrumb caps + priority chip ──────────
@@ -969,12 +1185,14 @@ private struct CardReorderDropDelegate: DropDelegate {
                 $0.status.lowercased() != statusKey
             }
             Task { @MainActor in
-                for id in ids {
-                    guard let task = appState.tasks.first(where: { $0.id == id }),
-                          task.status.lowercased() != statusKey else { continue }
-                    await appState.updateTaskStatus(task, to: status, silent: true)
-                }
+                let toMove = ids
+                    .compactMap { id in appState.tasks.first(where: { $0.id == id }) }
+                    .filter { $0.status.lowercased() != statusKey }
+                // Persist the intended destination order before the optimistic
+                // batch lands. As soon as every mirror changes status together,
+                // the full selection appears at the exact drop position.
                 onCrossColumnPlace(ids, targetId)
+                await appState.updateTaskStatuses(toMove, to: status, silent: true)
                 appState.pushTaskStatusUndo(originals,
                     label: originals.count == 1
                         ? "Mover tarefa para \(status.status.uppercased())"
@@ -1116,20 +1334,18 @@ private struct BoardDropDelegate: DropDelegate {
             guard let raw = obj as? String else { return }
             let ids = MyTasksDragPayload.decode(raw)
             Task { @MainActor in
-                let originals = ids.compactMap { appState.tasksById[$0] }.filter {
-                    $0.status.lowercased() != targetStatus.status.lowercased()
-                }
-                for id in ids {
-                    guard let task = appState.tasks.first(where: { $0.id == id }),
-                          task.status.lowercased() != targetStatus.status.lowercased()
-                    else { continue }
-                    // Every task uses AppState's own optimistic mutation and
-                    // per-task rollback path; one failed request cannot leave
-                    // a card stranded in an invented local status.
-                    await appState.updateTaskStatus(task,
-                                                    to: targetStatus,
-                                                    silent: true)
-                }
+                let toMove = ids
+                    .compactMap { id in appState.tasks.first(where: { $0.id == id }) }
+                    .filter {
+                        $0.status.lowercased() != targetStatus.status.lowercased()
+                    }
+                let originals = toMove
+                // One optimistic mutation moves the complete selection in the
+                // same render pass; network PUTs then run concurrently with an
+                // independent rollback path per task.
+                await appState.updateTaskStatuses(toMove,
+                                                  to: targetStatus,
+                                                  silent: true)
                 appState.pushTaskStatusUndo(originals,
                     label: originals.count == 1
                         ? "Mover tarefa para \(targetStatus.status.uppercased())"
@@ -1157,4 +1373,26 @@ extension Notification.Name {
     /// outside that canvas (notably the floating sidebar) post this too.
     static let apolloTaskDropCompleted =
         Notification.Name("dp.apollo.taskDropCompleted")
+}
+
+/// Publica o offset X sem criar uma `Binding` com a raiz do board. Usa a API
+/// pública `onScrollGeometryChange` (macOS 15+) e entrega eventos ao relay
+/// isolado dos labels. Em macOS 14 preserva o fallback anterior.
+private struct BoardScrollXReader: ViewModifier {
+    let onChange: (CGFloat) -> Void
+
+    init(_ onChange: @escaping (CGFloat) -> Void) {
+        self.onChange = onChange
+    }
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content.onScrollGeometryChange(for: CGFloat.self,
+                                           of: { $0.contentOffset.x }) { _, new in
+                onChange(new)
+            }
+        } else {
+            content
+        }
+    }
 }

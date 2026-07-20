@@ -8,6 +8,8 @@ import SwiftUI
 // The trailing edge reserves space for the bell icon itself.
 
 struct BellPill: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let notification: AppNotification
     let onTap:        () -> Void
     let onDismiss:    () -> Void
@@ -65,8 +67,10 @@ struct BellPill: View {
         .liquidGlass(
             in: RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
                                  style: .continuous),
-            tint: toneColor,
-            tintOpacity: 0.04,
+            tint: Editorial.notificationGlassTint(for: colorScheme),
+            // O material acompanha o tema; a cor semântica fica apenas no dot.
+            // Não usamos fill sob o vidro porque isso achata a refração nativa.
+            tintOpacity: Editorial.notificationGlassTintOpacity,
             interactive: false,
             lightweight: true
         )
@@ -81,6 +85,8 @@ struct BellPill: View {
 /// transferred. The value is fed by `AppState.uploadActivities`, whose progress
 /// comes from URLSession's byte counters — no timer or simulated percentage.
 struct BellUploadPill: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let upload: AppState.UploadActivity
     let onTap: () -> Void
     let onDismiss: () -> Void
@@ -142,8 +148,8 @@ struct BellUploadPill: View {
         .liquidGlass(
             in: RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
                                  style: .continuous),
-            tint: Color(hex: "#1F7A3A"),
-            tintOpacity: 0.045,
+            tint: Editorial.notificationGlassTint(for: colorScheme),
+            tintOpacity: Editorial.notificationGlassTintOpacity,
             interactive: false,
             lightweight: true
         )

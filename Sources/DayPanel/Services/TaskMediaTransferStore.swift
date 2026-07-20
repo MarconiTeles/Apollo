@@ -15,6 +15,7 @@ final class TaskMediaTransferStore: ObservableObject {
     struct PublishedArtifact: Equatable, Sendable {
         let attachmentId: String?
         let remoteURL: URL
+        var reviewId: String?
         var commentId: String?
         var commentPosted: Bool
     }
@@ -52,7 +53,85 @@ final class TaskMediaTransferStore: ObservableObject {
     }
 
     func catalog(for taskId: String) -> TaskMediaCatalog {
-        catalogs[taskId] ?? loadLocalCatalog(taskId: taskId) ?? .empty(taskId: taskId)
+        catalogs[taskId] ?? Self.persistedCatalog(for: taskId) ?? .empty(taskId: taskId)
+    }
+
+    /// Read-only catalog access for the review watcher. Keeping this outside
+    /// the observable store lets the background monitor resolve a physical V4
+    /// attachment to the stable V1/V2/V3 review without instantiating UI state.
+    nonisolated static func persistedCatalog(for taskId: String) -> TaskMediaCatalog? {
+        let manager = FileManager.default
+        let safe = taskId.replacingOccurrences(of: "/", with: "_")
+        for directory in persistedCatalogReadDirectories(fileManager: manager) {
+            let url = directory.appendingPathComponent("\(safe).json")
+            guard let data = try? Data(contentsOf: url),
+                  let catalog = try? JSONDecoder().decode(TaskMediaCatalog.self,
+                                                          from: data)
+            else { continue }
+            return catalog
+        }
+        return nil
+    }
+
+    /// Resolves a physical replacement attachment (for example V4) to the
+    /// single review id shared by its lineage. Notifications are restored
+    /// before tasks are hydrated, so this deliberately uses only local catalogs.
+    nonisolated static func canonicalReviewIdentity(
+        forReviewTarget target: String
+    ) -> TaskMediaReviewIdentity? {
+        let manager = FileManager.default
+        for directory in persistedCatalogReadDirectories(fileManager: manager) {
+            guard let urls = try? manager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+
+            for url in urls where url.pathExtension.lowercased() == "json" {
+                guard let data = try? Data(contentsOf: url),
+                      let catalog = try? JSONDecoder().decode(TaskMediaCatalog.self, from: data),
+                      let identity = catalog.reviewIdentity(attachmentId: target,
+                                                             mediaURL: target) else { continue }
+                return identity
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func persistedCatalogsDirectory(
+        fileManager: FileManager
+    ) -> URL? {
+        guard let root = try? fileManager.url(for: .applicationSupportDirectory,
+                                              in: .userDomainMask,
+                                              appropriateFor: nil,
+                                              create: false) else { return nil }
+        return root
+            .appendingPathComponent("Apollo", isDirectory: true)
+            .appendingPathComponent("TaskMediaCatalogs", isDirectory: true)
+    }
+
+    /// Read locations for catalogs, in priority order. Writes always go to the
+    /// primary (`persistedCatalogsDirectory`). The sandboxed production app and
+    /// the keychain-free debug build resolve `.applicationSupportDirectory` to
+    /// DIFFERENT folders (container vs ~/Library); without the container
+    /// fallback the debug build saw no catalogs at all, could not resolve
+    /// physical attachments to their stable review lineage, and review
+    /// pendencies were never consumed (VER REVIEW eterno, 20/jul).
+    nonisolated private static func persistedCatalogReadDirectories(
+        fileManager: FileManager
+    ) -> [URL] {
+        var directories: [URL] = []
+        if let primary = persistedCatalogsDirectory(fileManager: fileManager) {
+            directories.append(primary)
+        }
+        let containerPath = ("~/Library/Containers/com.painellunar.app/Data/" +
+                             "Library/Application Support/Apollo/TaskMediaCatalogs"
+                             as NSString).expandingTildeInPath
+        let container = URL(fileURLWithPath: containerPath, isDirectory: true)
+        if directories.first?.path != container.path {
+            directories.append(container)
+        }
+        return directories
     }
 
     func phase(for taskId: String) -> Phase? { batches[taskId]?.phase }
@@ -89,7 +168,7 @@ final class TaskMediaTransferStore: ObservableObject {
     func loadCatalog(for task: CUTask, appState: AppState) async {
         await appState.hydrateTaskAttachments(taskId: task.id)
         let hydrated = appState.tasksById[task.id] ?? task
-        let local = loadLocalCatalog(taskId: task.id)
+        let local = Self.persistedCatalog(for: task.id)
         let remote = await loadRemoteCatalog(from: hydrated.attachments)
         var chosen: TaskMediaCatalog
         if let remote, remote.taskId == task.id,
@@ -205,7 +284,8 @@ final class TaskMediaTransferStore: ObservableObject {
                                            fileName: output.displayFileName,
                                            sourceRevisionIds: revisionIds,
                                            attachmentId: artifact.attachmentId,
-                                           remoteURL: artifact.remoteURL)
+                                           remoteURL: artifact.remoteURL,
+                                           reviewId: artifact.reviewId)
                 )
             }
             committed.sequence += 1
@@ -419,8 +499,40 @@ final class TaskMediaTransferStore: ObservableObject {
                             }
                             artifact = PublishedArtifact(attachmentId: uploaded.id,
                                                          remoteURL: uploaded.url,
+                                                         reviewId: nil,
                                                          commentId: nil,
                                                          commentPosted: false)
+                        }
+                        guard let attachmentId = artifact.attachmentId else {
+                            return .failure(output.id, "O ClickUp não retornou a identidade do arquivo")
+                        }
+                        let previous = snapshot.plan.catalog.latestOutput(for: output.lineage.id)
+                        let stableReviewId = previous?.reviewId
+                            ?? previous?.attachmentId
+                            ?? attachmentId
+                        // A catalog may predate server-backed version history:
+                        // preserve its already-published V1 before registering
+                        // the replacement. If that review was previously
+                        // opened, this is an idempotent refresh of V1; if it
+                        // never existed in KV, it makes V1 available for the
+                        // reviewer to compare against V2 instead of losing it.
+                        if let previous,
+                           previous.attachmentId != attachmentId,
+                           let previousAttachmentId = previous.attachmentId,
+                           let previousURL = previous.remoteURL {
+                            let preserved = await ReviewBackend.registerVersion(
+                                reviewId: stableReviewId,
+                                version: previous.version,
+                                attachmentId: previousAttachmentId,
+                                mediaURL: previousURL,
+                                mediaTitle: previous.fileName,
+                                ext: (previous.fileName as NSString).pathExtension.lowercased(),
+                                taskId: task.id,
+                                uploaderId: appState.clickUpAuthService.userId
+                            )
+                            guard preserved else {
+                                return .uploadedOnly(output.id, artifact)
+                            }
                         }
                         guard let comment = await appState.publishMediaTransferComment(
                             on: task,
@@ -429,11 +541,14 @@ final class TaskMediaTransferStore: ObservableObject {
                             attachmentId: artifact.attachmentId,
                             attachmentURL: artifact.remoteURL,
                             fileName: output.displayFileName,
-                            fileExtension: file.pathExtension.lowercased()
+                            fileExtension: file.pathExtension.lowercased(),
+                            reviewId: stableReviewId,
+                            version: output.version
                         ) else {
                             return .uploadedOnly(output.id, artifact)
                         }
                         var complete = artifact
+                        complete.reviewId = stableReviewId
                         complete.commentId = comment.id
                         complete.commentPosted = true
                         return .success(output.id, complete)
@@ -608,12 +723,6 @@ final class TaskMediaTransferStore: ObservableObject {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let safe = taskId.replacingOccurrences(of: "/", with: "_")
         return directory.appendingPathComponent("\(safe).json")
-    }
-
-    private func loadLocalCatalog(taskId: String) -> TaskMediaCatalog? {
-        guard let url = try? catalogURL(taskId: taskId),
-              let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(TaskMediaCatalog.self, from: data)
     }
 
     private func persistLocal(_ catalog: TaskMediaCatalog) {

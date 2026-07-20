@@ -62,6 +62,16 @@ enum Editorial {
     /// rows. The 10pt baseline comes from the compact reference capsule.
     static let notificationCapsuleRadius: CGFloat = 13.5
 
+    /// Neutral tint for transient/internal notification glass. The material
+    /// must reinforce the active appearance rather than invert it: a dark veil
+    /// in Dark Mode and a light veil in Light Mode. Semantic colour remains in
+    /// the status dot, never in the whole capsule surface.
+    static func notificationGlassTint(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? .black : .white
+    }
+
+    static let notificationGlassTintOpacity = 0.50
+
     /// Canonical vertical elevation for native AppKit capsules. Core
     /// Animation layers hosted by Apollo's flipped list views use positive Y
     /// to project the shadow visually downward, matching SwiftUI's

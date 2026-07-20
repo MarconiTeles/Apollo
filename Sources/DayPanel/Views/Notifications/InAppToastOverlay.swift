@@ -66,6 +66,8 @@ struct InAppToastOverlay: View {
 // MARK: - Single toast card
 
 private struct ToastCard: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let notification: AppNotification
     let onDismiss:    () -> Void
 
@@ -111,8 +113,8 @@ private struct ToastCard: View {
         .liquidGlass(
             in: RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
                                  style: .continuous),
-            tint: toneColor,
-            tintOpacity: 0.022,
+            tint: Editorial.notificationGlassTint(for: colorScheme),
+            tintOpacity: Editorial.notificationGlassTintOpacity,
             interactive: false,
             lightweight: true
         )

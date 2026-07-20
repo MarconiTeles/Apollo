@@ -1486,10 +1486,19 @@ struct TaskCommentsSection: View, Equatable {
 
                 if ReviewLink.isReviewable(att.ext), let aid = reviewActorId {
                     Button {
+                        // Resolve o anexo físico para a linhagem estável do
+                        // catálogo — abrir/concluir na sessão duplicada do
+                        // arquivo deixa a pendência da versão canônica viva.
+                        let identity = TaskMediaTransferStore
+                            .persistedCatalog(for: task.id)?
+                            .reviewIdentity(attachmentId: att.id,
+                                            mediaURL: att.url)
                         ReviewPresenter.shared.present(
                             ReviewLink.params(attachment: att, taskId: task.id, listId: task.listId,
                                               uploaderId: att.uploaderId,
-                                              actorId: aid, actorName: reviewActorName))
+                                              actorId: aid, actorName: reviewActorName,
+                                              reviewId: identity?.reviewId,
+                                              versionId: identity?.versionId))
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "play.rectangle.fill")

@@ -7,6 +7,21 @@ struct ReviewRequest: Identifiable {
     let id = UUID()
     var params: OpenReviewParams? = nil
     var savedJSON: Data? = nil
+    /// Set only when `VER REVIEW` in the task list opened an unseen update.
+    /// That flow must remain unconsumed until completion is explicitly closed.
+    var completionAcknowledgement: ReviewCompletionAcknowledgement? = nil
+    /// ONE session context for the whole presentation, created here and never
+    /// inside the sheet's view builder. SwiftUI re-evaluates that builder on
+    /// any unrelated state change (a toast is enough); a per-render context
+    /// loses `activeAtt` between load and submit, which silently pushed the
+    /// conclusion into a payload-derived orphan key and made the confirmation
+    /// step fail with "A review não foi salva" (bug de 20/jul, TESTE 04).
+    var sessionContext: ReviewSessionContext? = nil
+}
+
+struct ReviewCompletionAcknowledgement: Equatable {
+    let taskId: String
+    let activeAtt: String
 }
 
 /// App-wide presenter for the EMBEDDED review workflow. Any REVIEW / "Ver
@@ -17,8 +32,19 @@ final class ReviewPresenter: ObservableObject {
     @Published var request: ReviewRequest?
     private init() {}
 
-    func present(_ params: OpenReviewParams) {
-        request = ReviewRequest(params: params)
+    func present(_ params: OpenReviewParams,
+                 completionAcknowledgement: ReviewCompletionAcknowledgement? = nil) {
+        request = ReviewRequest(
+            params: params,
+            completionAcknowledgement: completionAcknowledgement,
+            sessionContext: ReviewSessionContext(
+                params: params,
+                // Opening, closing the sheet or relaunching Apollo must never
+                // consume a review update. The final onSubmit path is the sole
+                // owner of `markSeen`.
+                markSeenOnLoad: false
+            )
+        )
     }
 
     /// Re-open a saved review from inline JSON data (the `?z=` payload decoded
@@ -34,6 +60,26 @@ final class ReviewPresenter: ObservableObject {
             guard let (data, _) = try? await URLSession.shared.data(from: jsonURL) else { return }
             await MainActor.run { self.request = ReviewRequest(savedJSON: data) }
         }
+    }
+}
+
+struct TaskReviewQueueRequest: Identifiable {
+    let id = UUID()
+    let task: CUTask
+    let updates: [TaskReviewUpdateStore.Update]
+}
+
+/// App-wide bridge from recycled AppKit task rows to the SwiftUI review
+/// chooser. The row only decides direct-open versus multi-review; SwiftUI owns
+/// the sheet, state and animations.
+@MainActor
+final class TaskReviewQueuePresenter: ObservableObject {
+    static let shared = TaskReviewQueuePresenter()
+    @Published var request: TaskReviewQueueRequest?
+    private init() {}
+
+    func present(task: CUTask, updates: [TaskReviewUpdateStore.Update]) {
+        request = TaskReviewQueueRequest(task: task, updates: updates)
     }
 }
 

@@ -112,6 +112,10 @@ struct AIAgentChatView: View {
             // hidden state (otherwise the cascade is skipped).
             DispatchQueue.main.async { homeRevealed = true }
         }
+        .apolloStudioNode("ai.content",
+                          title: "Conteúdo do Apollo IA",
+                          kind: .section,
+                          parent: "ai.panel")
     }
 
     /// Whether the runtime manager is currently streaming a
@@ -179,6 +183,15 @@ struct AIAgentChatView: View {
                     .frame(height: 1)
             }
         }
+        .apolloStudioNode("ai.dashboard-header",
+                          title: "Cabeçalho do diário",
+                          kind: .header,
+                          parent: "ai.content",
+                          properties: [
+                            .init(kind: .height, title: "Altura", value: 64),
+                            .init(kind: .horizontalPadding,
+                                  title: "Padding inicial", value: 36),
+                          ])
     }
 
     /// Abbreviated pt-BR date for the masthead, e.g.
@@ -254,6 +267,13 @@ struct AIAgentChatView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Editorial.rule).frame(height: 1)
         }
+        .apolloStudioNode("ai.chat-header",
+                          title: "Cabeçalho da conversa",
+                          kind: .header,
+                          parent: "ai.content",
+                          properties: [
+                            .init(kind: .height, title: "Altura", value: 64),
+                        ])
     }
 
     /// Sub-line under "Apollo IA" showing the active provider.
@@ -509,6 +529,10 @@ struct AIAgentChatView: View {
             }
           }
         }
+        .apolloStudioNode("ai.transcript",
+                          title: "Histórico da conversa",
+                          kind: .list,
+                          parent: "ai.content")
     }
 
     /// Stable id for the bottom-of-scroll sentinel. Lifted out
@@ -1219,6 +1243,13 @@ struct AIAgentChatView: View {
                 handleDroppedProviders($0)
             }
         }
+        .apolloStudioNode("ai.composer",
+                          title: "Campo de mensagem",
+                          kind: .field,
+                          parent: "ai.content",
+                          properties: [
+                            .init(kind: .spacing, title: "Espaçamento", value: 6),
+                          ])
         // Pure white background to clearly delineate the composer
         // as a text input surface, separating it visually from the
         // cream paper canvas of the rest of the chat.

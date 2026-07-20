@@ -1,5 +1,5 @@
 import XCTest
-@testable import DayPanel
+@testable import ApolloRuntime
 
 final class TaskFiltersTests: XCTestCase {
     private func task(

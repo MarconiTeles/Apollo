@@ -1,5 +1,5 @@
 import XCTest
-@testable import DayPanel
+@testable import ApolloRuntime
 
 final class TaskSelectionTests: XCTestCase {
     private let order = ["a", "b", "c", "d", "e"]
@@ -83,5 +83,43 @@ final class TaskSelectionTests: XCTestCase {
                                       title: "Review atualizado",
                                       targetKind: .review,
                                       targetId: "review-1").isHomeInboxEligible)
+    }
+
+    func testReviewNotificationAliasesCollapseToNewestLogicalReview() {
+        let stable = AppNotification(
+            date: Date(timeIntervalSince1970: 10),
+            kind: .info,
+            title: "Review atualizado",
+            message: "BODY BALDA · V3.mov",
+            targetKind: .review,
+            targetId: "attachment-v3"
+        )
+        let replacement = AppNotification(
+            date: Date(timeIntervalSince1970: 20),
+            kind: .info,
+            title: "Review atualizado",
+            message: "THE_MINIMAL_V03 · V4.mov",
+            targetKind: .review,
+            targetId: "attachment-v4"
+        )
+        let task = AppNotification(
+            kind: .success,
+            title: "Tarefa atualizada",
+            targetKind: .task,
+            targetId: "task-1"
+        )
+
+        let normalized = AppNotification.normalizingReviewTargets(
+            in: [replacement, stable, task]
+        ) { target in
+            ["attachment-v3", "attachment-v4"].contains(target)
+                ? "attachment-v3"
+                : nil
+        }
+
+        XCTAssertEqual(normalized.count, 2)
+        XCTAssertEqual(normalized[0].message, "THE_MINIMAL_V03 · V4.mov")
+        XCTAssertEqual(normalized[0].targetId, "attachment-v3")
+        XCTAssertEqual(normalized[1], task)
     }
 }

@@ -11,6 +11,17 @@ import AppKit
 
 enum SidebarRoute: Hashable {
     case today, tasks, board, assignedComments, done, ai
+
+    var studioKey: String {
+        switch self {
+        case .today: "inbox"
+        case .tasks: "tasks"
+        case .board: "board"
+        case .assignedComments: "comments"
+        case .done: "done"
+        case .ai: "ai"
+        }
+    }
 }
 
 // MARK: - Sidebar view
@@ -91,6 +102,16 @@ struct EditorialSidebar: View {
         .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
         .padding(.leading, 10)
         .padding(.vertical, 10)
+        .apolloStudioNode("shell.sidebar",
+                          title: "Painel lateral",
+                          kind: .sidebar,
+                          parent: "app.root",
+                          properties: [
+                            .init(kind: .width, title: "Largura", value: 220),
+                            .init(kind: .cornerRadius, title: "Raio", value: 16),
+                            .init(kind: .shadowRadius, title: "Sombra", value: 18),
+                            .init(kind: .material, title: "Material", token: "Materials.sidebar"),
+                          ])
         // Re-read the pinned-lists store whenever any UserDefaults
         // key changes (cheap — ~5 entries, JSON-decoded). Covers
         // pin/unpin from the list selector or settings.
@@ -126,7 +147,7 @@ struct EditorialSidebar: View {
             navRow("Comentários",    count: assignedCommentsCount,
                    route: .assignedComments)
             navRow("Concluídas",                          route: .done, disabled: true)
-            navRow("Apollo",                              route: .ai,   disabled: true)
+            // "Apollo" (IA) removido desta build junto com o botão da toolbar.
         }
     }
 
@@ -244,7 +265,8 @@ struct EditorialSidebar: View {
                       icon: icon(for: route),
                       count: count,
                       isActive: active == route,
-                      disabled: disabled) {
+                      disabled: disabled,
+                      studioID: StudioNodeID(rawValue: "sidebar.route.\(route.studioKey)")) {
             guard !disabled else { return }
             active = route
         }
@@ -461,6 +483,7 @@ private struct SidebarNavRow: View {
     /// hover halo, no accent on active. Used for routes that
     /// aren't wired up yet (Próximos / Concluídas / Apollo).
     var disabled: Bool = false
+    var studioID: StudioNodeID
     var action: () -> Void
     @State private var hover = false
 
@@ -478,7 +501,7 @@ private struct SidebarNavRow: View {
                     .font(.system(size: 13, weight: isActive ? .medium : .regular))
                     .foregroundStyle(disabled
                                      ? Editorial.inkFaint
-                                     : Editorial.ink)
+                                     : (isActive ? Editorial.accent : Editorial.ink))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
@@ -487,7 +510,7 @@ private struct SidebarNavRow: View {
                         .font(.system(size: 11.5, weight: .regular))
                         .foregroundStyle(disabled
                                          ? Editorial.inkFaint
-                                         : (isActive ? Editorial.ink : Editorial.inkMute))
+                                         : (isActive ? Editorial.accent : Editorial.inkMute))
                         .monospacedDigit()
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
@@ -503,14 +526,13 @@ private struct SidebarNavRow: View {
                           ? Editorial.ink.opacity(0.03)
                           : Color.clear)
             )
-            // Selected → Liquid Glass rectangle. In light mode a trace of the
-            // app accent helps selection read without returning to a purple
-            // fill; dark mode stays almost colourless.
+            // Selected → NEUTRAL glass rectangle (Finder-style): the selection
+            // colour lives on the icon + label, not on the fill.
             .liquidGlassSelected(isActive && !disabled,
                                  in: RoundedRectangle(cornerRadius: 8,
                                                       style: .continuous),
-                                 tint: colorScheme == .light ? Editorial.accent : .white,
-                                 tintOpacity: colorScheme == .light ? 0.055 : 0.025)
+                                 tint: colorScheme == .light ? Editorial.ink : .white,
+                                 tintOpacity: colorScheme == .light ? 0.035 : 0.025)
             .overlay {
                 if isActive && !disabled {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -544,6 +566,18 @@ private struct SidebarNavRow: View {
             if open { hover = false }
         }
         .animation(.easeOut(duration: 0.12), value: hover)
+        .apolloStudioNode(
+            studioID,
+            title: label,
+            kind: .button,
+            parent: "app.sidebar",
+            properties: [
+                .init(kind: .horizontalPadding, title: "Padding H", value: 6),
+                .init(kind: .verticalPadding, title: "Padding V", value: 6),
+                .init(kind: .cornerRadius, title: "Raio", value: 8),
+                .init(kind: .animationDuration, title: "Hover", value: 0.12),
+            ]
+        )
     }
 }
 
@@ -565,18 +599,21 @@ private struct SidebarDotRow: View {
             HStack(spacing: 9) {
                 Image(systemName: "list.bullet")
                     .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(color)
+                    // Ícones de lista SEM tint por cor de lista: neutros em
+                    // repouso; só o item SELECIONADO usa a cor de realce do
+                    // macOS (accentColor), padrão Finder.
+                    .foregroundStyle(isActive ? Color.accentColor : Editorial.inkMute)
                     .frame(width: 18, alignment: .center)
                 Text(label)
                     .font(.system(size: 13, weight: isActive ? .medium : .regular))
-                    .foregroundStyle(accent ? Editorial.accent : Editorial.ink)
+                    .foregroundStyle((accent || isActive) ? Editorial.accent : Editorial.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
                 if let count {
                     Text("\(count)")
                         .font(.system(size: 11.5, weight: .regular))
-                        .foregroundStyle(accent ? Editorial.accent : Editorial.inkMute)
+                        .foregroundStyle((accent || isActive) ? Editorial.accent : Editorial.inkMute)
                         .monospacedDigit()
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
@@ -592,14 +629,13 @@ private struct SidebarDotRow: View {
                           : (!isActive && hover ? Editorial.ink.opacity(0.03)
                           : Color.clear))
             )
-            // Selected list → subtly accent-tinted glass in light mode and
-            // nearly colourless glass in dark mode. The dot remains the
-            // strongest list-colour signal.
+            // Selected list → NEUTRAL glass rectangle (Finder-style): the
+            // selection colour lives on the label, not on the fill.
             .liquidGlassSelected(isActive,
                                  in: RoundedRectangle(cornerRadius: 8,
                                                       style: .continuous),
-                                 tint: colorScheme == .light ? Editorial.accent : .white,
-                                 tintOpacity: colorScheme == .light ? 0.055 : 0.025)
+                                 tint: colorScheme == .light ? Editorial.ink : .white,
+                                 tintOpacity: colorScheme == .light ? 0.035 : 0.025)
             .overlay {
                 if isActive {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)

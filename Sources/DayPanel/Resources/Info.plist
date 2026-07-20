@@ -8,6 +8,8 @@
 	<string>DayPanel</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.painellunar.app</string>
 	<key>CFBundleName</key>

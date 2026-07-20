@@ -15,6 +15,7 @@ private enum InboxNotificationMetrics {
 /// the same two-line capsule but reuses a small number of AppKit cells and
 /// paints its shadow from a fixed `shadowPath`.
 struct InboxAppKitList: NSViewRepresentable {
+    @Environment(\.apolloStudioSession) private var studioSession
     let notifications: [AppNotification]
     let onDismiss: (UUID) -> Void
     let onTap: (AppNotification) -> Void
@@ -67,6 +68,7 @@ struct InboxAppKitList: NSViewRepresentable {
         context.coordinator.collection = collection
         context.coordinator.horizontalInset = horizontalInset
         scroll.documentView = collection
+        context.coordinator.configureStudio(session: studioSession, scrollView: scroll)
         context.coordinator.update(parent: self, force: true)
         return scroll
     }
@@ -87,8 +89,14 @@ struct InboxAppKitList: NSViewRepresentable {
             }
         }
         context.coordinator.update(parent: self)
+        context.coordinator.configureStudio(session: studioSession, scrollView: scroll)
     }
 
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        coordinator.stopStudioReporting()
+    }
+
+    @MainActor
     final class Coordinator: NSObject,
                              NSCollectionViewDataSource,
                              NSCollectionViewDelegateFlowLayout {
@@ -97,10 +105,86 @@ struct InboxAppKitList: NSViewRepresentable {
         private var onTap: (AppNotification) -> Void
         weak var collection: NSCollectionView?
         var horizontalInset: CGFloat = 20
+        private weak var studioSession: ApolloStudioSession?
+        private weak var studioScrollView: NSScrollView?
+        private var studioScrollObserver: NSObjectProtocol?
+        private let studioOwnerID: StudioNodeID = "inbox.feed"
 
         init(parent: InboxAppKitList) {
             onDismiss = parent.onDismiss
             onTap = parent.onTap
+        }
+
+        func configureStudio(session: ApolloStudioSession?, scrollView: NSScrollView) {
+            guard studioSession !== session || studioScrollView !== scrollView else {
+                reportVisibleStudioNodesSoon()
+                return
+            }
+            stopStudioReporting()
+            studioSession = session
+            studioScrollView = scrollView
+            guard session != nil else { return }
+            scrollView.contentView.postsBoundsChangedNotifications = true
+            studioScrollObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.reportVisibleStudioNodes() }
+            }
+            reportVisibleStudioNodesSoon()
+        }
+
+        func stopStudioReporting() {
+            if let studioScrollObserver {
+                NotificationCenter.default.removeObserver(studioScrollObserver)
+            }
+            studioScrollObserver = nil
+            studioSession?.removeExternalNodes(owner: studioOwnerID)
+            studioSession = nil
+            studioScrollView = nil
+        }
+
+        private func reportVisibleStudioNodesSoon() {
+            guard studioSession != nil else { return }
+            DispatchQueue.main.async { [weak self] in self?.reportVisibleStudioNodes() }
+        }
+
+        private func reportVisibleStudioNodes() {
+            guard let studioSession,
+                  let collection,
+                  let clip = studioScrollView?.contentView
+            else { return }
+            collection.layoutSubtreeIfNeeded()
+            let nodes: [StudioNodeDescriptor] = collection.indexPathsForVisibleItems()
+                .sorted { $0.item < $1.item }
+                .compactMap { path in
+                    guard notifications.indices.contains(path.item),
+                          let attributes = collection.layoutAttributesForItem(at: path)
+                    else { return nil }
+                    let notification = notifications[path.item]
+                    var frame = collection.convert(attributes.frame, to: clip)
+                    frame.origin.x -= clip.bounds.minX
+                    frame.origin.y -= clip.bounds.minY
+                    return StudioNodeDescriptor(
+                        id: StudioNodeID(rawValue: "inbox.notification.\(notification.id.uuidString)"),
+                        parentID: studioOwnerID,
+                        title: notification.title,
+                        kind: .row,
+                        frame: frame,
+                        source: InboxNotificationCell.studioSource,
+                        properties: [
+                            .init(kind: .height,
+                                  title: "Altura", value: InboxNotificationMetrics.rowHeight),
+                            .init(kind: .spacing,
+                                  title: "Espaçamento", value: InboxNotificationMetrics.rowSpacing),
+                            .init(kind: .cornerRadius,
+                                  title: "Raio",
+                                  token: "Editorial.notificationCapsuleRadius"),
+                        ]
+                    )
+                }
+            studioSession.replaceExternalNodes(owner: studioOwnerID, nodes: nodes)
         }
 
         func update(parent: InboxAppKitList, force: Bool = false) {
@@ -148,6 +232,7 @@ struct InboxAppKitList: NSViewRepresentable {
                     if !inserted.isEmpty { collection.insertItems(at: inserted) }
                 }
             }
+            reportVisibleStudioNodesSoon()
         }
 
         func collectionView(_ collectionView: NSCollectionView,
@@ -209,6 +294,8 @@ private final class InboxNotificationItem: NSCollectionViewItem {
 }
 
 private final class InboxNotificationCell: NSView {
+    static let studioSource = StudioSourceLocation(file: String(describing: #fileID),
+                                                   line: #line)
     override var isFlipped: Bool { true }
 
     private let surface = InboxFlippedSurface()
@@ -502,3 +589,37 @@ private final class InboxNotificationCell: NSView {
 private final class InboxFlippedSurface: NSView {
     override var isFlipped: Bool { true }
 }
+
+#if DEBUG
+/// Direct Xcode Canvas host for the production AppKit inbox viewport.
+///
+/// This is intentionally the real `NSViewRepresentable`, backed by the same
+/// `NSScrollView`, `NSCollectionView` and recycled AppKit cells used by Apollo.
+/// No SwiftUI replacement row is involved.
+@MainActor
+private struct InboxAppKitListCanvasPreview: View {
+    var body: some View {
+        InboxAppKitList(
+            notifications: ApolloPreviewFixtures.notifications,
+            onDismiss: { _ in },
+            onTap: { _ in },
+            topInset: 14,
+            bottomInset: 14,
+            horizontalInset: 20
+        )
+        .frame(width: 640, height: 720)
+        .background(Editorial.paper)
+        .preferredColorScheme(.light)
+        .defaultAppStorage(ApolloPreviewFixtures.defaults)
+    }
+}
+
+#Preview("AppKit real · Inbox") {
+    InboxAppKitListCanvasPreview()
+}
+
+#Preview("AppKit real · Inbox dark") {
+    InboxAppKitListCanvasPreview()
+        .preferredColorScheme(.dark)
+}
+#endif

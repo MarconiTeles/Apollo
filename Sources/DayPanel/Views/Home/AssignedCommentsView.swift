@@ -43,6 +43,9 @@ struct AssignedCommentsView: View {
     @State private var savedIds = AssignedCommentPreferences.savedIds
     @State private var readIds = AssignedCommentPreferences.readIds
     @State private var reminders = AssignedCommentPreferences.reminders
+    /// Altura medida do header sobreposto — recuo do topo do conteúdo (os
+    /// cards descansam abaixo, mas rolam por trás até o topo da janela).
+    @State private var headerBarHeight: CGFloat = 96
 
     private var me: Int? { appState.clickUpAuthService.userId }
     private var myUsername: String {
@@ -57,7 +60,17 @@ struct AssignedCommentsView: View {
             Calendar.current.date(byAdding: .day, value: -$0, to: Date())
         }
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Os FILTROS do painel lateral valem aqui: um comentário só aparece
+        // se a TAREFA dele passa nos taskFilters ativos (prioridade,
+        // responsável, etiquetas, datas…).
+        let sidebarFilters = appState.taskFilters
+        let passingTaskIds: Set<String>? = sidebarFilters.isEmpty ? nil : {
+            let tasks = Array(Set(appState.assignedCommentRecords.map(\.task.id)))
+                .compactMap { id in appState.assignedCommentRecords.first { $0.task.id == id }?.task }
+            return Set(sidebarFilters.applying(to: tasks).map(\.id))
+        }()
         return appState.assignedCommentRecords.filter { record in
+            if let passingTaskIds, !passingTaskIds.contains(record.task.id) { return false }
             let belongs: Bool
             switch tab {
             case .assigned:
@@ -85,11 +98,38 @@ struct AssignedCommentsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Rectangle().fill(Editorial.rule.opacity(0.65)).frame(height: 1)
-            toolbar
+        // ZStack (não safeAreaInset!): o scroll ocupa a janela INTEIRA
+        // (viewport até y=0) e o header é sobreposto. O descanso do conteúdo
+        // abaixo do header vem de contentMargins DENTRO do scroll — um card
+        // rolando pra cima viaja até o topo REAL da janela sem sair do
+        // viewport. Com safeAreaInset o viewport encolhia e o LazyVStack
+        // DESCARTAVA o card ao cruzar o limite ("comentários somem" em vez de
+        // passar por trás do header) — mesmo bug/fix do Quadro.
+        ZStack(alignment: .top) {
             content
+
+            // UMA linha só: título + abas + filtro compacto + busca +
+            // progresso + atualizar. Os FILTROS do painel lateral também
+            // valem aqui (aplicados à tarefa de cada comentário).
+            header
+                .padding(.top, 52)   // toolbar band — same element
+                // The comments route is inset around the 220pt floating
+                // sidebar, but the native titlebar material is window chrome
+                // and therefore continues underneath that pane to x = 0.
+                .finderHeaderMaterial(leadingExtension: 220)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
+                        .padding(.leading, -220)
+                }
+                .background(
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { headerBarHeight = g.size.height }
+                            .onChange(of: g.size.height) { _, h in
+                                headerBarHeight = h
+                            }
+                    }
+                )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Editorial.paper)
@@ -98,6 +138,16 @@ struct AssignedCommentsView: View {
                 await appState.refreshAssignedComments()
             }
         }
+        .apolloStudioNode("comments.page",
+                          title: "Página de comentários",
+                          kind: .page,
+                          parent: "app.root",
+                          properties: [
+                            .init(kind: .verticalPadding,
+                                  title: "Respiro do conteúdo", value: 30),
+                            .init(kind: .material,
+                                  title: "Material do header", token: "Materials.finderHeader"),
+                          ])
     }
 
     /// Single-row identity band: title, scope tabs, live scan progress and
@@ -105,13 +155,8 @@ struct AssignedCommentsView: View {
     /// + the filter toolbar) instead of the previous four.
     private var header: some View {
         HStack(spacing: 12) {
-            Text("Comentários atribuídos")
-                .font(Editorial.sans(21, .semibold))
-                .tracking(-0.5)
-                .foregroundStyle(Editorial.ink)
-                .lineLimit(1)
-                .layoutPriority(1)
-
+            // Título "Comentários atribuídos" removido — as abas já dizem
+            // onde estamos; o espaço vai pro conteúdo.
             HStack(spacing: 6) {
                 ForEach(Tab.allCases, id: \.self) { option in
                     Button { tab = option } label: {
@@ -131,6 +176,41 @@ struct AssignedCommentsView: View {
             .padding(.leading, 6)
 
             Spacer(minLength: 12)
+
+            // Filtro compacto (tipo + resolvidos + período) — sem linha própria.
+            Menu {
+                Picker("Tipo", selection: $kind) {
+                    ForEach(Kind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                Toggle("Incluir resolvidos", isOn: $includeResolved)
+                Picker("Período", selection: $period) {
+                    ForEach(Period.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(filtersTouched ? Editorial.accent : Editorial.inkSoft)
+                    .frame(width: 30, height: 30)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .liquidGlassCapsule(tint: Editorial.accent,
+                                tintOpacity: filtersTouched ? 0.10 : 0.05)
+            .help("Filtro: tipo, resolvidos e período")
+
+            // Busca subiu pra linha do título (a linha extra morreu).
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(Editorial.inkMute)
+                TextField("Pesquisar comentários", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(Editorial.sans(12))
+                    .frame(width: 190)
+            }
+            .padding(.horizontal, 13)
+            .frame(height: 30)
+            .liquidGlassCapsule(tint: Editorial.accent, tintOpacity: 0.035)
 
             if appState.assignedCommentsLoading
                 || appState.assignedCommentsScannedTasks < appState.assignedCommentsTotalTasks {
@@ -159,76 +239,20 @@ struct AssignedCommentsView: View {
         .padding(.horizontal, 28)
         .padding(.top, 16)
         .padding(.bottom, 11)
+        .apolloStudioNode("comments.header",
+                          title: "Header de comentários",
+                          kind: .header,
+                          parent: "comments.page",
+                          properties: [
+                            .init(kind: .horizontalPadding,
+                                  title: "Padding horizontal", value: 28),
+                            .init(kind: .spacing, title: "Espaçamento", value: 12),
+                          ])
     }
 
-    private var toolbar: some View {
-        HStack(spacing: 9) {
-            Menu {
-                ForEach(Kind.allCases, id: \.self) { value in
-                    Button {
-                        kind = value
-                    } label: {
-                        if kind == value { Label(value.rawValue, systemImage: "checkmark") }
-                        else { Text(value.rawValue) }
-                    }
-                }
-            } label: {
-                toolbarCapsuleLabel(kind == .all ? "Filtro" : kind.rawValue,
-                                    icon: "line.3.horizontal.decrease",
-                                    tone: kind == .all ? Editorial.inkSoft : Editorial.accent)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(height: 34)
-            .modifier(AssignedCommentsToolbarCapsule())
-
-            Button { includeResolved.toggle() } label: {
-                toolbarCapsuleLabel(
-                    "Resolvidos",
-                    icon: includeResolved ? "checkmark.circle.fill" : "checkmark.circle",
-                    tone: includeResolved ? Color.green : Editorial.inkSoft
-                )
-            }
-            .buttonStyle(.plain)
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(height: 34)
-            .modifier(AssignedCommentsToolbarCapsule())
-
-            Menu {
-                ForEach(Period.allCases, id: \.self) { value in
-                    Button {
-                        period = value
-                    } label: {
-                        if period == value { Label(value.rawValue, systemImage: "checkmark") }
-                        else { Text(value.rawValue) }
-                    }
-                }
-            } label: {
-                toolbarCapsuleLabel(period.rawValue, icon: "calendar", tone: Color.mint)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(height: 34)
-            .modifier(AssignedCommentsToolbarCapsule())
-
-            Spacer()
-
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(Editorial.inkMute)
-                TextField("Pesquisar comentários", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(Editorial.sans(12))
-                    .frame(width: 210)
-            }
-            .padding(.horizontal, 15)
-            .frame(height: 34)
-            .liquidGlassCapsule(tint: Editorial.accent, tintOpacity: 0.035)
-        }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 9)
+    /// Algum filtro do menu compacto fora do padrão? (colore o ícone)
+    private var filtersTouched: Bool {
+        kind != .all || includeResolved || period != .ninety
     }
 
     /// One geometry for every toolbar action. Menu controls have a smaller
@@ -307,6 +331,13 @@ struct AssignedCommentsView: View {
                 .padding(.bottom, 80)
             }
             .scrollIndicators(.never)
+            // Margens de CONTEÚDO (não padding/safeArea!): o viewport alcança
+            // y=0, o conteúdo descansa abaixo do header e, ao rolar, viaja por
+            // dentro da margem até o topo REAL da janela — sempre dentro do
+            // viewport, então o LazyVStack não descarta o card no caminho.
+            .contentMargins(.top, headerBarHeight + 30, for: .scrollContent)
+            // Sombras/hover podem desenhar além dos limites do scroll.
+            .scrollClipDisabled()
         }
     }
 
@@ -322,6 +353,7 @@ struct AssignedCommentsView: View {
         }
         .scrollIndicators(.never)
         .allowsHitTesting(false)
+        .contentMargins(.top, headerBarHeight + 30, for: .scrollContent)
     }
 
     private var loadMoreButton: some View {
@@ -472,6 +504,17 @@ private struct AssignedCommentCard: View {
         .shadow(color: .black.opacity(0.05), radius: 2.5, y: 1)
         .contextMenu { contextMenu }
         .accessibilityElement(children: .contain)
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "comments.card.\(record.id)"),
+            title: record.task.title,
+            kind: .card,
+            parent: "comments.page",
+            properties: [
+                .init(kind: .cornerRadius, title: "Raio", value: 11),
+                .init(kind: .shadowRadius, title: "Sombra", value: 2.5),
+                .init(kind: .shadowY, title: "Sombra Y", value: 1),
+            ]
+        )
     }
 
     private var taskHeader: some View {

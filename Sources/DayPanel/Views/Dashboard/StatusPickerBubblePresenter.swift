@@ -17,9 +17,19 @@ final class StatusPickerBubblePresenter: NSObject, NSWindowDelegate {
     private var panel: StatusPickerBubblePanel?
     private var model: StatusPickerBubbleModel?
     private var escapeMonitor: Any?
+    private var clickOutsideMonitor: Any?
     private var dismissalCallback: (() -> Void)?
     private var isDismissing = false
     var isPresented: Bool { panel != nil }
+
+    // O panel é uma janela própria: se o dono (Coordinator/anchor) morrer sem
+    // fechar, o panel fica ÓRFÃO na tela ("grudado"). O deinit é a rede de
+    // segurança; o dismantleNSView do anchor é o caminho normal.
+    deinit {
+        removeEscapeMonitor()
+        removeClickOutsideMonitor()
+        panel?.orderOut(nil)
+    }
 
     func show(statuses: [CUStatus],
               currentStatusName: String?,
@@ -115,17 +125,33 @@ final class StatusPickerBubblePresenter: NSObject, NSWindowDelegate {
         isDismissing = false
         panel.makeKeyAndOrderFront(nil)
         installEscapeMonitor()
+        installClickOutsideMonitor()
         DispatchQueue.main.async {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) {
+            // Spring mais seco que o original (0.34/0.78) — o picker aparece
+            // de imediato em vez de "demorar a abrir".
+            withAnimation(.spring(response: 0.24, dampingFraction: 0.85)) {
                 model.visible = true
             }
         }
     }
 
     func dismiss(animated: Bool = true) {
+        // Fechamento FORÇADO (teardown/dealloc): mesmo no meio de um dismiss
+        // animado, derruba o panel na hora — senão o asyncAfter pendente vira
+        // a única chance de fechar e o panel pode ficar órfão.
+        if !animated, isDismissing, let panel {
+            panel.orderOut(nil)
+            self.panel = nil
+            model = nil
+            isDismissing = false
+            removeEscapeMonitor()
+            removeClickOutsideMonitor()
+            return
+        }
         guard let panel, !isDismissing else { return }
         isDismissing = true
         removeEscapeMonitor()
+        removeClickOutsideMonitor()
         let callback = dismissalCallback
         dismissalCallback = nil
         callback?()
@@ -167,6 +193,26 @@ final class StatusPickerBubblePresenter: NSObject, NSWindowDelegate {
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         escapeMonitor = nil
     }
+
+    /// Clique FORA do panel fecha o picker — não dependemos mais só do
+    /// `windowDidResignKey` (que falha quando o panel borderless não chegou a
+    /// virar key, deixando o bubble "grudado" na tela).
+    private func installClickOutsideMonitor() {
+        clickOutsideMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            guard let self, let panel = self.panel else { return event }
+            if event.window !== panel {
+                self.dismiss(animated: true)
+            }
+            return event
+        }
+    }
+
+    private func removeClickOutsideMonitor() {
+        if let clickOutsideMonitor { NSEvent.removeMonitor(clickOutsideMonitor) }
+        clickOutsideMonitor = nil
+    }
 }
 
 /// Zero-chrome anchor that lets pure SwiftUI buttons use the exact same
@@ -191,11 +237,23 @@ struct StatusPickerBubbleAnchor: NSViewRepresentable {
         guard view.window != nil else { return }
         if isPresented, !context.coordinator.presenter.isPresented {
             let binding = $isPresented
-            context.coordinator.presenter.show(
+            // Eco do fechamento, não intenção de abrir: quando o usuário FECHA
+            // clicando no próprio seletor, o monitor de clique-fora fecha o
+            // panel (mousedown) e a action do botão faz toggle() no mouseup —
+            // regravando `true`. Sem esta guarda o binding ficava preso em
+            // true e QUALQUER re-render posterior (ex.: trocar de aba na
+            // tarefa) ressuscitava o picker do nada.
+            if Date().timeIntervalSince(context.coordinator.lastDismissAt) < 0.35 {
+                DispatchQueue.main.async { binding.wrappedValue = false }
+                return
+            }
+            let coordinator = context.coordinator
+            coordinator.presenter.show(
                 statuses: statuses,
                 currentStatusName: currentStatusName,
                 anchoredTo: view,
-                onDismiss: {
+                onDismiss: { [weak coordinator] in
+                    coordinator?.lastDismissAt = Date()
                     DispatchQueue.main.async { binding.wrappedValue = false }
                 },
                 onSelect: onSelect
@@ -205,9 +263,19 @@ struct StatusPickerBubbleAnchor: NSViewRepresentable {
         }
     }
 
+    /// SwiftUI recria/destrói representables com o churn de render do popup;
+    /// sem este teardown o panel do picker sobrevivia ao dono e ficava
+    /// "grudado" na tela, sem nenhum caminho de fechamento.
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.presenter.dismiss(animated: false)
+    }
+
     final class Coordinator {
         var parent: StatusPickerBubbleAnchor
         let presenter = StatusPickerBubblePresenter()
+        /// Instante do último dismiss — usado pra distinguir "abrir de
+        /// verdade" do eco do toggle() no fechamento pelo próprio seletor.
+        var lastDismissAt = Date.distantPast
         init(parent: StatusPickerBubbleAnchor) { self.parent = parent }
     }
 }

@@ -74,23 +74,14 @@ struct WelcomeAnimationView: View {
                 .scaleEffect(showName ? 1.0 : 0.94)
                 .animation(nameSpring, value: showName)
 
-                // Short cinnabar rule — the editorial "stamp"
-                // under the mark, drawn in from the centre.
+                // Short accent rule — the editorial "stamp" under the
+                // mark, drawn in from the centre. (Subtítulo "uma agenda
+                // que lê" removido a pedido.)
                 Rectangle().fill(Editorial.accent)
                     .frame(width: 56, height: 2)
                     .opacity(showTagline ? 1 : 0)
                     .scaleEffect(x: showTagline ? 1 : 0.15, anchor: .center)
                     .animation(.easeOut(duration: 0.42), value: showTagline)
-
-                Text("uma agenda que lê")
-                    .font(Editorial.serif(17).italic())
-                    .foregroundStyle(Editorial.inkSoft)
-                    .multilineTextAlignment(.center)
-                    .opacity(showTagline ? 1 : 0)
-                    .offset(y: showTagline ? 0 : 8)
-                    .animation(.easeOut(duration: 0.45).delay(0.05),
-                               value: showTagline)
-                    .padding(.horizontal, 24)
             }
             .scaleEffect(fadingOut ? 1.04 : 1.0)
             .opacity(fadingOut ? 0 : 1)

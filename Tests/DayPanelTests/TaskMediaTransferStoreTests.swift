@@ -1,5 +1,5 @@
 import XCTest
-@testable import DayPanel
+@testable import ApolloRuntime
 
 @MainActor
 final class TaskMediaTransferStoreTests: XCTestCase {

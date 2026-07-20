@@ -87,6 +87,48 @@ struct AppNotification: Identifiable, Codable, Equatable, Hashable {
 
     var hasTarget: Bool { targetKind != nil && targetId != nil }
 
+    /// Returns the same notification while replacing only its target. Review
+    /// replacements can have several physical ClickUp attachment ids, but the
+    /// notification center must keep pointing at the one stable review id.
+    func replacingTargetId(_ targetId: String) -> Self {
+        .init(id: id,
+              date: date,
+              kind: kind,
+              title: title,
+              subtitle: subtitle,
+              message: message,
+              messageHighlights: messageHighlights,
+              read: read,
+              targetKind: targetKind,
+              targetId: targetId)
+    }
+
+    /// Canonicalizes persisted review aliases and keeps only the newest row for
+    /// each logical review. Notifications are stored newest-first, so the first
+    /// row also preserves the newest filename and copy while stale V3/V4 aliases
+    /// disappear after a relaunch.
+    static func normalizingReviewTargets(
+        in notifications: [Self],
+        canonicalTarget: (String) -> String?
+    ) -> [Self] {
+        var seenReviewTargets = Set<String>()
+        var result: [Self] = []
+        result.reserveCapacity(notifications.count)
+
+        for notification in notifications {
+            guard notification.targetKind == .review,
+                  let originalTarget = notification.targetId else {
+                result.append(notification)
+                continue
+            }
+
+            let resolvedTarget = canonicalTarget(originalTarget) ?? originalTarget
+            guard seenReviewTargets.insert(resolvedTarget).inserted else { continue }
+            result.append(notification.replacingTargetId(resolvedTarget))
+        }
+        return result
+    }
+
     /// The Home Inbox is an action feed, not a network log. Connection
     /// and background-sync health remain available through the toolbar
     /// status/toasts, but do not occupy persistent Inbox rows.

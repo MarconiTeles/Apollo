@@ -34,8 +34,9 @@ else
 fi
 APP="build/${APP_DISPLAY_NAME}.app"
 
-# Generate the icon if it doesn't already exist (or after a clean build/).
-if [ ! -f build/AppIcon.icns ]; then
+# Compile the app icon (Icon Composer .icon → Assets.car + AppIcon.icns) if the
+# artifacts aren't there yet (or after a clean build/).
+if [ ! -f build/icon/Assets.car ] || [ ! -f build/icon/AppIcon.icns ]; then
     ./make-icon.sh
 fi
 
@@ -43,7 +44,23 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$BIN"                                "$APP/Contents/MacOS/DayPanel"
 cp Sources/DayPanel/Resources/Info.plist "$APP/Contents/Info.plist"
-cp build/AppIcon.icns                    "$APP/Contents/Resources/AppIcon.icns"
+# Dynamic Liquid-Glass icon (macOS 26) lives in Assets.car, resolved via
+# CFBundleIconName; AppIcon.icns is the static fallback (older Finder paths).
+cp build/icon/Assets.car                 "$APP/Contents/Resources/Assets.car"
+cp build/icon/AppIcon.icns               "$APP/Contents/Resources/AppIcon.icns"
+
+# A local DEBUG bundle must never touch the production Keychain namespace.
+# KeychainHelper also has a compile-time DEBUG guard, but this explicit plist
+# flag keeps the packaged .app safe even if Swift compilation conditions drift.
+if [ "$CONFIG" = "debug" ]; then
+    /usr/libexec/PlistBuddy -c \
+        "Add :ApolloUseLegacySecretStoreOnly bool true" \
+        "$APP/Contents/Info.plist"
+else
+    /usr/libexec/PlistBuddy -c \
+        "Delete :ApolloUseLegacySecretStoreOnly" \
+        "$APP/Contents/Info.plist" 2>/dev/null || true
+fi
 
 # ── Bundle Sparkle.framework ──────────────────────────────────────────────
 # Sparkle is pulled in via SPM (see `Package.swift`), but
@@ -143,6 +160,21 @@ xattr -dr com.apple.quarantine "$OLLAMA_BUNDLE" 2>/dev/null || true
 # identity rotates in.
 SIGNING_ID="${APOLLO_SIGNING_ID:-Developer ID Application: Marconi Lima (CU544M36UD)}"
 ENTITLEMENTS_PATH="Sources/DayPanel/Resources/Apollo.entitlements"
+SIGNING_ENTITLEMENTS_PATH="$ENTITLEMENTS_PATH"
+
+# Ad-hoc DEBUG bundles do not have a Team ID. With Hardened Runtime enabled,
+# dyld otherwise rejects the separately signed Sparkle.framework even though
+# both signatures are valid ("mapping process and mapped file have different
+# Team IDs"). Keep production library validation strict; relax it only for the
+# isolated local debug bundle used by run-debug.sh.
+if [ "$CONFIG" = "debug" ] && [ "$SIGNING_ID" = "-" ]; then
+    DEBUG_ENTITLEMENTS_PATH="build/Apollo-debug.entitlements"
+    cp "$ENTITLEMENTS_PATH" "$DEBUG_ENTITLEMENTS_PATH"
+    /usr/libexec/PlistBuddy -c \
+        "Add :com.apple.security.cs.disable-library-validation bool true" \
+        "$DEBUG_ENTITLEMENTS_PATH"
+    SIGNING_ENTITLEMENTS_PATH="$DEBUG_ENTITLEMENTS_PATH"
+fi
 
 # Sign the inner Frameworks FIRST (deepest dependency first).
 # Sparkle's framework ships with its own XPC services
@@ -207,7 +239,7 @@ fi
 # Outer .app — apply entitlements, hardened runtime, timestamp.
 codesign --force --options runtime --timestamp \
     --sign "$SIGNING_ID" \
-    --entitlements "$ENTITLEMENTS_PATH" \
+    --entitlements "$SIGNING_ENTITLEMENTS_PATH" \
     "$APP" > /dev/null
 
 # Sanity check: --deep --strict catches mismatched nested
@@ -273,4 +305,16 @@ rm -rf build/DayPanel.app
 
 echo ""
 echo "✓ Built $APP"
-echo "  Launch: open \"$APP\""
+if [ "$CONFIG" = "debug" ]; then
+    DEBUG_SECRET_MODE="$(/usr/libexec/PlistBuddy -c \
+        'Print :ApolloUseLegacySecretStoreOnly' \
+        "$APP/Contents/Info.plist" 2>/dev/null || true)"
+    if [ "$DEBUG_SECRET_MODE" != "true" ]; then
+        echo "✗ BUILD FAILED — debug bundle is not isolated from Keychain" >&2
+        exit 1
+    fi
+    echo "  ✓ Debug credentials isolated from the production Keychain"
+    echo "  Launch: ./run-debug.sh"
+else
+    echo "  Launch: open \"$APP\""
+fi

@@ -1,6 +1,12 @@
 import ReviewKit
 import SwiftUI
 
+private struct ConfirmedReviewCompletion {
+    let acknowledgement: ReviewCompletionAcknowledgement
+    let activeAtt: String
+    let meta: ReviewBackend.Meta
+}
+
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var updateService: UpdateService
@@ -13,6 +19,12 @@ struct ContentView: View {
     @State private var showNotifs      = false
     @State private var showFilters     = false
     @State private var showAIChat      = false
+    /// Set only by ReviewKit's explicit completion-confirmation close. The
+    /// task row acknowledgement starts from the sheet's `onDismiss`, so its
+    /// two-second success animation is fully visible instead of running behind
+    /// the sheet-removal animation.
+    @State private var confirmedReviewCompletion: ConfirmedReviewCompletion?
+    @State private var completionCloseRequested = false
     /// True when the in-toolbar ClickUp list picker is open. Same
     /// `CUListPickerSheet` reused from Settings/Onboarding so the
     /// user has one canonical picker across the app.
@@ -77,6 +89,24 @@ struct ContentView: View {
     /// overlay's open/close animation. Falls back to top-centre
     /// if zero (first paint, programmatic toggle).
     @State private var aiChatOpenPoint: CGPoint = .zero
+
+    /// Xcode Canvas uses the production view hierarchy but must never enter
+    /// launch-only flows such as the welcome animation or account onboarding.
+    /// The release app still reaches this view exclusively through `init()`.
+    private let previewMode: Bool
+
+    init() {
+        previewMode = false
+    }
+
+#if DEBUG
+    init(previewRoute: SidebarRoute) {
+        previewMode = true
+        _sidebarRoute = State(initialValue: previewRoute)
+        _showWelcome = State(initialValue: false)
+        _isFirstWelcome = State(initialValue: false)
+    }
+#endif
 
     private var isToday: Bool {
         Calendar.current.isDateInToday(appState.selectedDate)
@@ -827,7 +857,10 @@ struct ContentView: View {
         // ReviewKit engine in-app; on submit Apollo posts the summary to ClickUp.
         // Extracted to a method so its closures don't bloat the `body`
         // type-checker (keeps SwiftUI's inference within budget).
-        .sheet(item: $reviewPresenter.request) { req in reviewSheet(req) }
+        .sheet(item: $reviewPresenter.request,
+               onDismiss: reviewSheetDidDismiss) { req in
+            reviewSheet(req)
+        }
     }
 
     /// The embedded review sheet content. A fresh native review (opened from the
@@ -836,17 +869,39 @@ struct ContentView: View {
     /// open; `liveSave` autosaves on change; `onSubmit` does a final flush and
     /// posts the ClickUp comment.
     private func reviewSheet(_ req: ReviewRequest) -> some View {
-        let liveLoad: (() async -> Data?)? = req.params.map { p in
-            { await ReviewBackend.resolve(mediaUrl: p.mediaUrl, ext: p.ext,
-                                          title: p.mediaTitle, taskId: p.taskId,
-                                          listId: p.listId, uploaderId: p.uploaderId) }
+        // Identidade FIXADA por apresentação: o contexto nasce no
+        // ReviewPresenter.present() e vive no ReviewRequest. Ele NUNCA pode
+        // ser criado aqui — este builder re-executa em qualquer mudança de
+        // estado (um toast basta) e um contexto novo perde o `activeAtt`
+        // entre o load e o Concluir, empurrando a conclusão para uma chave
+        // órfã derivada do payload e reprovando a confirmação.
+        let ctx: ReviewSessionContext? = req.sessionContext
+        let liveLoad: (() async -> Data?)? = ctx.map { c in { await c.load() } }
+        let liveSave: ((Data) async -> Bool)? = ctx.map { c in
+            { data in await c.save(payloadData: data) }
         }
-        let liveSave: ((Data) async -> Bool)? = (req.params != nil)
-            ? { data in await ReviewBackend.save(payloadData: data) }
-            : nil
+        let liveSubmit: ((Data) async -> Bool)? = ctx.map { c in
+            { data in
+                // Do not let ReviewKit display its completion state merely
+                // because the POST returned 2xx. The same selected version must
+                // be read back with the submitted status and `concludedAt`.
+                guard let meta = await c.concludeAndConfirm(payloadData: data)
+                else { return false }
+                if let acknowledgement = req.completionAcknowledgement,
+                   let activeAtt = c.activeAtt,
+                   meta.isApprovedAndConcluded {
+                    await MainActor.run {
+                        confirmedReviewCompletion = ConfirmedReviewCompletion(
+                            acknowledgement: acknowledgement,
+                            activeAtt: activeAtt,
+                            meta: meta
+                        )
+                    }
+                }
+                return true
+            }
+        }
         let onSubmit: (ReviewResult) -> Void = { result in
-            // Final flush to KV (covers edits within the autosave debounce).
-            Task { await ReviewBackend.save(payloadData: result.json) }
             if let tid = result.taskId {
                 let mentions = [result.uploaderId].compactMap { $0 }
                 Task {
@@ -868,10 +923,46 @@ struct ContentView: View {
             readOnly: req.savedJSON != nil,
             liveLoad: liveLoad,
             liveSave: liveSave,
-            onClose: { reviewPresenter.request = nil },
+            liveSubmit: liveSubmit,
+            onClose: {
+                // Uma conclusão CONFIRMADA pelo servidor é final — consumir o
+                // VER REVIEW não pode depender de qual botão fechou o sheet.
+                // Descartar a confirmação aqui adiava o consumo para a sonda
+                // (minutos) quando o usuário fechava pelo X.
+                consumeConfirmedReviewIfReady()
+                confirmedReviewCompletion = nil
+                completionCloseRequested = false
+                reviewPresenter.request = nil
+            },
+            onCompletionClose: {
+                completionCloseRequested = true
+                consumeConfirmedReviewIfReady()
+                reviewPresenter.request = nil
+            },
             onSubmit: onSubmit
         )
         .frame(minWidth: 1040, minHeight: 660)
+    }
+
+    private func reviewSheetDidDismiss() {
+        consumeConfirmedReviewIfReady()
+    }
+
+    private func consumeConfirmedReviewIfReady() {
+        // `confirmedReviewCompletion` só existe após o servidor confirmar
+        // approved + concludedAt na versão exata — a partir daí QUALQUER
+        // fechamento consome. Abrir/fechar sem conclusão confirmada continua
+        // jamais consumindo (a confirmação simplesmente não existe).
+        guard let completion = confirmedReviewCompletion else { return }
+        let consumed = TaskReviewUpdateStore.shared.acknowledgeConfirmedCompletion(
+            taskId: completion.acknowledgement.taskId,
+            pendingActiveAtt: completion.acknowledgement.activeAtt,
+            confirmedActiveAtt: completion.activeAtt,
+            meta: completion.meta
+        )
+        guard consumed else { return }
+        confirmedReviewCompletion = nil
+        completionCloseRequested = false
     }
 
     /// Renders the Notifications Center as a top-trailing-anchored popup
@@ -1231,6 +1322,7 @@ struct ContentView: View {
 
 
     private func maybeShowOnboarding() {
+        guard !previewMode else { return }
         guard !onboardingDismissedThisSession else { return }
         // Note on the welcome interaction: we deliberately do
         // NOT bail out while `showWelcome` is true. The body's
@@ -1328,50 +1420,10 @@ struct ContentView: View {
             .focusEffectDisabled()
             .help("Buscar (⌘K)")
 
-            // ✦ Apollo IA — cinnabar mark + word (prototype AIMark)
-            Button {
-                let rect = MouseOriginCapture.currentClickRectInMainWindow()
-                if rect != .zero {
-                    aiChatOpenPoint = CGPoint(x: rect.midX, y: rect.midY)
-                }
-                // Bouncy spring on open (matches the rest of
-                // the Editorial overlays); clean ease on close
-                // so the panel never hangs at the bottom edge.
-                if showAIChat {
-                    withAnimation(.easeIn(duration: 0.30)) {
-                        showAIChat = false
-                    }
-                } else {
-                    withAnimation(.spring(response: 0.34,
-                                          dampingFraction: 0.86)) {
-                        showAIChat = true
-                    }
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    AIMark(size: 14)
-                    Text("Apollo IA")
-                }
-            }
-            .buttonStyle(TBButtonStyle(accent: true))
-            .focusEffectDisabled()
-            .help("Apollo IA")
-            .onChange(of: appState.aiAgent.dismissChatRequest) { _, _ in
-                // Plain ease-in fall — matches the rest of
-                // the Editorial overlays.
-                withAnimation(.easeIn(duration: 0.30)) {
-                    showAIChat = false
-                }
-            }
-            // RAM relief — unload the embedded model the moment the
-            // chat closes instead of holding ~5 GB for 5 min.
-            .onChange(of: showAIChat) { _, isOpen in
-                if !isOpen {
-                    Task.detached(priority: .background) {
-                        await appState.aiAgent.unloadEmbeddedModel()
-                    }
-                }
-            }
+            // Apollo IA — REMOVIDO desta build (entry point da toolbar
+            // retirado a pedido). O overlay/serviço continuam no código, mas
+            // sem gatilho de UI `showAIChat` nunca vira true. Reverter =
+            // restaurar este botão.
 
             // 🔔 — notifications; cinnabar count badge (prototype)
             Button {
@@ -1505,20 +1557,18 @@ struct ContentView: View {
                     // passam POR TRÁS do pane flutuante de vidro
                     // da sidebar. O recuo visual do conteúdo em
                     // repouso vem do `contentMargins` interno do
-                    // EditorialBoardView. Top inset mantém o
-                    // header abaixo dos pills da toolbar.
-                    .padding(.top, 52)
+                    // EditorialBoardView. The 52pt toolbar reserve now lives
+                    // inside the board header so one continuous `.titlebar`
+                    // material backs both regions without changing geometry.
             case .tasks:
                 EditorialMyTasksView()
                     .environmentObject(appState)
-                    .padding(.top, 52)
                     .padding(.leading, 220)
             case .today:
                 editorialHomeView
             case .assignedComments:
                 AssignedCommentsView()
                     .environmentObject(appState)
-                    .padding(.top, 52)
                     .padding(.leading, 220)
             default:
                 dashboardSplit
@@ -1533,30 +1583,49 @@ struct ContentView: View {
     /// own scroll-free band so the dashboard below keeps its
     /// independent scrolling.
     private var editorialHomeView: some View {
-        VStack(spacing: 0) {
+        // The chrome is an overlay, not a safe-area inset. A safe-area inset
+        // shrinks the scroll viewport and makes it physically impossible for
+        // agenda/inbox rows to travel behind the material. Their own scroll
+        // content carries the resting reserve instead, so the first items keep
+        // the same 30pt breathing room and then naturally pass under the band.
+        let chromeHeight: CGFloat = 99
+        // The SwiftUI Agenda list begins at the window's top and therefore
+        // needs the full chrome reserve plus a comfortable resting gap.
+        let agendaRestingReserve = chromeHeight + 76
+        // InboxAppKitList is already laid out in the post-toolbar content
+        // region. Giving it the complete chrome height again doubled the
+        // reserve and left a giant empty slab above the first notification.
+        let inboxRestingReserve: CGFloat = 60
+        return ZStack(alignment: .top) {
+            homeDashboardSplit(agendaTopInset: agendaRestingReserve,
+                               inboxTopInset: inboxRestingReserve)
+
             EditorialHomeHeader()
                 .environmentObject(appState)
                 .padding(.top, 52)        // clear the toolbar pills
                 .padding(.leading, 220)   // clear the glass sidebar
-            // Home-specific split: forward agenda on the left and a
-            // unified ClickUp + Apollo Inbox on the right.
-            homeDashboardSplit
+                .finderHeaderMaterial(leadingExtension: 220)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
+                }
         }
     }
 
     @ViewBuilder
-    private var homeDashboardSplit: some View {
+    private func homeDashboardSplit(agendaTopInset: CGFloat,
+                                    inboxTopInset: CGFloat) -> some View {
         GeometryReader { geo in
             let total     = max(1, geo.size.width)
             let timelineW = (total - 1) * (1.0 / 2.05)
             HStack(spacing: 0) {
-                TimelineView(forwardOnly: true)
+                TimelineView(forwardOnly: true,
+                             topContentInset: agendaTopInset)
                     .frame(width: timelineW)
                 Rectangle()
                     .fill(Editorial.rule.opacity(0.65))
                     .frame(width: 1)
                     .edgeFadedVertical()
-                EditorialHomeInboxColumn()
+                EditorialHomeInboxColumn(topInset: inboxTopInset)
                     .environmentObject(appState)
                     .frame(maxWidth: .infinity)
             }
@@ -1890,14 +1959,14 @@ private struct IntelligenceEdgeGlow: View {
 // populated with mock data. Switch the canvas between light/dark with
 // the two previews below.
 #Preview("Dashboard — claro") {
-    ContentView()
+    ContentView(previewRoute: .today)
         .environmentObject(AppState.preview)
         .environmentObject(UpdateService())
         .frame(width: 1180, height: 760)
 }
 
 #Preview("Dashboard — escuro") {
-    ContentView()
+    ContentView(previewRoute: .today)
         .environmentObject(AppState.preview)
         .environmentObject(UpdateService())
         .frame(width: 1180, height: 760)

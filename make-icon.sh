@@ -1,42 +1,42 @@
 #!/bin/bash
-# Build Apollo's macOS AppIcon.icns from the canonical 1024px artwork.
-# The source is exported from `cópia de APOLLO_ICON_06.pxd` and committed
-# beside the app resources so release builds remain reproducible even when
-# the original Pixelmator document is not present on another machine.
+# Compila o AppIcon do Apollo a partir do documento Icon Composer
+# `Sources/DayPanel/Resources/APOLLO.icon` (formato .icon do macOS 26, com
+# gradiente + Liquid Glass dinâmico). Gera DOIS artefatos:
+#   • build/icon/Assets.car   — o ícone dinâmico (glass/gradient) que o macOS 26
+#                               resolve via CFBundleIconName;
+#   • build/icon/AppIcon.icns — fallback estático (Finder antigo, thumbnails).
+# Committado junto ao app para builds reprodutíveis sem o Xcode/Icon Composer
+# aberto. (Antes: iconset estático a partir de APOLLO_ICON_06.png.)
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SRC="Sources/DayPanel/Resources/APOLLO_ICON_06.png"
-ICONSET="build/AppIcon.iconset"
+SRC="Sources/DayPanel/Resources/APOLLO.icon"
+OUT="build/icon"
 
-if [ ! -f "$SRC" ]; then
-    echo "✗ Canonical icon source $SRC not found"
+if [ ! -d "$SRC" ]; then
+    echo "✗ Documento Icon Composer $SRC não encontrado"
     exit 1
 fi
 
-mkdir -p build
-rm -rf "$ICONSET"
-mkdir -p "$ICONSET"
+rm -rf "$OUT"
+mkdir -p "$OUT"
 
-# The new artwork already contains the intended macOS silhouette and optical
-# margin. Resizing it directly avoids the old second 80% inset that made the
-# icon look smaller than Finder/Dock neighbours.
-resize() {
-    local size="$1" dest="$2"
-    sips -z "$size" "$size" "$SRC" --out "$ICONSET/$dest" >/dev/null
-}
+# actool compila o .icon → Assets.car (dinâmico) + AppIcon.icns (fallback).
+# `--app-icon AppIcon` casa com CFBundleIconName/CFBundleIconFile no Info.plist;
+# por isso o .icon precisa se chamar AppIcon.icon durante a compilação.
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+cp -R "$SRC" "$WORK/AppIcon.icon"
 
-resize 16   icon_16x16.png
-resize 32   icon_16x16@2x.png
-resize 32   icon_32x32.png
-resize 64   icon_32x32@2x.png
-resize 128  icon_128x128.png
-resize 256  icon_128x128@2x.png
-resize 256  icon_256x256.png
-resize 512  icon_256x256@2x.png
-resize 512  icon_512x512.png
-resize 1024 icon_512x512@2x.png
+xcrun actool "$WORK/AppIcon.icon" \
+    --compile "$OUT" \
+    --app-icon AppIcon \
+    --output-partial-info-plist "$OUT/icon-info.plist" \
+    --platform macosx \
+    --minimum-deployment-target 26.0 \
+    --errors --warnings --notices >/dev/null
 
-iconutil -c icns "$ICONSET" -o build/AppIcon.icns
-echo "✓ build/AppIcon.icns generated from APOLLO_ICON_06.png"
+[ -f "$OUT/Assets.car" ]   || { echo "✗ actool não gerou Assets.car"; exit 1; }
+[ -f "$OUT/AppIcon.icns" ] || { echo "✗ actool não gerou AppIcon.icns"; exit 1; }
+echo "✓ $OUT/{Assets.car,AppIcon.icns} gerados de APOLLO.icon"

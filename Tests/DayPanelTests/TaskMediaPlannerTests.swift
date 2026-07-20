@@ -1,7 +1,76 @@
 import XCTest
-@testable import DayPanel
+@testable import ApolloRuntime
 
 final class TaskMediaPlannerTests: XCTestCase {
+    func testLegacyOutputWithoutReviewIdStillDecodes() throws {
+        let output = TaskMediaOutputVersion(
+            id: UUID(),
+            lineageId: "video:legacy",
+            version: 1,
+            fileName: "legado.mov",
+            sourceRevisionIds: [UUID()],
+            attachmentId: "attachment-v1",
+            remoteURL: URL(string: "https://files.test/legado.mov")
+        )
+        var json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(output)) as? [String: Any]
+        )
+        json.removeValue(forKey: "reviewId")
+
+        let decoded = try JSONDecoder().decode(
+            TaskMediaOutputVersion.self,
+            from: JSONSerialization.data(withJSONObject: json)
+        )
+        XCTAssertNil(decoded.reviewId)
+        XCTAssertEqual(decoded.attachmentId, "attachment-v1")
+        XCTAssertEqual(decoded.fileName, "legado.mov")
+    }
+
+    func testReplacementAttachmentsResolveToOneStableReviewLineage() throws {
+        let videoId = UUID()
+        let lineage = TaskMediaOutputLineage.direct(video: videoId)
+        let v3 = TaskMediaOutputVersion(
+            lineageId: lineage.id,
+            version: 3,
+            fileName: "BODY BALDA · V3.mov",
+            sourceRevisionIds: [],
+            attachmentId: "review-v3",
+            remoteURL: URL(string: "https://files.test/v3.mov")
+        )
+        let v4 = TaskMediaOutputVersion(
+            lineageId: lineage.id,
+            version: 4,
+            fileName: "THE_MINIMAL_V03 · V4.mov",
+            sourceRevisionIds: [],
+            attachmentId: "attachment-v4",
+            remoteURL: URL(string: "https://files.test/v4.mov"),
+            reviewId: "review-v3"
+        )
+        let catalog = TaskMediaCatalog(
+            taskId: "86ajhqmw3",
+            sequence: 4,
+            assets: [],
+            lineages: [lineage],
+            outputs: [v3, v4]
+        )
+
+        let fromV3 = try XCTUnwrap(catalog.reviewIdentity(
+            attachmentId: "review-v3"
+        ))
+        let fromV4 = try XCTUnwrap(catalog.reviewIdentity(
+            attachmentId: "attachment-v4"
+        ))
+
+        XCTAssertEqual(fromV3.reviewId, "review-v3")
+        XCTAssertEqual(fromV4.reviewId, "review-v3")
+        XCTAssertEqual(fromV3.latestOutput.fileName,
+                       "THE_MINIMAL_V03 · V4.mov")
+        XCTAssertEqual(fromV4.latestOutput.fileName,
+                       "THE_MINIMAL_V03 · V4.mov")
+        XCTAssertEqual(catalog.latestReviewIdentities().map(\.reviewId),
+                       ["review-v3"])
+    }
+
     func testFiveHooksTimesTwoBodiesCreatesTenOutputs() throws {
         let inputs = (1...5).map { selection("hook-h\($0).mov", .hook, "h\($0)") }
             + (1...2).map { selection("body-b\($0).mov", .body, "b\($0)") }
@@ -163,6 +232,28 @@ final class TaskMediaPlannerTests: XCTestCase {
             in: catalog
         )
         XCTAssertEqual(replacement.outputs.first?.version, 2)
+    }
+
+    func testReplacementEntryAppearsOnlyAfterMediaWasPublished() throws {
+        let staged = try TaskMediaPlanner.adding(
+            selections: [selection("video.mov", .video, "video-v1")],
+            to: .empty(taskId: "task")
+        ).catalog
+        XCTAssertFalse(staged.hasReplaceablePublishedMedia)
+
+        let attachment = CUTask.Attachment(
+            id: "published-video",
+            title: "Video publicado · V1.mov",
+            url: "https://files.example.com/video-v1.mov",
+            ext: "mov",
+            sizeString: "20 MB",
+            totalComments: 0,
+            resolvedComments: 0,
+            uploaderId: 42
+        )
+        var published = TaskMediaCatalog.empty(taskId: "task")
+        XCTAssertEqual(published.importLegacyVideoAttachments([attachment]), 1)
+        XCTAssertTrue(published.hasReplaceablePublishedMedia)
     }
 
     func testLegacyImportIsDeterministicAcrossMacsAndIdempotentOnReload() throws {

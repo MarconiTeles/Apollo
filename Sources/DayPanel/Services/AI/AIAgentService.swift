@@ -145,7 +145,8 @@ final class AIAgentService: ObservableObject {
         // is disabled due to host-system performance impact,
         // and the migration in `LLMBackend.current` redirects
         // any previous `.embedded` preference to `.gemini`.
-        Task {
+        if !ApolloRuntimeEnvironment.isStudio {
+            Task {
             switch backend {
             case .embedded:
                 // Bootstrap re-enabled — user opted back in.
@@ -163,6 +164,7 @@ final class AIAgentService: ObservableObject {
             // weights now.
             if backend != .embedded {
                 await EmbeddedLLMProvider(manager: self.embeddedRuntime).unloadModel()
+            }
             }
         }
     }

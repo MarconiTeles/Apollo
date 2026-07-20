@@ -97,7 +97,8 @@ struct CreateEventSheet: View {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Editorial.popupRadius(4.5), style: .continuous)
+        // Mesmo arredondamento da janela de Anexar (TaskMediaFlowSheet).
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(9), style: .continuous)
     }
 
     var body: some View {

@@ -16,7 +16,7 @@ struct OnboardingView: View {
     @EnvironmentObject var appState: AppState
     var onClose: () -> Void = {}
 
-    @State private var step:           Step = .welcome
+    @State private var step:           Step = .integrations
     @State private var showListPicker  = false
 
     /// Local buffer for the pasted ClickUp token while the user
@@ -26,13 +26,12 @@ struct OnboardingView: View {
     @State private var pastedClickUpToken: String = ""
 
     enum Step: Int, CaseIterable {
-        // Google + ClickUp are connected together on a single
-        // `integrations` screen (the prototype's "explanation
-        // on top, content below" full-width layout — no more
-        // two-pane spread). `swipe` then teaches the trackpad
-        // gesture and `palette` the ⌘K command palette — the
-        // two discoverability wins power users keep returning to.
-        case welcome, integrations, list, swipe, palette, done
+        // Onboarding reduzido a UMA tela: conectar Google + ClickUp.
+        // O tutorial (welcome / escolher lista / gestos / paleta / done)
+        // foi removido a pedido — a lista é escolhível pela toolbar e os
+        // gestos/atalhos se descobrem em uso. Ao conectar ambas as contas,
+        // `advance()` não tem próximo passo e fecha o onboarding.
+        case integrations
     }
 
     /// Whether the user has a Gemini API key configured. The
@@ -131,12 +130,6 @@ struct OnboardingView: View {
         // sources are connected.
         .onChange(of: calendarReady) { _, _ in advanceIfIntegrationsDone() }
         .onChange(of: clickupReady)  { _, _ in advanceIfIntegrationsDone() }
-        .onChange(of: listReady) { _, ok in
-            if ok, step == .list { advance() }
-        }
-        .sheet(isPresented: $showListPicker) {
-            CUListPickerSheet().environmentObject(appState)
-        }
     }
 
     // MARK: - Spread chrome
@@ -153,6 +146,15 @@ struct OnboardingView: View {
         }
         .frame(height: 3)
         .animation(.spring(response: 0.4, dampingFraction: 0.9), value: step)
+        .apolloStudioNode("onboarding.progress",
+                          title: "Progresso",
+                          kind: .section,
+                          parent: "onboarding.panel",
+                          properties: [
+                            .init(kind: .height, title: "Altura", value: 3),
+                            .init(kind: .animationDuration,
+                                  title: "Animação", value: 0.4),
+                          ])
     }
 
     // MARK: - Page (single full-width editorial column)
@@ -196,53 +198,45 @@ struct OnboardingView: View {
         .padding(.horizontal, 72)
         .padding(.bottom, 46)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .apolloStudioNode("onboarding.page-content",
+                          title: "Conteúdo da etapa",
+                          kind: .section,
+                          parent: "onboarding.panel",
+                          properties: [
+                            .init(kind: .horizontalPadding,
+                                  title: "Padding horizontal", value: 72),
+                            .init(kind: .verticalPadding,
+                                  title: "Padding inferior", value: 46),
+                          ])
     }
 
     /// The step's interactive content, shown below the editorial
-    /// explanation. Welcome + Done are copy-only (no widget).
-    @ViewBuilder
+    /// explanation. Só a etapa de integrações resta.
     private var stepWidget: some View {
-        switch step {
-        case .welcome, .done:
-            EmptyView()
-        case .integrations:
-            integrationsStep
-        case .list:
-            listStep.frame(maxWidth: 380, alignment: .leading)
-        case .swipe:
-            swipeStep.frame(maxWidth: 640, alignment: .leading)
-        case .palette:
-            paletteStep.frame(maxWidth: 640, alignment: .leading)
-        }
+        integrationsStep
     }
 
     /// Bottom navigation, full content width: back / skip on the
     /// left, the "n de N" marker + primary CTA on the right.
     private var footerNav: some View {
         HStack(spacing: 18) {
-            if step.rawValue > 0 {
-                Button { goBack() } label: {
-                    Text("← Voltar")
-                        .font(Editorial.sans(13, .medium))
-                        .foregroundStyle(Editorial.inkSoft)
-                }
-                .buttonStyle(.plain).focusEffectDisabled()
+            Button { dismissPermanently() } label: {
+                Text("Pular")
+                    .font(Editorial.sans(13, .medium))
+                    .foregroundStyle(Editorial.inkMute)
             }
-            if step != .done {
-                Button { dismissPermanently() } label: {
-                    Text("Pular tutorial")
-                        .font(Editorial.sans(13, .medium))
-                        .foregroundStyle(Editorial.inkMute)
-                }
-                .buttonStyle(.plain).focusEffectDisabled()
-            }
+            .buttonStyle(.plain).focusEffectDisabled()
             Spacer(minLength: 0)
-            Text("\(step.rawValue + 1) de \(Step.allCases.count)")
-                .font(Editorial.serif(13).italic())
-                .foregroundStyle(Editorial.inkMute)
             primaryCTA
         }
         .frame(maxWidth: .infinity)
+        .apolloStudioNode("onboarding.footer",
+                          title: "Navegação da etapa",
+                          kind: .section,
+                          parent: "onboarding.page-content",
+                          properties: [
+                            .init(kind: .spacing, title: "Espaçamento", value: 18),
+                          ])
     }
 
     // MARK: - Per-step editorial copy
@@ -256,30 +250,10 @@ struct OnboardingView: View {
             + Text(b).font(Editorial.serif(42)).foregroundStyle(Editorial.ink)
         }
         switch s {
-        case .welcome:
-            return ("Apollo · edição inaugural",
-                    h("Apollo,\n", "uma agenda ", "que lê."),
-                    "Junto seu calendário e suas tarefas do ClickUp numa única superfície — e respondo sobre elas em português, sem você abrir três apps.")
         case .integrations:
-            return ("I · Conectar",
+            return ("Conectar",
                     h("Suas contas,\n", "num só ", "lugar."),
                     "Conecte o Google Calendar e o ClickUp aqui mesmo. O Google é OAuth nativo; o ClickUp é um token pessoal que fica só na sua máquina. Eventos com convidados saem com convite por email — direto pela API.")
-        case .list:
-            return ("II · Escolher",
-                    h("Escolha a ", "lista", " principal."),
-                    "Apollo precisa saber qual lista do ClickUp aparece no painel. Você troca a qualquer hora pela toolbar — e sim, suporta múltiplos workspaces.")
-        case .swipe:
-            return ("III · Gestos",
-                    h("Aprenda ", "com a mão", "."),
-                    "Deslize uma tarefa com dois dedos no trackpad: para a direita conclui, para a esquerda volta o status. Tente no cartão abaixo.")
-        case .palette:
-            return ("IV · Atalhos",
-                    h("Tudo a um ", "⌘K", " de distância."),
-                    "Busca universal de tarefa, evento ou comando. ⌘J pergunta direto pro Apollo. Funciona com ou sem acento.")
-        case .done:
-            return ("Pronto",
-                    h("Bom ", "trabalho", "."),
-                    "Setup completo. Você pode reabrir este tutorial em Configurações · Avançado sempre que quiser.")
         }
     }
 
@@ -366,22 +340,8 @@ struct OnboardingView: View {
 
     private func isStepComplete(_ s: Step) -> Bool {
         switch s {
-        case .welcome:      return step.rawValue > Step.welcome.rawValue
         case .integrations: return calendarReady && clickupReady
-        case .list:         return listReady
-        // Swipe + palette are purely informational —
-        // counts as complete the moment the user has
-        // advanced past each.
-        case .swipe:    return step.rawValue > Step.swipe.rawValue
-        case .palette:  return step.rawValue > Step.palette.rawValue
-        case .done:     return calendarReady && clickupReady && listReady
         }
-    }
-
-    // MARK: - Step 0 — Welcome
-
-    private var welcomeStep: some View {
-        WelcomeStepView(betaPill: AnyView(betaPill(compact: false)))
     }
 
     /// Compact icon-tinted row used by the aiPreview step. The
@@ -536,73 +496,9 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Step 3 — Pick a list
-
-    private var listStep: some View {
-        StepLayout(
-            icon:  "list.bullet.rectangle",
-            tint:  .purple,
-            title: "Escolha a lista de tarefas",
-            bodyText: "Selecione qual lista do seu workspace o Apollo vai exibir. Você pode trocar isso depois nas Configurações."
-        ) {
-            actionButton("Selecionar lista",
-                         icon: "list.bullet",
-                         tint: Editorial.accent) {
-                showListPicker = true
-            }
-            if listReady {
-                let name = KeychainHelper.load(for: KeychainHelper.Keys.clickupListName)
-                successBadge("Lista escolhida: \(name ?? "selecionada")")
-            }
-        }
-    }
-
-    // MARK: - Step 4 — Swipe gesture demo
-
-    /// Teaches the trackpad two-finger swipe gesture on task
-    /// cards (left → mark done / right → push back). Replaced
-    /// the Apollo-IA pitch which the user no longer wants in
-    /// onboarding.
-    @ViewBuilder
-    private var swipeStep: some View {
-        StepLayout(
-            icon:  "hand.draw.fill",
-            tint:  Editorial.accent,
-            title: "Gestos de trackpad",
-            bodyText: "Em qualquer tarefa da lista, deslize com **dois dedos no trackpad**: para **avançar** o status ou **voltar** ao anterior. Tente abaixo — a tarefa precisa cruzar o limite para o gesto valer."
-        ) {
-            SwipeDemoCard(onComplete: { [self] in
-                // Only advance if we're still on this step —
-                // the user might have manually navigated past
-                // it before the deferred completion fires.
-                guard self.step == .swipe else { return }
-                self.advance()
-            })
-            .padding(.top, 6)
-        }
-    }
-
-    // MARK: - Step 5 — Command palette announcement
-    //
-    // Pure "feature pitch" slide — no interactivity, no
-    // gating. The user reads the copy, watches the loop
-    // demonstrate ⌘K → typing → results, and clicks Next
-    // when ready. We deliberately DON'T auto-advance on
-    // a real ⌘K press (previous version did): some users
-    // want to dwell on the slide before moving on, and a
-    // gesture-triggered advance felt hijacky.
-
-    private var paletteStep: some View {
-        StepLayout(
-            icon:  "command",
-            tint:  Editorial.accent,
-            title: "Busca rápida com ⌘K",
-            bodyText: "A qualquer momento, em qualquer tela, **⌘K** abre a busca universal. Encontre tarefas, eventos ou comandos digitando o nome — funciona com ou sem acentos."
-        ) {
-            CommandPaletteDemoCard()
-                .padding(.top, 6)
-        }
-    }
+    // MARK: - (REMOVED) tutorial steps — pick-list / swipe / palette
+    // Removidos junto com o resto do tutorial. Só a etapa de integrações
+    // (Google + ClickUp) permanece.
 
     // MARK: - (REMOVED) Step 4 — Apollo IA
 
@@ -1108,17 +1004,13 @@ struct OnboardingView: View {
                 .buttonStyle(.plain).focusEffectDisabled()
             }
 
-            // Pular configuração — hidden on the closing screen
-            // (Done): the user has finished setup, so there's
-            // nothing left to skip.
-            if step != .done {
-                Button { dismissPermanently() } label: {
-                    Text("Pular configuração")
-                        .font(Editorial.sans(12, .medium))
-                        .foregroundStyle(Editorial.inkMute)
-                }
-                .buttonStyle(.plain).focusEffectDisabled()
+            // Pular configuração — setup é opcional.
+            Button { dismissPermanently() } label: {
+                Text("Pular configuração")
+                    .font(Editorial.sans(12, .medium))
+                    .foregroundStyle(Editorial.inkMute)
             }
+            .buttonStyle(.plain).focusEffectDisabled()
 
             Spacer()
 
@@ -1165,17 +1057,13 @@ struct OnboardingView: View {
     /// Bottom-right primary call-to-action. Same accent-filled capsule
     /// across every step; only the label and tap action change.
     private var primaryCTA: some View {
-        let (label, icon, action): (String, String, () -> Void) = {
-            switch step {
-            case .welcome:
-                return ("Começar", "arrow.right.circle.fill", { advance() })
-            case .done:
-                return ("Começar a usar", "arrow.right.circle.fill", { dismissPermanently() })
-            default:
-                let label = canSkipCurrentStep ? "Pular esta etapa" : "Próximo"
-                return (label, "chevron.right", { advance() })
-            }
-        }()
+        // Etapa única (integrações): quando as duas contas estão
+        // conectadas, "Começar a usar" fecha; enquanto falta uma, o
+        // botão apenas fecha o onboarding (setup é opcional).
+        let (label, icon, action): (String, String, () -> Void) =
+            isStepComplete(step)
+                ? ("Começar a usar", "arrow.right.circle.fill", { dismissPermanently() })
+                : ("Agora não", "chevron.right", { dismissPermanently() })
 
         return Button(action: action) {
             HStack(spacing: 7) {

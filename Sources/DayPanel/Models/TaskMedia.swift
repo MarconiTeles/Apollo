@@ -100,10 +100,14 @@ struct TaskMediaOutputVersion: Codable, Identifiable, Hashable, Sendable {
     let sourceRevisionIds: [UUID]
     var attachmentId: String?
     var remoteURL: URL?
+    /// Stable review-session identity shared by every V1/V2/V3 of this lineage.
+    /// Optional keeps manifests written by earlier Apollo builds decodable.
+    var reviewId: String?
 
     init(id: UUID = UUID(), lineageId: String, version: Int,
          fileName: String, sourceRevisionIds: [UUID],
-         attachmentId: String? = nil, remoteURL: URL? = nil) {
+         attachmentId: String? = nil, remoteURL: URL? = nil,
+         reviewId: String? = nil) {
         self.id = id
         self.lineageId = lineageId
         self.version = version
@@ -111,7 +115,20 @@ struct TaskMediaOutputVersion: Codable, Identifiable, Hashable, Sendable {
         self.sourceRevisionIds = sourceRevisionIds
         self.attachmentId = attachmentId
         self.remoteURL = remoteURL
+        self.reviewId = reviewId
     }
+}
+
+/// Maps one physical ClickUp attachment back to the single logical review
+/// shared by every output version in its lineage. A replacement has a new
+/// attachment id and URL, but it must never become a second review session.
+struct TaskMediaReviewIdentity: Equatable, Sendable {
+    let reviewId: String
+    let versionId: String
+    let output: TaskMediaOutputVersion
+    let latestOutput: TaskMediaOutputVersion
+
+    var isLatest: Bool { output.id == latestOutput.id }
 }
 
 struct TaskMediaCatalog: Codable, Equatable, Sendable {
@@ -125,6 +142,20 @@ struct TaskMediaCatalog: Codable, Equatable, Sendable {
         .init(taskId: taskId, sequence: 0, assets: [], lineages: [], outputs: [])
     }
 
+    /// True only when the task already owns media that can actually be
+    /// replaced. A locally staged source is not enough: replacement becomes
+    /// available after an active source or generated output was published.
+    var hasReplaceablePublishedMedia: Bool {
+        let hasPublishedSource = assets.contains { asset in
+            guard let revision = asset.activeRevision else { return false }
+            return revision.attachmentId?.nilIfBlank != nil || revision.remoteURL != nil
+        }
+        let hasPublishedOutput = outputs.contains { output in
+            output.attachmentId?.nilIfBlank != nil || output.remoteURL != nil
+        }
+        return hasPublishedSource || hasPublishedOutput
+    }
+
     func asset(id: UUID) -> TaskMediaAsset? { assets.first { $0.id == id } }
     func latestVersion(for lineageId: String) -> Int {
         outputs.lazy.filter { $0.lineageId == lineageId }.map(\.version).max() ?? 0
@@ -133,6 +164,51 @@ struct TaskMediaCatalog: Codable, Equatable, Sendable {
     func latestOutput(for lineageId: String) -> TaskMediaOutputVersion? {
         outputs.filter { $0.lineageId == lineageId }
             .max { lhs, rhs in lhs.version < rhs.version }
+    }
+
+    /// Resolves physical attachment aliases (V1/V2/V3...) to their stable
+    /// review session. Matching by `reviewId` is intentional: after a relaunch
+    /// the watcher may already hold the canonical id instead of a media id.
+    func reviewIdentity(attachmentId: String? = nil,
+                        mediaURL: String? = nil) -> TaskMediaReviewIdentity? {
+        let normalizedURL = mediaURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let direct = outputs.first { output in
+            (attachmentId?.isEmpty == false && output.attachmentId == attachmentId)
+                || (normalizedURL?.isEmpty == false
+                    && output.remoteURL?.absoluteString == normalizedURL)
+        }
+        let matching = direct ?? outputs.first { output in
+            attachmentId?.isEmpty == false && output.reviewId == attachmentId
+        }
+        guard let matching,
+              let latest = latestOutput(for: matching.lineageId) else { return nil }
+
+        let lineageOutputs = outputs
+            .filter { $0.lineageId == matching.lineageId }
+            .sorted { $0.version > $1.version }
+        let reviewId = latest.reviewId?.nilIfBlank
+            ?? matching.reviewId?.nilIfBlank
+            ?? lineageOutputs.compactMap { $0.reviewId?.nilIfBlank }.first
+            ?? lineageOutputs.sorted { $0.version < $1.version }
+                .compactMap { $0.attachmentId?.nilIfBlank }.first
+            ?? matching.attachmentId?.nilIfBlank
+        guard let reviewId else { return nil }
+
+        return TaskMediaReviewIdentity(
+            reviewId: reviewId,
+            versionId: "v\(matching.version)",
+            output: matching,
+            latestOutput: latest
+        )
+    }
+
+    /// One entry per review lineage, always pointing at its newest media.
+    func latestReviewIdentities() -> [TaskMediaReviewIdentity] {
+        lineages.compactMap { lineage in
+            guard let latest = latestOutput(for: lineage.id) else { return nil }
+            return reviewIdentity(attachmentId: latest.attachmentId,
+                                  mediaURL: latest.remoteURL?.absoluteString)
+        }
     }
 
     /// Returns the independently replaceable parts of one composed output in
@@ -196,7 +272,8 @@ struct TaskMediaCatalog: Codable, Equatable, Sendable {
                 fileName: attachment.title,
                 sourceRevisionIds: [revisionId],
                 attachmentId: attachment.id,
-                remoteURL: remoteURL
+                remoteURL: remoteURL,
+                reviewId: attachment.id
             ))
             knownIds.insert(attachment.id)
             knownURLs.insert(attachment.url)
@@ -225,6 +302,13 @@ struct TaskMediaCatalog: Codable, Equatable, Sendable {
                            bytes[4], bytes[5], bytes[6], bytes[7],
                            bytes[8], bytes[9], bytes[10], bytes[11],
                            bytes[12], bytes[13], bytes[14], bytes[15]))
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let value = trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 }
 

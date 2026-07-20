@@ -1,5 +1,5 @@
 import XCTest
-@testable import DayPanel
+@testable import ApolloRuntime
 
 /// Guards the invariants fixed during the 2026-06 performance
 /// overhaul (Fases 1-3). Each of these regressed in production

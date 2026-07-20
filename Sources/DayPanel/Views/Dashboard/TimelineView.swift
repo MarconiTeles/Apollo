@@ -16,6 +16,11 @@ struct TimelineView: View {
     /// scrollable to recent past entries.
     var forwardOnly: Bool = false
 
+    /// Extra resting reserve used when this recycled list sits below a pinned
+    /// overlay. Because it is part of the scroll content (not the viewport),
+    /// rows can still travel underneath the overlay during a scroll.
+    var topContentInset: CGFloat = 0
+
     /// Visible date window. Past entries are dropped on the
     /// forward-only variant.
     private var dates: [Date] {
@@ -32,6 +37,11 @@ struct TimelineView: View {
     @State private var scrollLockUntil:    Date = .distantPast
     @State private var suppressAutoScroll: Bool = false
     @State private var didInitialScroll:   Bool = false
+    /// Rebuilds only the recycled `List` when the Home agenda must return to
+    /// its natural origin. In the forward-only variant the first row is today,
+    /// so resetting the list is more reliable than asking SwiftUI to
+    /// `scrollTo` a variable-height row (which could land on tomorrow).
+    @State private var forwardListResetToken: Int = 0
     @State private var lastScrollIndex:    Int  = -1
     /// The date that the SCROLL POSITION currently points at,
     /// derived from the live `TimelineScrollOffsetKey`
@@ -56,12 +66,12 @@ struct TimelineView: View {
     /// modifier, so it falls back to the window).
     @State private var timelineWidth:      CGFloat = 0
 
-    /// Where today lands in the visible scroll area on app
-    /// launch and when the user taps "Hoje" — vertically centred
-    /// then nudged 30% up (so y = 0.5 − 0.3 = 0.2). Past events
-    /// stay just-visible above; upcoming events fill the rest
-    /// of the screen.
-    private let todayAnchor: UnitPoint = UnitPoint(x: 0.5, y: 0.20)
+    /// The Home agenda is forward-only, so "today" is its first row.
+    /// Anchoring a tall day at 20% could put its beginning above the
+    /// viewport and make the page appear to start on tomorrow. Keep the
+    /// current day at the top; the scroll-content inset below the Finder
+    /// header supplies the visual breathing room.
+    private let todayAnchor: UnitPoint = .top
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -104,6 +114,20 @@ struct TimelineView: View {
             //     so they participate in the scroll area
             //     (rather than capping the list at the edges).
             List {
+                // A concrete first row is more reliable than
+                // `.contentMargins(.top:)` on macOS List/NSTableView. The
+                // latter is represented as a scroll-view inset and could
+                // consume the first real day while reporting the viewport at
+                // its top. This row guarantees that TODAY is physically the
+                // first agenda section below the pinned Finder header, then
+                // scrolls away with the rest of the content.
+                Color.clear
+                    .frame(height: 28 + topContentInset)
+                    .id("apollo-agenda-top-reserve")
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+
                 ForEach(dates, id: \.self) { date in
                     let dayStart = Calendar.current.startOfDay(for: date)
                     AgendaDaySection(
@@ -123,6 +147,7 @@ struct TimelineView: View {
                 }
             }
             .listStyle(.plain)
+            .id(forwardListResetToken)
             .scrollContentBackground(.hidden)
             // Match the previous `.padding(.top, 24)` /
             // `.padding(.bottom, 60)`. `contentMargins` adds
@@ -130,7 +155,6 @@ struct TimelineView: View {
             // with the content (the empty space above the
             // first row scrolls upward and out of view, just
             // like padding inside the LazyVStack).
-            .contentMargins(.top, 28, for: .scrollContent)
             .contentMargins(.bottom, 60, for: .scrollContent)
             // NSScrollView introspect — listens to the
             // underlying NSClipView's `boundsDidChange`
@@ -140,11 +164,23 @@ struct TimelineView: View {
             // scroll offset up through SwiftUI's preference
             // machinery on every scroll tick.
             .background(
-                ScrollOffsetIntrospect { offset in
+                ScrollOffsetIntrospect(normalizeInitialOffset: forwardOnly) { offset in
+                    // Home is a forward-only agenda whose first row is always
+                    // today. Letting passive scroll telemetry mutate the
+                    // global selected date caused the following day to trigger
+                    // a second programmatic jump immediately after launch.
+                    // The legacy ±30-day timeline still synchronises its date
+                    // selection from the scroll position.
+                    guard !forwardOnly else { return }
                     // `offset` is `clipView.documentVisibleRect.minY`,
                     // i.e. how far down the user has scrolled.
                     guard Date() > scrollLockUntil else { return }
-                    let approxIndex = Int(((offset - 24) / sectionEstimate).rounded(.down))
+                    // Keep the date mapping anchored to the first real row.
+                    // Home adds a scroll-content reserve for the translucent
+                    // header; counting that reserve as a day used to advance
+                    // the selected date before the first row reached the top.
+                    let contentStart = 28 + topContentInset
+                    let approxIndex = Int(((offset - contentStart) / sectionEstimate).rounded(.down))
                     let clamped     = max(0, min(approxIndex, dates.count - 1))
                     guard clamped != lastScrollIndex else { return }
                     lastScrollIndex = clamped
@@ -257,9 +293,15 @@ struct TimelineView: View {
                     suppressAutoScroll = true
                     appState.selectedDate = today
                 }
-                // App opens at the same position as clicking "Hoje" —
-                // today vertically positioned slightly above centre.
-                scrollToDay(today, proxy: proxy, animate: false, anchor: todayAnchor)
+                // In the forward-only Home agenda, today is already the first
+                // row. Let the recycled List rest at its natural origin so its
+                // top content margin stays intact. Programmatically scrolling
+                // a variable-height first row could advance the viewport to
+                // tomorrow. The legacy ±30-day timeline still needs an
+                // explicit jump to today.
+                if !forwardOnly {
+                    scrollToDay(today, proxy: proxy, animate: false, anchor: todayAnchor)
+                }
                 if !appState.events.isEmpty { didInitialScroll = true }
             }
             .onChange(of: appState.events.count) { _, _ in
@@ -270,7 +312,9 @@ struct TimelineView: View {
                 // otherwise land the timeline on whatever date
                 // the picker happens to be on instead of today.
                 let today = Calendar.current.startOfDay(for: Date())
-                scrollToDay(today, proxy: proxy, animate: true, anchor: todayAnchor)
+                if !forwardOnly {
+                    scrollToDay(today, proxy: proxy, animate: true, anchor: todayAnchor)
+                }
                 didInitialScroll = true
             }
             .onChange(of: appState.selectedDate) { old, new in
@@ -284,10 +328,16 @@ struct TimelineView: View {
                     suppressAutoScroll = true
                     appState.selectedDate = today
                 }
-                // "Hoje" puts today at `todayAnchor` (vertically centred,
-                // shifted 30% up) so the user sees what's just before AND
-                // just after right now.
-                scrollToDay(today, proxy: proxy, animate: true, anchor: todayAnchor)
+                // In Home, rebuilding the recycled List restores its natural
+                // origin: today plus the exact resting reserve below the
+                // Finder header. The legacy timeline still scrolls normally.
+                if forwardOnly {
+                    forwardListResetToken &+= 1
+                    pendingSelectedDate = nil
+                    lastScrollIndex = -1
+                } else {
+                    scrollToDay(today, proxy: proxy, animate: true, anchor: todayAnchor)
+                }
             }
             // Commit `pendingSelectedDate` to AppState only
             // when the live scroll has ended. ScrollStateObserver
@@ -298,7 +348,9 @@ struct TimelineView: View {
             // during active scroll instead of one-per-day-
             // boundary-crossed.
             .onReceive(ScrollStateObserver.shared.$isScrolling) { scrolling in
-                guard !scrolling, let date = pendingSelectedDate else { return }
+                guard !forwardOnly, !scrolling,
+                      let date = pendingSelectedDate
+                else { return }
                 if !Calendar.current.isDate(date, inSameDayAs: appState.selectedDate) {
                     suppressAutoScroll = true
                     appState.selectedDate = date
@@ -336,6 +388,7 @@ struct TimelineView: View {
 /// offset through SwiftUI's preference machinery on every
 /// scroll tick.
 private struct ScrollOffsetIntrospect: NSViewRepresentable {
+    let normalizeInitialOffset: Bool
     let onChange: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> NSView {
@@ -352,7 +405,9 @@ private struct ScrollOffsetIntrospect: NSViewRepresentable {
             var current: NSView? = probe.superview
             while let v = current {
                 if let scroll = v as? NSScrollView {
-                    context.coordinator.attach(to: scroll, callback: onChange)
+                    context.coordinator.attach(to: scroll,
+                                               normalizeInitialOffset: normalizeInitialOffset,
+                                               callback: onChange)
                     return
                 }
                 current = v.superview
@@ -373,23 +428,35 @@ private struct ScrollOffsetIntrospect: NSViewRepresentable {
         weak var clipView: NSClipView?
         var callback: ((CGFloat) -> Void)?
         var observer: NSObjectProtocol?
+        var normalizeInitialOffset = false
+        var restingOffset: CGFloat?
 
         deinit {
             if let observer { NotificationCenter.default.removeObserver(observer) }
         }
 
-        func attach(to scrollView: NSScrollView, callback: @escaping (CGFloat) -> Void) {
+        func attach(to scrollView: NSScrollView,
+                    normalizeInitialOffset: Bool,
+                    callback: @escaping (CGFloat) -> Void) {
             self.callback = callback
+            self.normalizeInitialOffset = normalizeInitialOffset
             let clip = scrollView.contentView
             self.clipView = clip
+            restingOffset = normalizeInitialOffset
+                ? clip.documentVisibleRect.minY
+                : nil
             clip.postsBoundsChangedNotifications = true
             self.observer = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
                 object: clip,
                 queue: .main
             ) { [weak self] _ in
-                guard let clip = self?.clipView else { return }
-                self?.callback?(clip.documentVisibleRect.minY)
+                guard let self, let clip = self.clipView else { return }
+                let raw = clip.documentVisibleRect.minY
+                let offset = self.normalizeInitialOffset
+                    ? raw - (self.restingOffset ?? raw)
+                    : raw
+                self.callback?(offset)
             }
         }
     }
