@@ -79,6 +79,38 @@ struct TaskMediaFlowSheet: View {
         }
     }
 
+    // MARK: Feedback vivo do preparo
+
+    /// A composição HOOK+BODY é um render AVFoundation real (dezenas de
+    /// segundos para vídeos longos). Um "PREPARANDO…" estático lia como app
+    /// travado; o botão vira um medidor com a fração viva do compositor e o
+    /// rodapé ganha uma linha de progresso.
+    private var prepareInvolvesRender: Bool {
+        if stage == .confirmReplacement {
+            let catalog = store.catalog(for: request.task.id)
+            return replacementURLs.keys.contains { id in
+                catalog.assets.first(where: { $0.id == id })?.role != .video
+            }
+        }
+        let roles = Set(selections.compactMap(\.role))
+        return roles.contains(.hook) || roles.contains(.body)
+    }
+
+    private var preparingProgress: Double {
+        min(max(store.progress(for: request.task.id), 0), 1)
+    }
+
+    private var preparingLabel: String {
+        let verb = prepareInvolvesRender ? "JUNTANDO" : "PREPARANDO"
+        return "\(verb) \(Int((preparingProgress * 100).rounded()))%"
+    }
+
+    /// Accent clareado durante a junção HOOK+BODY — mesma distinção visual da
+    /// pill da linha (etapa de render ≠ etapa de envio).
+    private var preparingTint: Color {
+        prepareInvolvesRender ? Editorial.accent.opacity(0.55) : Editorial.accent
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             // Scrollable stage content — fills the whole card and is padded so
@@ -118,6 +150,14 @@ struct TaskMediaFlowSheet: View {
                                      tintOpacity: 0.01, interactive: false)
                         .overlay(alignment: .top) {
                             Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
+                        }
+                        .overlay(alignment: .top) {
+                            if preparing {
+                                ProgressView(value: preparingProgress)
+                                    .progressViewStyle(.linear)
+                                    .tint(preparingTint)
+                                    .frame(height: 3)
+                            }
                         }
                 }
                 .zIndex(20)
@@ -987,7 +1027,7 @@ struct TaskMediaFlowSheet: View {
             footerRow {
                 secondaryButton("Escolher outros") { openAddPanel() }
                 Spacer()
-                primaryButton(preparing ? "PREPARANDO…" : "PREPARAR \(projectedCount) VÍDEOS",
+                primaryButton(preparing ? preparingLabel : "PREPARAR \(projectedCount) VÍDEOS",
                               disabled: preparing || !canPrepare) {
                     prepareAdd()
                 }
@@ -1006,7 +1046,7 @@ struct TaskMediaFlowSheet: View {
             footerRow {
                 secondaryButton("Adicionar outra") { stage = .selectReplacement }
                 Spacer()
-                primaryButton(preparing ? "PREPARANDO…" : "SUBSTITUIR \(replacementURLs.count)",
+                primaryButton(preparing ? preparingLabel : "SUBSTITUIR \(replacementURLs.count)",
                               disabled: preparing || replacementURLs.isEmpty) {
                     prepareReplacement()
                 }

@@ -9,6 +9,10 @@ final class TaskMediaTransferStoreTests: XCTestCase {
         XCTAssertEqual(TaskMediaTransferStore.capsuleLabel(
             phase: .preparing, completed: 2, total: 5, pending: 3), "PREPARANDO 2/5")
         XCTAssertEqual(TaskMediaTransferStore.capsuleLabel(
+            phase: .preparing, completed: 0, total: 2, pending: 2,
+            composing: true), "JUNTANDO 0/2",
+            "A união HOOK+BODY tem rótulo próprio na pill")
+        XCTAssertEqual(TaskMediaTransferStore.capsuleLabel(
             phase: .ready, completed: 0, total: 5, pending: 5), "ENVIAR")
         XCTAssertEqual(TaskMediaTransferStore.capsuleLabel(
             phase: .sending, completed: 3, total: 5, pending: 2), "ENVIANDO 3/5")

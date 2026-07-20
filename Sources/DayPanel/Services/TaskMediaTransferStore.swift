@@ -31,8 +31,23 @@ final class TaskMediaTransferStore: ObservableObject {
         var total: Int
         var progress: Double
         var errorMessage: String?
+        /// Uploads de BRUTOS (hook/body originais) pendentes nesta rodada de
+        /// envio. Eles acontecem ANTES dos outputs e podem levar minutos para
+        /// arquivos grandes — sem contá-los no progresso a pill ficava
+        /// congelada em "ENVIANDO 0/N" durante toda essa fase (20/jul).
+        var sourceUnitsTotal: Int = 0
+        var sourceUnitsDone: Int = 0
 
         var pendingCount: Int { max(0, total - completed) }
+
+        /// Fração unificada brutos+outputs: a barra anda continuamente do
+        /// primeiro byte do primeiro bruto até o último output, sem nunca
+        /// retroceder quando a fase muda.
+        func unifiedProgress(currentUnitFraction: Double = 0) -> Double {
+            let units = Double(max(1, sourceUnitsTotal + total))
+            let done = Double(sourceUnitsDone + completed)
+            return min((done + max(0, currentUnitFraction)) / units, 0.999)
+        }
     }
 
     @Published private(set) var catalogs: [String: TaskMediaCatalog] = [:]
@@ -136,6 +151,16 @@ final class TaskMediaTransferStore: ObservableObject {
 
     func phase(for taskId: String) -> Phase? { batches[taskId]?.phase }
 
+    /// True enquanto o batch está de fato UNINDO hook+body (render de
+    /// composição AVFoundation) — a etapa mais longa e a que merece rótulo e
+    /// cor próprios na pill.
+    func isComposing(for taskId: String) -> Bool {
+        guard let batch = batches[taskId], batch.phase == .preparing else { return false }
+        return batch.plan.outputs.contains {
+            $0.hookAssetId != nil && $0.bodyAssetId != nil
+        }
+    }
+
     func capsuleLabel(for taskId: String) -> String {
         guard let batch = batches[taskId] else {
             return Self.capsuleLabel(phase: nil, completed: 0, total: 0, pending: 0)
@@ -143,13 +168,17 @@ final class TaskMediaTransferStore: ObservableObject {
         return Self.capsuleLabel(phase: batch.phase,
                                  completed: batch.completed,
                                  total: batch.total,
-                                 pending: batch.pendingCount)
+                                 pending: batch.pendingCount,
+                                 composing: isComposing(for: taskId))
     }
 
     static func capsuleLabel(phase: Phase?, completed: Int,
-                             total: Int, pending: Int) -> String {
+                             total: Int, pending: Int,
+                             composing: Bool = false) -> String {
         switch phase {
-        case .preparing: return "PREPARANDO \(completed)/\(total)"
+        case .preparing:
+            return composing ? "JUNTANDO \(completed)/\(total)"
+                             : "PREPARANDO \(completed)/\(total)"
         case .ready: return "ENVIAR"
         case .sending: return "ENVIANDO \(completed)/\(total)"
         case .partialFailure: return pending > 0 ? "REPETIR \(pending)" : "FINALIZAR"
@@ -246,7 +275,13 @@ final class TaskMediaTransferStore: ObservableObject {
         batch.phase = .sending
         batch.errorMessage = nil
         batch.completed = batch.published.values.filter(\.commentPosted).count
-        batch.progress = batch.total == 0 ? 0 : Double(batch.completed) / Double(batch.total)
+        batch.sourceUnitsTotal = batch.plan.catalog.assets.filter { asset in
+            asset.role != .video
+                && asset.activeRevision?.attachmentId == nil
+                && asset.activeRevision?.localURL != nil
+        }.count
+        batch.sourceUnitsDone = 0
+        batch.progress = batch.unifiedProgress()
         batches[task.id] = batch
 
         do {
@@ -350,7 +385,7 @@ final class TaskMediaTransferStore: ObservableObject {
         batch.phase = batch.published.isEmpty ? .ready : .partialFailure
         batch.errorMessage = nil
         batch.completed = batch.published.values.filter(\.commentPosted).count
-        batch.progress = Double(batch.completed) / Double(max(1, batch.total))
+        batch.progress = batch.unifiedProgress()
         batches[taskId] = batch
     }
 
@@ -442,15 +477,31 @@ final class TaskMediaTransferStore: ObservableObject {
             let technicalName = TaskMediaTechnicalName.source(asset: asset, revision: active)
             let staged = try await stagedCopy(of: local, named: technicalName,
                                               taskId: task.id, batchId: batch.id)
-            guard let uploaded = await appState.uploadCommentAttachment(for: task,
-                                                                         fileURL: staged,
-                                                                         userFacing: false) else {
+            let batchId = batch.id
+            guard let uploaded = await appState.uploadCommentAttachment(
+                for: task,
+                fileURL: staged,
+                userFacing: false,
+                onProgress: { [weak self] fraction in
+                    // Bytes reais do bruto em trânsito — sem isto a pill da
+                    // linha ficava parada em "ENVIANDO 0/N" durante toda a
+                    // subida dos originais de hook/body.
+                    Task { @MainActor in
+                        guard let self, var s = self.batches[task.id],
+                              s.id == batchId else { return }
+                        s.progress = s.unifiedProgress(currentUnitFraction: fraction)
+                        self.batches[task.id] = s
+                    }
+                }
+            ) else {
                 throw TransferError.uploadFailed(active.originalFileName)
             }
             guard let revisionIndex = batch.plan.catalog.assets[assetIndex].revisions
                 .firstIndex(where: { $0.id == active.id }) else { continue }
             batch.plan.catalog.assets[assetIndex].revisions[revisionIndex].attachmentId = uploaded.id
             batch.plan.catalog.assets[assetIndex].revisions[revisionIndex].remoteURL = uploaded.url
+            batch.sourceUnitsDone += 1
+            batch.progress = batch.unifiedProgress()
             batches[task.id] = batch
         }
     }
@@ -489,8 +540,7 @@ final class TaskMediaTransferStore: ObservableObject {
                                     // sitting at 0% until the whole file lands.
                                     Task { @MainActor in
                                         guard let self, var s = self.batches[task.id] else { return }
-                                        let done = Double(s.completed)
-                                        s.progress = min((done + fraction) / Double(max(1, s.total)), 0.999)
+                                        s.progress = s.unifiedProgress(currentUnitFraction: fraction)
                                         self.batches[task.id] = s
                                     }
                                 }
@@ -571,7 +621,7 @@ final class TaskMediaTransferStore: ObservableObject {
                 }
             }
             state.completed = state.published.values.filter(\.commentPosted).count
-            state.progress = Double(state.completed) / Double(max(1, state.total))
+            state.progress = state.unifiedProgress()
             batches[task.id] = state
         }
     }

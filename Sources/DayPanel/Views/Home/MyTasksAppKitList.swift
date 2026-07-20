@@ -452,6 +452,19 @@ struct MyTasksAppKitList: NSViewRepresentable {
 
         func collectionView(_ collectionView: NSCollectionView,
                             itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
+            // Durante performBatchUpdates o flow layout ainda consulta index
+            // paths do estado PRÉ-batch enquanto `rows` já é o novo array
+            // (padrão obrigatório do AppKit). Se a lista encolheu — ex.:
+            // envio de mídia hook/body reagrupando linhas — um índice antigo
+            // estoura o array e derruba o app (crash 20/jul 17:42). Um item
+            // vazio descartável é a resposta segura: o próprio batch o
+            // remove/recicla no mesmo passe.
+            guard rows.indices.contains(indexPath.item) else {
+                return collectionView.makeItem(
+                    withIdentifier: MyTasksDropPlaceholderItem.identifier,
+                    for: indexPath
+                )
+            }
             switch rows[indexPath.item] {
             case .header(let status, let count, let collapsed, let first):
                 let item = collectionView.makeItem(withIdentifier: MyTasksHeaderItem.identifier,
@@ -479,6 +492,12 @@ struct MyTasksAppKitList: NSViewRepresentable {
         func collectionView(_ collectionView: NSCollectionView,
                             layout collectionViewLayout: NSCollectionViewLayout,
                             sizeForItemAt indexPath: IndexPath) -> NSSize {
+            // Mesma corrida do itemForRepresentedObjectAt: o prepareLayout do
+            // batch pede tamanhos para índices pré-atualização. Altura padrão
+            // de linha para índices órfãos — o batch corrige em seguida.
+            guard rows.indices.contains(indexPath.item) else {
+                return NSSize(width: collectionView.bounds.width, height: 36)
+            }
             let height: CGFloat
             switch rows[indexPath.item] {
             // Exact SwiftUI geometry from the previous list:
@@ -1614,15 +1633,22 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     private func updateMediaButton(store: TaskMediaTransferStore, taskId: String) {
         let phase = store.phase(for: taskId)
         let label = store.capsuleLabel(for: taskId)
+        let composing = store.isComposing(for: taskId)
+        // JUNTANDO (render hook+body) usa um accent clareado — a etapa é
+        // visualmente distinta do ENVIANDO cheio e do PREPARANDO comum.
+        let accentColor = composing
+            ? (NSColor.controlAccentColor.blended(withFraction: 0.35, of: .white)
+               ?? NSColor.controlAccentColor)
+            : NSColor.controlAccentColor
         let accent = phase == .ready || phase == .sending || phase == .partialFailure
         let isActiveProgress = phase == .preparing || phase == .sending
         let progress = max(0, min(1, CGFloat(store.progress(for: taskId))))
         mediaUsesAccentFill = accent
         mediaBaseTitleColor = phase == .preparing
-            ? NSColor.controlAccentColor
+            ? accentColor
             : (accent ? NSColor.white : NSColor(Editorial.inkSoft))
         mediaBaseBackground = phase == .preparing
-            ? NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
+            ? accentColor.withAlphaComponent(composing ? 0.16 : 0.10).cgColor
             : (accent
                 ? NSColor.controlAccentColor.withAlphaComponent(phase == .sending ? 0.36 : 1).cgColor
                 : NSColor(Editorial.inkFaint.opacity(0.14)).cgColor)
@@ -1630,7 +1656,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         setMediaTitleColor(mediaBaseTitleColor)
         mediaTrackLayer.backgroundColor = mediaBaseBackground
         mediaProgressLayer.backgroundColor = phase == .preparing
-            ? NSColor.controlAccentColor.withAlphaComponent(0.30).cgColor
+            ? accentColor.withAlphaComponent(composing ? 0.38 : 0.30).cgColor
             : NSColor.controlAccentColor.cgColor
         mediaProgressLayer.isHidden = !isActiveProgress
         setMediaProgress(isActiveProgress ? progress : (phase == .ready ? 1 : 0), animated: true)

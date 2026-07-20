@@ -25,9 +25,26 @@ struct InboxAppKitList: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
+    /// Scroller que nunca aparece: sem desenho e alpha travado em 0, mas
+    /// compatível com overlay para o NSScrollView não tentar substituí-lo.
+    private final class HiddenScroller: NSScroller {
+        override func draw(_ dirtyRect: NSRect) {}
+        override var alphaValue: CGFloat {
+            get { 0 }
+            set { super.alphaValue = 0 }
+        }
+        override class var isCompatibleWithOverlayScrollers: Bool { true }
+    }
+
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
+        // Sem scroller visível no Inbox (Home e sino): desligar
+        // `hasVerticalScroller` não basta — o AppKit pode reinstalar o
+        // overlay scroller sozinho (mudança de estilo do sistema, tile).
+        // Entregar um scroller que não desenha nada é definitivo: o scroll
+        // por trackpad/wheel segue intacto.
         scroll.hasVerticalScroller = true
+        scroll.verticalScroller = HiddenScroller()
         scroll.hasHorizontalScroller = false
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
@@ -247,6 +264,13 @@ struct InboxAppKitList: NSViewRepresentable {
                 withIdentifier: InboxNotificationItem.identifier,
                 for: indexPath
             ) as! InboxNotificationItem
+            // Mesma corrida do crash de 20/jul na lista de tarefas: durante
+            // performBatchUpdates o layout consulta index paths do estado
+            // pré-batch enquanto `notifications` já encolheu (dispensar uma
+            // notificação). Item vazio descartável em vez de estourar.
+            guard notifications.indices.contains(indexPath.item) else {
+                return item
+            }
             let notification = notifications[indexPath.item]
             item.bind(notification: notification,
                       onTap: { [weak self] in self?.onTap(notification) },
