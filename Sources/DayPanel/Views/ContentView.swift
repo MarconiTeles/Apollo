@@ -55,7 +55,7 @@ struct ContentView: View {
     @State private var onboardingDismissedThisSession = false
 
     // ── Editorial+ sidebar (Stage 1, isolated to the left)
-    @State private var sidebarRoute:   SidebarRoute = .today
+    @State private var sidebarRoute:   SidebarRoute = .launchDefault
     @State private var sidebarListFilter: String? = nil
 
     /// Welcome splash. Plays the full cinematic sequence on

@@ -12,6 +12,11 @@ import AppKit
 enum SidebarRoute: Hashable {
     case today, tasks, board, assignedComments, done, ai
 
+    /// Route presented on every normal Apollo launch. Keep this explicit so
+    /// previews can still request a different surface without changing the
+    /// production landing page.
+    static let launchDefault: SidebarRoute = .tasks
+
     var studioKey: String {
         switch self {
         case .today: "inbox"
