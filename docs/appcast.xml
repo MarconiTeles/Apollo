@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.9.5</title>
-      <pubDate>Tue, 21 Jul 2026 11:00:32 +0000</pubDate>
-      <sparkle:version>93</sparkle:version>
-      <sparkle:shortVersionString>1.9.5</sparkle:shortVersionString>
+      <title>Apollo 1.9.6</title>
+      <pubDate>Tue, 21 Jul 2026 15:01:17 +0000</pubDate>
+      <sparkle:version>94</sparkle:version>
+      <sparkle:shortVersionString>1.9.6</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Apollo Review agora abre em uma janela dedicada e independente: reprodução instantânea por streaming, seletor de versões antes do título e navegação mais fluida. Correções de estabilidade no envio e no acompanhamento de reviews.]]></description>
+      <description><![CDATA[Apollo Review agora acompanha obrigatoriamente todas as atualizações do Apollo. O novo ícone do Review e links clicáveis com cursor nativo do macOS também fazem parte desta versão.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.9.5/Apollo-1.9.5.zip"
-        sparkle:edSignature="OE6CLs/NW2bnN8XbaJ1Gs/qL+bAqZe90rDbCmXMvaCRBQDgXcdXyuTO49R7fB3ArzW2a+DpuWQDCwC+Uh2/LAw=="
-        length="49665347"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.9.6/Apollo-1.9.6.zip"
+        sparkle:edSignature="02G+JTz0zq8hF6mdOm4owvOJM/Q5pb6v4Ko7A59SCwwBQwJ5rTvbIki/M0lkwd809pTQzgaL2hTPdE23pgvZBQ=="
+        length="49708905"
         type="application/octet-stream" />
     </item>
   </channel>
