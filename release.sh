@@ -145,6 +145,63 @@ if [[ ! -f "$DMG_PATH" ]]; then
     exit 1
 fi
 
+# Apollo Review is a required part of every distributed Apollo update.  Keep
+# this validation in the release pipeline (in addition to build.sh's signing
+# pass) so an app assembled by another packaging path can never be notarized or
+# advertised without the standalone review application.
+verify_review_helper() {
+    local containing_app="$1"
+    local helper="$containing_app/Contents/Helpers/Apollo Review.app"
+    local executable="$helper/Contents/MacOS/ApolloReview"
+    local plist="$helper/Contents/Info.plist"
+    local helper_id helper_version helper_build helper_archs
+
+    [[ -d "$helper" ]] || {
+        echo "ERROR: required Apollo Review.app is missing from $containing_app" >&2
+        exit 1
+    }
+    [[ -x "$executable" ]] || {
+        echo "ERROR: Apollo Review executable is missing or not executable" >&2
+        exit 1
+    }
+    [[ -f "$plist" ]] || {
+        echo "ERROR: Apollo Review Info.plist is missing" >&2
+        exit 1
+    }
+
+    helper_id="$($PB -c 'Print :CFBundleIdentifier' "$plist")"
+    helper_version="$($PB -c 'Print :CFBundleShortVersionString' "$plist")"
+    helper_build="$($PB -c 'Print :CFBundleVersion' "$plist")"
+    helper_archs="$(lipo -archs "$executable")"
+
+    [[ "$helper_id" == "com.apollo.review" ]] || {
+        echo "ERROR: unexpected Apollo Review bundle id: $helper_id" >&2
+        exit 1
+    }
+    [[ "$helper_version" == "$NEW_VERSION" ]] || {
+        echo "ERROR: Apollo Review version $helper_version != Apollo $NEW_VERSION" >&2
+        exit 1
+    }
+    [[ "$helper_build" == "$NEW_BUILD" ]] || {
+        echo "ERROR: Apollo Review build $helper_build != Apollo $NEW_BUILD" >&2
+        exit 1
+    }
+    [[ " $helper_archs " == *" arm64 "* && " $helper_archs " == *" x86_64 "* ]] || {
+        echo "ERROR: Apollo Review is not universal (architectures: $helper_archs)" >&2
+        exit 1
+    }
+
+    codesign --verify --deep --strict --verbose=2 "$helper" >/dev/null 2>&1 || {
+        echo "ERROR: Apollo Review signature verification failed" >&2
+        exit 1
+    }
+
+    echo "✓ Apollo Review bundled: $helper_version ($helper_build), $helper_archs"
+}
+
+echo "→ Verifying required Apollo Review nested app…"
+verify_review_helper "$APP_PATH"
+
 # ── Notarization (Apple notary service) ───────────────────────────────────
 # Submit the .app (as a ZIP — the notary doesn't accept .app
 # directly) to Apple's notary service, wait for the verdict,
@@ -290,6 +347,15 @@ ZIP_PATH="$DIST_DIR/$ZIP_NAME"
 echo "→ Packaging $ZIP_NAME for Sparkle…"
 rm -f "$ZIP_PATH"
 ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+
+# Audit the bytes Sparkle will actually install, not only build/Apollo.app.
+# This catches accidental exclusions, stale staging directories and future
+# changes to the archive command before an incomplete update reaches users.
+ZIP_AUDIT_DIR="$(mktemp -d)"
+ditto -x -k "$ZIP_PATH" "$ZIP_AUDIT_DIR"
+echo "→ Verifying Apollo Review inside the final Sparkle ZIP…"
+verify_review_helper "$ZIP_AUDIT_DIR/Apollo.app"
+rm -rf "$ZIP_AUDIT_DIR"
 
 # ── Sign the ZIP with the EdDSA private key from Keychain ─────────────────
 echo "→ Signing ${ZIP_NAME}…"
