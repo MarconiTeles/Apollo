@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.9.2</title>
-      <pubDate>Mon, 20 Jul 2026 22:43:02 +0000</pubDate>
-      <sparkle:version>90</sparkle:version>
-      <sparkle:shortVersionString>1.9.2</sparkle:shortVersionString>
+      <title>Apollo 1.9.3</title>
+      <pubDate>Tue, 21 Jul 2026 00:15:41 +0000</pubDate>
+      <sparkle:version>91</sparkle:version>
+      <sparkle:shortVersionString>1.9.3</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Review por versão (fim do VER REVIEW fantasma e do aprovado sem revisor), backend de reviews mais rápido e estável, envio de vídeos com progresso real (JUNTANDO/ENVIANDO), correção de crash na lista de tarefas, evento em destaque na agenda da Home e refinamentos visuais.]]></description>
+      <description><![CDATA[Conclusões de review feitas na web agora refletem no Apollo em menos de um minuto — e instantaneamente ao voltar para o app.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.9.2/Apollo-1.9.2.zip"
-        sparkle:edSignature="ZQeA6BwoZETBgL1ljTBhYuC9SNwzTvmzVZPGSoFA4twbh2fVHDxiWBbvePy3hIsEk48lOtyjfctrZ0Wu2bslCg=="
-        length="46173565"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.9.3/Apollo-1.9.3.zip"
+        sparkle:edSignature="c7p8iFneSocJyXO+9fTV744xGbZ/LCzJe5Wuq8g60Ulq+zvtSFqHX41DdKoR3bAiQrm2NSr6iN7U3AfDBaseBA=="
+        length="46176341"
         type="application/octet-stream" />
     </item>
   </channel>
