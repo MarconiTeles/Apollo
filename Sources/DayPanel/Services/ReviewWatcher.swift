@@ -158,11 +158,11 @@ final class ReviewWatcher {
             while !Task.isCancelled {
                 // Visible rows perform the bounded first discovery pass; the
                 // watcher waits before polling so app launch does not duplicate
-                // those reads. 5 minutes keeps web activity (comentário/
+                // those reads. 2 minutes keeps web activity (comentário/
                 // conclusão de um revisor) visível em tempo útil — o backend
                 // D1 removeu o teto diário que justificava os 15 minutos, e o
                 // cache/dedup do ReviewBackend continua absorvendo rajadas.
-                try? await Task.sleep(nanoseconds: 300_000_000_000)
+                try? await Task.sleep(nanoseconds: 120_000_000_000)
                 await self?.poll()
             }
         }

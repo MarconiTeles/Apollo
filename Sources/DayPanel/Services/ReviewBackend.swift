@@ -730,10 +730,10 @@ enum ReviewBackend {
         private var cachedMetas: [String: (expires: Date, meta: Meta)] = [:]
         private var consecutiveFailures = 0
         private var cooldownUntil: Date?
-        /// MUST stay below the slowest poll interval (5 min) — a TTL longer
+        /// MUST stay below the fastest poll interval (45s) — a TTL longer
         /// than the poll would make every poll a cache hit and silently
         /// freeze discovery at the cache age instead of the poll cadence.
-        private let ttl: TimeInterval = 240
+        private let ttl: TimeInterval = 30
 
         func cachedMeta(for key: String) -> Meta? {
             lock.lock(); defer { lock.unlock() }

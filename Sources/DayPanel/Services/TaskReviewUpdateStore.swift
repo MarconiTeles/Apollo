@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 
@@ -154,11 +155,11 @@ final class TaskReviewUpdateStore: ObservableObject {
     private let catalogFetcher: CatalogFetcher
 
     // A 30-second scan over every visible task exhausted the Worker's daily KV
-    // allowance and made the reviewer unable to save. Visible tasks receive a
-    // bounded initial probe; recurrent discovery is deliberately slower. With
-    // D1 as the primary store (no daily read ceiling) 5 minutes balances
-    // timely VER REVIEW discovery against request volume.
-    private let refreshInterval: TimeInterval = 5 * 60
+    // allowance and made the reviewer unable to save. That ceiling died with
+    // the D1 migration: 45s keeps "revisor concluiu na web → VER REVIEW some"
+    // dentro de ~1 min sem chegar perto dos limites do D1 (linhas visíveis ×
+    // ~2 leituras/min ≪ 5M/dia), e o cache do Worker absorve rajadas.
+    private let refreshInterval: TimeInterval = 45
     private let reviewedDisplayDuration: TimeInterval
     private let defaults: UserDefaults
     private let pendingUpdatesKey = "taskReviewPendingUpdates.v1"
@@ -181,6 +182,17 @@ final class TaskReviewUpdateStore: ObservableObject {
             self.fullTaskFetcher = { taskId in
                 try? await service.getTask(id: taskId)
             }
+        }
+        // O gesto clássico é concluir a review no navegador e voltar pro
+        // Apollo: sondar as linhas visíveis na hora em que o app reativa
+        // faz o VER REVIEW sumir imediatamente, sem esperar o próximo tick.
+        // (Registrado por último — o closure captura self e o Swift exige
+        // todas as stored properties inicializadas antes.)
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.probeVisibleNow() }
         }
         if let data = defaults.data(forKey: pendingUpdatesKey) {
             if let records = try? JSONDecoder().decode([PersistedUpdate].self,
@@ -815,7 +827,7 @@ final class TaskReviewUpdateStore: ObservableObject {
         guard timerTask == nil else { return }
         timerTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 300_000_000_000)
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
                 guard let self else { return }
                 self.enqueueVisibleTasks()
             }
@@ -830,6 +842,14 @@ final class TaskReviewUpdateStore: ObservableObject {
                 enqueue(taskId)
             }
         }
+    }
+
+    /// Sonda IMEDIATA de todas as linhas visíveis, ignorando o intervalo —
+    /// usada quando o app volta ao primeiro plano (a conclusão pode ter
+    /// acabado de acontecer na web). O cache curto do ReviewBackend segue
+    /// deduplicando; isto nunca vira tempestade de requests.
+    func probeVisibleNow() {
+        for taskId in watched.keys { enqueue(taskId) }
     }
 
     private func findUpdates(in task: CUTask) async -> [Update] {
