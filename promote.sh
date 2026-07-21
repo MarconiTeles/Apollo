@@ -109,7 +109,7 @@ CURRENT_BRANCH="$(git branch --show-current)"
 git push
 
 if [[ -n "$PAGES_BRANCH" && "$PAGES_BRANCH" != "$CURRENT_BRANCH" ]]; then
-    echo "→ Publishing appcast to GitHub Pages branch $PAGES_BRANCH…"
+    echo "→ Publishing appcast to GitHub Pages branch ${PAGES_BRANCH}…"
     REMOTE_META="$(gh api "repos/$REPO/contents/$DST?ref=$PAGES_BRANCH")"
     REMOTE_SHA="$(printf '%s' "$REMOTE_META" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')"
     ENCODED_APPCAST="$(base64 < "$DST" | tr -d '\n')"
