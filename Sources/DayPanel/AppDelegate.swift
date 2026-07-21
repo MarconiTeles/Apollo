@@ -370,6 +370,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let taskId = r.taskId
         else { return }
 
+        // The helper is a separate process, so its successful completion must
+        // cross this URL boundary with the exact server-confirmed identity.
+        // Never infer completion from the returned JSON: opening/closing a
+        // review, saving comments, or selecting Approved alone must not consume
+        // the pending VER REVIEW latch.
+        if let acknowledgementTaskId = q("ackTaskId"),
+           let pendingAttachmentId = q("ackPendingAttachmentId"),
+           let confirmedAttachmentId = q("confirmedActiveAttachmentId") {
+            let confirmation = ReviewBackend.Meta(
+                exists: true,
+                updatedAt: q("confirmedUpdatedAt"),
+                status: q("confirmedStatus"),
+                commentCount: Int(q("confirmedCommentCount") ?? "") ?? 0,
+                concludedAt: q("confirmedConcludedAt"),
+                reviewId: q("confirmedReviewId"),
+                currentVersionId: q("confirmedVersionId"),
+                mediaTitle: q("confirmedMediaTitle"),
+                evaluatedVersionId: q("confirmedVersionId")
+            )
+            Task { @MainActor in
+                _ = TaskReviewUpdateStore.shared.acknowledgeConfirmedCompletion(
+                    taskId: acknowledgementTaskId,
+                    pendingActiveAtt: pendingAttachmentId,
+                    confirmedActiveAtt: confirmedAttachmentId,
+                    meta: confirmation
+                )
+            }
+        }
+
         // Bring Apollo (and the task) forward, then post — the existing
         // reviewPostTick auto-refresh updates the open comments section.
         if !appState.menuBarMode {

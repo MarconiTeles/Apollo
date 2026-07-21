@@ -8,6 +8,7 @@ CONFIG="${1:-release}"
 # day-to-day dev rebuilds stay fast.
 UNIVERSAL="${2:-}"
 APP_DISPLAY_NAME="Apollo"
+REVIEW_PACKAGE_DIR="../apollo-review-swift"
 
 if [ "$UNIVERSAL" = "--universal" ]; then
     echo "Building $APP_DISPLAY_NAME ($CONFIG, universal arm64 + x86_64)..."
@@ -24,13 +25,23 @@ if [ "$UNIVERSAL" = "--universal" ]; then
     BIN="$BIN_DIR/DayPanel"
     mkdir -p "$BIN_DIR"
     lipo -create "$BIN_ARM64" "$BIN_X86" -output "$BIN"
+    swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --arch arm64
+    swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --arch x86_64
+    REVIEW_BIN_ARM64="$REVIEW_PACKAGE_DIR/.build/arm64-apple-macosx/$CONFIG/ApolloReview"
+    REVIEW_BIN_X86="$REVIEW_PACKAGE_DIR/.build/x86_64-apple-macosx/$CONFIG/ApolloReview"
+    REVIEW_BIN="$BIN_DIR/ApolloReview"
+    lipo -create "$REVIEW_BIN_ARM64" "$REVIEW_BIN_X86" -output "$REVIEW_BIN"
     echo "  Universal slices:"
     lipo -info "$BIN" | sed 's/^/    /'
+    lipo -info "$REVIEW_BIN" | sed 's/^/    /'
 else
     echo "Building $APP_DISPLAY_NAME ($CONFIG)..."
     swift build -c "$CONFIG"
     BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
     BIN="$BIN_DIR/DayPanel"
+    swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG"
+    REVIEW_BIN_DIR="$(swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --show-bin-path)"
+    REVIEW_BIN="$REVIEW_BIN_DIR/ApolloReview"
 fi
 APP="build/${APP_DISPLAY_NAME}.app"
 
@@ -40,14 +51,59 @@ if [ ! -f build/icon/Assets.car ] || [ ! -f build/icon/AppIcon.icns ]; then
     ./make-icon.sh
 fi
 
+# Compile the standalone Review icon supplied as an Icon Composer document.
+# It is intentionally separate from Apollo's icon and lives only inside the
+# nested Apollo Review.app bundle.
+REVIEW_ICON_SRC="$REVIEW_PACKAGE_DIR/Sources/ApolloReview/Resources/ReviewIcon.icon"
+REVIEW_ICON_OUT="build/review-icon"
+rm -rf "$REVIEW_ICON_OUT"
+mkdir -p "$REVIEW_ICON_OUT"
+REVIEW_ICON_WORK="$(mktemp -d)"
+cp -R "$REVIEW_ICON_SRC" "$REVIEW_ICON_WORK/AppIcon.icon"
+xcrun actool "$REVIEW_ICON_WORK/AppIcon.icon" \
+    --compile "$REVIEW_ICON_OUT" \
+    --app-icon AppIcon \
+    --output-partial-info-plist "$REVIEW_ICON_OUT/icon-info.plist" \
+    --platform macosx \
+    --minimum-deployment-target 26.0 \
+    --errors --warnings --notices >/dev/null
+rm -rf "$REVIEW_ICON_WORK"
+[ -f "$REVIEW_ICON_OUT/Assets.car" ] \
+    || { echo "ERROR: Apollo Review Assets.car was not generated" >&2; exit 1; }
+[ -f "$REVIEW_ICON_OUT/AppIcon.icns" ] \
+    || { echo "ERROR: Apollo Review AppIcon.icns was not generated" >&2; exit 1; }
+
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks" \
+         "$APP/Contents/Helpers"
 cp "$BIN"                                "$APP/Contents/MacOS/DayPanel"
 cp Sources/DayPanel/Resources/Info.plist "$APP/Contents/Info.plist"
 # Dynamic Liquid-Glass icon (macOS 26) lives in Assets.car, resolved via
 # CFBundleIconName; AppIcon.icns is the static fallback (older Finder paths).
 cp build/icon/Assets.car                 "$APP/Contents/Resources/Assets.car"
 cp build/icon/AppIcon.icns               "$APP/Contents/Resources/AppIcon.icns"
+
+# Apollo Review is a real secondary macOS application bundled with Apollo.
+# Keeping it as a nested .app gives the review surface its own NSWindow,
+# traffic lights, independent movement/resize and lifetime, while both hosts
+# continue sharing the exact same ReviewKit implementation.
+REVIEW_HELPER="$APP/Contents/Helpers/Apollo Review.app"
+mkdir -p "$REVIEW_HELPER/Contents/MacOS" "$REVIEW_HELPER/Contents/Resources"
+cp "$REVIEW_BIN" "$REVIEW_HELPER/Contents/MacOS/ApolloReview"
+cp "$REVIEW_PACKAGE_DIR/Sources/ApolloReview/Resources/Info.plist" \
+   "$REVIEW_HELPER/Contents/Info.plist"
+cp "$REVIEW_ICON_OUT/Assets.car" "$REVIEW_HELPER/Contents/Resources/Assets.car"
+cp "$REVIEW_ICON_OUT/AppIcon.icns" "$REVIEW_HELPER/Contents/Resources/AppIcon.icns"
+chmod +x "$REVIEW_HELPER/Contents/MacOS/ApolloReview"
+
+# Keep the nested application's public version aligned with the containing
+# Apollo bundle. This matters for crash reports and installed-build audits.
+MAIN_SHORT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+MAIN_BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $MAIN_SHORT_VERSION" \
+    "$REVIEW_HELPER/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $MAIN_BUILD_VERSION" \
+    "$REVIEW_HELPER/Contents/Info.plist"
 
 # A local DEBUG bundle must never touch the production Keychain namespace.
 # KeychainHelper also has a compile-time DEBUG guard, but this explicit plist
@@ -235,6 +291,13 @@ if [ -f "$OLLAMA_BUNDLE" ]; then
         --sign "$SIGNING_ID" \
         "$OLLAMA_BUNDLE" > /dev/null
 fi
+
+# Sign the standalone Review helper before the containing app. It deliberately
+# has no Apollo/Keychain entitlements; review state is passed explicitly and
+# the helper owns only its network-backed ReviewKit session.
+codesign --force --options runtime --timestamp \
+    --sign "$SIGNING_ID" \
+    "$REVIEW_HELPER" > /dev/null
 
 # Outer .app — apply entitlements, hardened runtime, timestamp.
 codesign --force --options runtime --timestamp \

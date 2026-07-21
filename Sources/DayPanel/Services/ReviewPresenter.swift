@@ -34,23 +34,16 @@ final class ReviewPresenter: ObservableObject {
 
     func present(_ params: OpenReviewParams,
                  completionAcknowledgement: ReviewCompletionAcknowledgement? = nil) {
-        request = ReviewRequest(
+        StandaloneReviewLauncher.open(
             params: params,
-            completionAcknowledgement: completionAcknowledgement,
-            sessionContext: ReviewSessionContext(
-                params: params,
-                // Opening, closing the sheet or relaunching Apollo must never
-                // consume a review update. The final onSubmit path is the sole
-                // owner of `markSeen`.
-                markSeenOnLoad: false
-            )
+            acknowledgement: completionAcknowledgement
         )
     }
 
     /// Re-open a saved review from inline JSON data (the `?z=` payload decoded
     /// from the comment link) — no download, works offline.
     func presentSaved(jsonData: Data) {
-        request = ReviewRequest(savedJSON: jsonData)
+        StandaloneReviewLauncher.open(savedJSON: jsonData)
     }
 
     /// Re-open a saved review from a JSON URL (legacy comments that linked an
@@ -58,7 +51,7 @@ final class ReviewPresenter: ObservableObject {
     func presentSaved(jsonURL: URL) {
         Task {
             guard let (data, _) = try? await URLSession.shared.data(from: jsonURL) else { return }
-            await MainActor.run { self.request = ReviewRequest(savedJSON: data) }
+            await MainActor.run { StandaloneReviewLauncher.open(savedJSON: data) }
         }
     }
 }
