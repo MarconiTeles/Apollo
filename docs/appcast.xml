@@ -5,16 +5,16 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
-      <title>Apollo 1.9.7</title>
-      <pubDate>Tue, 21 Jul 2026 15:30:09 +0000</pubDate>
-      <sparkle:version>95</sparkle:version>
-      <sparkle:shortVersionString>1.9.7</sparkle:shortVersionString>
+      <title>Apollo 1.9.8</title>
+      <pubDate>Tue, 21 Jul 2026 17:22:57 +0000</pubDate>
+      <sparkle:version>96</sparkle:version>
+      <sparkle:shortVersionString>1.9.8</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[Tarefas agora é a página inicial do Apollo.]]></description>
+      <description><![CDATA[Apollo 1.9.8: Apollo Review standalone incluído no bundle; links clicáveis no Review web e macOS; clique fora do link preserva a navegação pela timeline; melhorias de persistência, versões e estabilidade.]]></description>
       <enclosure
-        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.9.7/Apollo-1.9.7.zip"
-        sparkle:edSignature="etCqEmablJuIBXgkwgvXmy6n2U7XRID2DCXhyxbLkrESCucSwQiuC52oS3m1h2inFzno9jzWkEdNXx+/L4YRDw=="
-        length="49708777"
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v1.9.8/Apollo-1.9.8.zip"
+        sparkle:edSignature="xQFqSpBZHus3/qWnIauWmD1ZZprwx5Z7bB+Gn89KENlEMig6Ry4ODw9b54f4cR+O12pZPI0mpDIJiQ+G+vWnBA=="
+        length="49716394"
         type="application/octet-stream" />
     </item>
   </channel>
