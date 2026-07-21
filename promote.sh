@@ -88,13 +88,38 @@ if git diff --cached --quiet; then
     exit 1
 fi
 
-git commit -m "Promote Apollo $NEW_VER to public Sparkle feed
+COMMIT_MESSAGE="Promote Apollo $NEW_VER to public Sparkle feed
 
 Notifies every running Apollo install on the next
 scheduled-check window (or immediately on ⌘ → Verificar
 Atualizações…). Until this commit landed, $NEW_VER was
 on GitHub Releases but invisible to OTA."
+
+git commit -m "$COMMIT_MESSAGE"
+
+# GitHub Pages may publish from a different branch than the one used to
+# assemble releases. Pushing only the current branch leaves the public OTA
+# feed stale even though the local promotion commit succeeded. Publish the
+# exact appcast to the configured Pages source branch without merging any
+# unrelated release-branch work into it.
+REPO="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
+PAGES_BRANCH="$(gh api "repos/$REPO/pages" --jq '.source.branch')"
+CURRENT_BRANCH="$(git branch --show-current)"
+
 git push
+
+if [[ -n "$PAGES_BRANCH" && "$PAGES_BRANCH" != "$CURRENT_BRANCH" ]]; then
+    echo "→ Publishing appcast to GitHub Pages branch $PAGES_BRANCH…"
+    REMOTE_META="$(gh api "repos/$REPO/contents/$DST?ref=$PAGES_BRANCH")"
+    REMOTE_SHA="$(printf '%s' "$REMOTE_META" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')"
+    ENCODED_APPCAST="$(base64 < "$DST" | tr -d '\n')"
+    gh api --method PUT "repos/$REPO/contents/$DST" \
+        -f message="$COMMIT_MESSAGE" \
+        -f content="$ENCODED_APPCAST" \
+        -f sha="$REMOTE_SHA" \
+        -f branch="$PAGES_BRANCH" \
+        --silent
+fi
 
 echo ""
 echo "✓ Promoted. Pages re-serves within ~30s."
