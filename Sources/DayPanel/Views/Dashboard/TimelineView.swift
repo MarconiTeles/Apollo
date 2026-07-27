@@ -21,17 +21,6 @@ struct TimelineView: View {
     /// rows can still travel underneath the overlay during a scroll.
     var topContentInset: CGFloat = 0
 
-    /// Próximo evento a partir de AGORA, independente do dia — mesma seleção
-    /// do antigo hero card do header (escopar só a hoje fazia o destaque
-    /// sumir à meia-noite mesmo com reunião marcada para amanhã).
-    private var nextUpcomingEvent: CalendarEvent? {
-        let now = Date()
-        return appState.events
-            .filter { $0.endDate > now }
-            .sorted { $0.startDate < $1.startDate }
-            .first
-    }
-
     /// Visible date window. Past entries are dropped on the
     /// forward-only variant.
     private var dates: [Date] {
@@ -44,6 +33,8 @@ struct TimelineView: View {
     /// Approx. height per day section — used by scroll-position math to
     /// figure out which day is currently in view.
     private let sectionEstimate: CGFloat = 96
+    /// Resting distance from the Agenda header to the first event row.
+    private let headerToFirstCardSpacing: CGFloat = 43
 
     @State private var scrollLockUntil:    Date = .distantPast
     @State private var suppressAutoScroll: Bool = false
@@ -133,24 +124,11 @@ struct TimelineView: View {
                 // first agenda section below the pinned Finder header, then
                 // scrolls away with the rest of the content.
                 Color.clear
-                    .frame(height: 28 + topContentInset)
+                    .frame(height: headerToFirstCardSpacing + topContentInset)
                     .id("apollo-agenda-top-reserve")
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
-
-                // Evento em destaque (Hoje): o hero card das versões antigas,
-                // agora contido na largura da coluna da agenda em vez de
-                // atravessar as duas listas. Rola junto com o conteúdo.
-                if forwardOnly, let next = nextUpcomingEvent {
-                    NextEventHighlightCard(appState: appState, event: next)
-                        .id("apollo-agenda-next-event")
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        // 70pt entre o painel de destaque e o primeiro dia.
-                        .listRowInsets(EdgeInsets(top: 0, leading: 26,
-                                                  bottom: 70, trailing: 32))
-                }
 
                 ForEach(dates, id: \.self) { date in
                     let dayStart = Calendar.current.startOfDay(for: date)
@@ -206,7 +184,7 @@ struct TimelineView: View {
                     // Home adds a scroll-content reserve for the translucent
                     // header; counting that reserve as a day used to advance
                     // the selected date before the first row reached the top.
-                    let contentStart = 28 + topContentInset
+                    let contentStart = headerToFirstCardSpacing + topContentInset
                     let approxIndex = Int(((offset - contentStart) / sectionEstimate).rounded(.down))
                     let clamped     = max(0, min(approxIndex, dates.count - 1))
                     guard clamped != lastScrollIndex else { return }
@@ -541,7 +519,11 @@ private struct AgendaDaySection: View, Equatable {
         HStack(alignment: .top, spacing: 17) {
             dateColumn
 
-            VStack(spacing: 0) {
+            // The last pre-editorial event card is a rounded capsule with its
+            // own shadow. Restore the original 6pt breathing room so adjacent
+            // capsules never visually merge, while keeping the current day
+            // hierarchy and lazy-list behavior intact.
+            VStack(spacing: 6) {
                 if events.isEmpty {
                     Text("— Sem compromissos")
                         .font(Editorial.serif(13.5).italic())
@@ -686,10 +668,6 @@ struct AgendaEventCard: View, Equatable {
     var onCopyLink: ((CalendarEvent) -> Void)? = nil
     var onDelete: ((CalendarEvent) -> Void)? = nil
 
-    /// Editorial hover wash (not compared by `==` — @State is
-    /// intentionally excluded from the Equatable short-circuit).
-    @State private var hover = false
-
     /// PERF: Equatable short-circuits SwiftUI body re-evaluation
     /// when the event hasn't changed. With ~15-20 cards visible
     /// during scroll and the parent `appState` driving many
@@ -773,165 +751,69 @@ struct AgendaEventCard: View, Equatable {
     }
 
     var body: some View {
-        // EXPERIMENT (REVERTED): tried replacing this view
-        // tree with a single `Canvas { context, size in … }`
-        // that drew background, border, title, subtitle, and
-        // avatar via `GraphicsContext` primitives. Hypothesis
-        // was that a single Canvas would dodge SwiftUI's
-        // per-child view diff overhead.
-        //
-        // Result was a clear REGRESSION (Animation Hitches
-        // trace):
-        //   • drawingGroup version: 20.6ms · 70% @ 60Hz
-        //   • Canvas version:       27.0ms · 56% @ 60Hz
-        //
-        // Canvas redraws from scratch every render: its
-        // closure has to call `context.resolve(Text…)` and
-        // `text.measure(in:)` per card per frame, which
-        // turns out to be more expensive than letting SwiftUI
-        // diff a tree that's already short-circuited by
-        // `.equatable()`. `.drawingGroup()` wins by caching
-        // the Metal texture between renders — when the
-        // event's fields don't change (which is true for
-        // the entire scroll), the cached texture is just
-        // re-blitted instead of re-rasterised. Reverted.
-        // Exact prototype `PEventLine`:
-        //   grid 88 | 1fr | auto · gap 16 · baseline ·
-        //   padding 10px 8px · margin 0 -8px · borderRadius 4 ·
-        //   borderTop 1px ruleSoft · hover → bg E.card.
-        // The 88pt time column WRAPS "HH:MM → HH:MM" to two lines
-        // ("09:30 →" / "10:00"). The title is serif 16/500 and
-        // WRAPS naturally (never tail-truncated); the location
-        // rides inline as an italic Caption and wraps onto its
-        // own line. The avatar is a SOLID colour disc.
         Button {
             onTap(event)
         } label: {
-            // spacing 0 + explicit leading paddings so the
-            // time→title gap (2) and title→avatar gap (16) are
-            // tuned independently — the prototype's uniform 16
-            // left too much air between the time and the title.
-            HStack(alignment: .firstTextBaseline, spacing: 0) {
-                // Times are ALWAYS stacked one above the other,
-                // matching the prototype's `PEventLine`. The old
-                // single `Text("HH:MM → HH:MM")` relied on the
-                // 88pt column being narrow enough to force a
-                // natural wrap — but 13 chars at sans 12 fit on a
-                // single line, so the wrap silently never fired.
-                // An explicit VStack guarantees the layout
-                // regardless of column width.
-                Group {
-                    if event.isAllDay {
-                        Text("Dia inteiro")
-                    } else {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text("\(timeStart) →")
-                            Text(timeEnd)
-                        }
-                    }
+            // Restored from the final pre-Editorial-Calm implementation
+            // (`474cdcb^`). It deliberately keeps the current data/state
+            // plumbing while bringing back the compact, colour-tinted event
+            // capsule that visually belongs with the current Apollo UI.
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(event.title)
+                        .font(.system(size: 13.8, weight: .semibold))
+                        .foregroundStyle(isAccepted ? Color.white : .primary)
+                        .strikethrough(isDeclined, color: .secondary)
+                        .lineLimit(1)
+
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(isAccepted
+                            ? Color.white.opacity(0.85)
+                            : .secondary)
+                        .lineLimit(1)
                 }
-                .font(Editorial.sans(12, .medium))
-                .monospacedDigit()
-                .tracking(0.3)
-                .foregroundStyle(isDeclined ? Editorial.inkMute
-                                            : Editorial.inkSoft)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                // Trimmed 10pt — was 88, now 78. Pulls the event
-                // title closer to the time column so the meta
-                // ("09:30 →") and the title read as a single
-                // unit instead of being separated by a wide gutter.
-                .frame(width: 78, alignment: .leading)
+                .opacity(isDeclined ? 0.6 : 1)
 
-                titleParagraph
-                    .multilineTextAlignment(.leading)
-                    // An event is at most 2 lines: the title wraps
-                    // once, then tail-truncates (the inline italic
-                    // location rides along and truncates with it).
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .padding(.leading, 2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
 
-                avatarDisc
-                    .padding(.leading, 16)
-                    .alignmentGuide(.firstTextBaseline) {
-                        $0[VerticalAlignment.center] + 5
-                    }
+                if let first = event.attendees.first {
+                    avatar(for: first)
+                }
             }
-            .opacity(isDeclined ? 0.45 : 1)
-            .padding(.vertical, 10)
-            // Fill the events column so the title (1fr) uses ALL
-            // remaining width — no dead gap before the avatar.
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Prototype `padding:10px 8px; margin:0 -8px` — the
-            // hover wash + top rule bleed 8pt into the gutter on
-            // each side while the content stays at the column
-            // edge (background/overlay extended, not the content).
-            .overlay(alignment: .top) {
-                // Event divider — 35% lower opacity, masked so it fades
-                // out toward the lateral edges (same edge fade as the
-                // hover glow) instead of ending in a hard vertical cut.
-                Rectangle().fill(Editorial.ruleSoft.opacity(0.65))
-                    .frame(height: 1)
-                    .padding(.horizontal, -8)
-                    .mask(eventGlowEdgeFade)
-            }
-            // Hover lift — the SAME top/bottom status-tinted glow the
-            // task rows use, here tinted with the event's calendar
-            // accent (`color`, the same hue as the attendee avatar disc
-            // on the right). No light fill: the glow alone signals hover.
-            // Each strip is masked horizontally so it fades out toward
-            // the lateral edges instead of ending in a hard vertical cut.
-            //
-            // The strips sit just OUTSIDE the card (`.offset(y: ±5)`),
-            // with the dense colour hugging the card's perimeter divider
-            // line and fading AWAY from the card — identical to the task
-            // rows (not bleeding INTO the content, which read as
-            // "inverted"). Within a day the events live in a `VStack`
-            // (one List row), so these out-of-bounds strips stay inside
-            // the day-section frame; `.zIndex(hover ? 1 : 0)` below lifts
-            // the hovered card above its siblings so neither strip is
-            // occluded by the adjacent card.
-            .overlay(alignment: .top) {
-                if hover {
-                    LinearGradient(colors: [.clear, color.opacity(0.45)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: 5)
-                        .padding(.horizontal, -8)
-                        .mask(eventGlowEdgeFade)
-                        .offset(y: -5)
-                        .allowsHitTesting(false)
+            .background {
+                if isAccepted {
+                    shape.fill(color)
+                } else {
+                    shape.fill(color.opacity(0.14))
                 }
             }
-            .overlay(alignment: .bottom) {
-                if hover {
-                    LinearGradient(colors: [color.opacity(0.45), .clear],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: 5)
-                        .padding(.horizontal, -8)
-                        .mask(eventGlowEdgeFade)
-                        .offset(y: 5)
-                        .allowsHitTesting(false)
+            .overlay {
+                if borderWidth > 0 {
+                    shape.strokeBorder(borderColour, lineWidth: borderWidth)
                 }
             }
-            .contentShape(Rectangle())
-            // Lift the hovered card above its VStack siblings so its
-            // out-of-bounds glow strips draw OVER the adjacent cards
-            // instead of being occluded by them.
-            .zIndex(hover ? 1 : 0)
+            .drawingGroup()
+            .shadow(
+                color: isAccepted ? .black.opacity(0.18) : color.opacity(0.45),
+                radius: 4,
+                x: 0,
+                y: 1
+            )
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        // Scroll-aware hover — drops the halo on/off updates
-        // while a live NSScrollView scroll is in progress and
-        // force-resets `hover` the instant a scroll starts.
-        // The shared `ScrollStateObserver` already listens to
-        // every NSScrollView in the app via NotificationCenter,
-        // so the timeline gets covered automatically.
-        .scrollAwareOnHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) { hover = hovering }
-        }
+        .interactivePillFeedback(
+            accent: color,
+            cornerRadius: 13,
+            glow: true,
+            hoverScale: 1.015,
+            pulseFromClick: true
+        )
         // Right-click context menu rendered via a native NSMenu
         // overlay rather than SwiftUI `.contextMenu`. The host
         // List would otherwise show its row-selection highlight
@@ -995,83 +877,30 @@ struct AgendaEventCard: View, Equatable {
         return m
     }
 
-    /// Time pieces (the column wraps the two on its own).
-    private var timeStart: String {
-        event.isAllDay ? "Dia inteiro"
-            : SharedDateFormatters.shortTime24h.string(from: event.startDate)
-    }
-    private var timeEnd: String {
-        event.isAllDay ? ""
-            : SharedDateFormatters.shortTime24h.string(from: event.endDate)
-    }
+    @ViewBuilder
+    private func avatar(for attendee: CalendarEvent.Attendee) -> some View {
+        let initials = attendee.name
+            .split(separator: " ")
+            .prefix(2)
+            .compactMap { $0.first.map(String.init) }
+            .joined()
+            .uppercased()
 
-    /// Sans title + inline italic "· local", as one wrapping
-    /// paragraph. Serif on the home page reads as decorative
-    /// when there are dozens of rows; SF Pro keeps the dense
-    /// list legible.
-    private var titleParagraph: Text {
-        var t = Text(event.title)
-            .font(Editorial.sans(14, .semibold))
-            .foregroundColor(Editorial.ink)
-            .tracking(-0.1)
-        if isDeclined {
-            t = t.strikethrough(true, color: Editorial.inkMute)
-        }
-        if let loc = event.location, !loc.isEmpty {
-            t = t + Text("  ·  \(loc)")
-                .font(Editorial.sans(12))
-                .foregroundColor(Editorial.inkSoft)
-        }
-        return t
-    }
+        ZStack {
+            Circle()
+                .fill(Color.accentColor.opacity(isAccepted ? 0.35 : 0.20))
 
-    /// Horizontal mask for the hover glow strips: transparent at
-    /// both ends, opaque through the middle, so the accent glow
-    /// dissolves toward the lateral edges instead of cutting off.
-    private var eventGlowEdgeFade: some View {
-        LinearGradient(
-            stops: [
-                .init(color: .clear, location: 0.0),
-                .init(color: .black, location: 0.10),
-                .init(color: .black, location: 0.90),
-                .init(color: .clear, location: 1.0),
-            ],
-            startPoint: .leading, endPoint: .trailing)
-    }
-
-    /// Colour disc with a letter. Confirmed (RSVP accepted, or
-    /// no attendees so nothing to confirm) → SOLID fill, white
-    /// letter. Not yet confirmed → HOLLOW: paper fill, a 1.5pt
-    /// ring in the colour, the letter in the colour.
-    private var avatarDisc: some View {
-        let letter: String = {
-            if let n = event.attendees.first?.name,
-               let c = n.split(separator: " ").first?.first {
-                return String(c).uppercased()
-            }
-            return String(event.title.first ?? "•").uppercased()
-        }()
-        return Group {
-            if isAccepted {
-                Circle()
-                    .fill(color)
-                    .overlay(
-                        Text(letter)
-                            .font(Editorial.sans(9.5, .semibold))
-                            .foregroundStyle(.white)
-                    )
-            } else {
-                Circle()
-                    .fill(Editorial.paper)
-                    .overlay(Circle().strokeBorder(color, lineWidth: 1.5))
-                    .overlay(
-                        Text(letter)
-                            .font(Editorial.sans(9.5, .semibold))
-                            .foregroundStyle(color)
-                    )
-            }
+            Text(initials.isEmpty ? "?" : initials)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(isAccepted ? Color.white : Color.accentColor)
         }
-        .frame(width: 20, height: 20)
+        .frame(width: 22, height: 22)
+        .overlay(
+            Circle().strokeBorder(
+                isAccepted ? Color.white.opacity(0.5) : Color.clear,
+                lineWidth: 0.5
+            )
+        )
     }
 }
 

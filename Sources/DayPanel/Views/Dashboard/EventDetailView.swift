@@ -144,10 +144,8 @@ struct EventDetailView: View {
                 .opacity(entered ? 1 : 0)
                 .offset(y: (entered || reduceMotion) ? 0 : 6)
                 .animation(settle, value: entered)
-                .liquidGlass(in: headerShape,
-                             tint: Editorial.ink,
-                             tintOpacity: 0.01,
-                             interactive: false)
+                // A mesma receita oficial usada pelo masthead das tarefas.
+                .officialHeaderMaterial(in: headerShape)
                 .overlay(alignment: .bottom) {
                     Rectangle().fill(Editorial.rule).frame(height: 1)
                 }

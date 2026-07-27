@@ -84,6 +84,50 @@ extension View {
     }
 }
 
+// MARK: - Highlight card glass
+
+/// Neutral Liquid Glass surface for an inline featured card.
+///
+/// This is intentionally lighter than `floatingPanelGlass`: the highlighted
+/// event belongs to the agenda hierarchy, so it must read as a card rather
+/// than a detached modal. It also avoids a semantic tint — the event content
+/// and calendar colour remain the visual accents.
+private struct HighlightCardGlassSurface: ViewModifier {
+    let shape: RoundedRectangle
+
+    @ViewBuilder
+    private func material(content: Content) -> some View {
+        if Materials.tier == .solid {
+            content.background(shape.fill(Editorial.card))
+        } else if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
+    }
+
+    func body(content: Content) -> some View {
+        material(content: content)
+            .overlay {
+                shape.strokeBorder(
+                    Materials.tier == .solid
+                        ? Editorial.rule
+                        : Color.white.opacity(0.11),
+                    lineWidth: Materials.tier == .solid ? 0.7 : 0.5
+                )
+                .allowsHitTesting(false)
+            }
+            .shadow(color: .black.opacity(0.07), radius: 7, y: 3)
+    }
+}
+
+extension View {
+    /// Apollo's restrained inline featured-card surface.
+    func highlightCardGlass(in shape: RoundedRectangle) -> some View {
+        modifier(HighlightCardGlassSurface(shape: shape))
+    }
+}
+
 // MARK: - Popup glass
 
 /// Canonical chrome for dialog-sized and window-sized popup surfaces.

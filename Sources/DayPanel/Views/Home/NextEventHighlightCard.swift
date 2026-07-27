@@ -2,22 +2,46 @@ import SwiftUI
 
 // Evento em destaque da Home — reintrodução do hero das versões anteriores,
 // agora DENTRO da coluna da agenda (largura da lista de eventos) em vez de
-// atravessar as duas colunas. Como o original, o destaque é TIPOGRÁFICO e
-// senta flush na página — nenhuma caixa, borda ou barra: a linguagem da
-// coluna é editorial e qualquer moldura destoa. A hierarquia vem do corpo
-// maior + folio accent; um hairline com fade fecha a seção antes do dia.
+// atravessar as duas colunas. A hierarquia tipográfica original é preservada,
+// mas a superfície acompanha o restante do Apollo com um fundo Liquid Glass.
 
 struct NextEventHighlightCard: View {
     @ObservedObject var appState: AppState
     let event: CalendarEvent
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Folio e Entrar na MESMA linha, 30pt abaixo do topo do painel
-            // (medidas pedidas em 20/jul).
-            HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 0) {
                 Folio(minutesLabel, accent: true)
-                Spacer(minLength: 0)
+
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Text(timeFmt(event.startDate))
+                        .font(Editorial.serif(19, .medium))
+                        .foregroundStyle(Editorial.ink)
+                        .monospacedDigit()
+                    Text("até \(timeFmt(event.endDate))")
+                        .font(Editorial.serif(11.5).italic())
+                        .foregroundStyle(Editorial.inkMute)
+                }
+                .padding(.top, 9)
+
+                Text(event.title)
+                    .font(Editorial.sans(15.5, .semibold))
+                    .foregroundStyle(Editorial.ink)
+                    .tracking(-0.15)
+                    .lineLimit(2)
+                    .padding(.top, 3)
+                if let sub = subline {
+                    Text("— \(sub)")
+                        .font(Editorial.serif(11.5).italic())
+                        .foregroundStyle(Editorial.inkSoft)
+                        .lineLimit(1)
+                        .padding(.top, 2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .trailing, spacing: 9) {
                 if let url = meetingURL {
                     Link(destination: url) {
                         HStack(spacing: 5) {
@@ -38,67 +62,38 @@ struct NextEventHighlightCard: View {
                     .focusEffectDisabled()
                     .glassHover()
                 }
+
+                rsvpControls
             }
-            .padding(.top, 10)
-
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text(timeFmt(event.startDate))
-                    .font(Editorial.serif(24, .medium))
-                    .foregroundStyle(Editorial.ink)
-                    .monospacedDigit()
-                Text("até \(timeFmt(event.endDate))")
-                    .font(Editorial.serif(12).italic())
-                    .foregroundStyle(Editorial.inkMute)
-            }
-            .padding(.top, 18)
-
-            Text(event.title)
-                .font(Editorial.sans(19, .semibold))
-                .foregroundStyle(Editorial.ink)
-                .tracking(-0.3)
-                .lineLimit(2)
-                .padding(.top, 5)
-            if let sub = subline {
-                Text("— \(sub)")
-                    .font(Editorial.serif(13).italic())
-                    .foregroundStyle(Editorial.inkSoft)
-                    .lineLimit(1)
-                    .padding(.top, 3)
-            }
-
-            rsvpRow
-
-            // Fecho editorial da seção: hairline com fade, igual às demais
-            // divisões da Home — é ele (e não uma caixa) que separa o
-            // destaque da lista de dias.
-            Rectangle().fill(Editorial.rule.opacity(0.65))
-                .frame(height: 0.5)
-                .edgeFadedHorizontal()
-                .padding(.top, 16)
+            .fixedSize(horizontal: true, vertical: false)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Keep the List row at the card's intrinsic content height. Applying
+        // glass to a flexible Color.clear background let the material inherit
+        // the row proposal and visually expand far beyond the hero content.
+        .fixedSize(horizontal: false, vertical: true)
+        .highlightCardGlass(
+            in: RoundedRectangle(cornerRadius: 17, style: .continuous)
+        )
     }
 
     // ── RSVP "Você vai?" — mesmo contrato do EventDetailView ────────────────
 
     @ViewBuilder
-    private var rsvpRow: some View {
+    private var rsvpControls: some View {
         if let me = event.attendees.first(where: { $0.isCurrentUser }) {
-            VStack(alignment: .leading, spacing: 0) {
-                Rectangle().fill(Editorial.rule.opacity(0.65))
-                    .frame(height: 0.5)
-                    .padding(.top, 8)
+            VStack(alignment: .trailing, spacing: 5) {
+                Text("VOCÊ VAI?")
+                    .font(Editorial.sans(9, .semibold))
+                    .tracking(1)
+                    .foregroundStyle(Editorial.inkMute)
                 HStack(spacing: 7) {
-                    Text("VOCÊ VAI?")
-                        .font(Editorial.sans(10, .semibold))
-                        .tracking(1.1)
-                        .foregroundStyle(Editorial.inkMute)
-                    rsvpPill("Sim",    status: .accepted,  me: me)
-                    rsvpPill("Não",    status: .declined,  me: me)
+                    rsvpPill("Sim", status: .accepted, me: me)
+                    rsvpPill("Não", status: .declined, me: me)
                     rsvpPill("Talvez", status: .tentative, me: me)
-                    Spacer(minLength: 0)
                 }
-                .padding(.top, 8)
             }
         }
     }
@@ -111,10 +106,10 @@ struct NextEventHighlightCard: View {
             appState.updateRSVP(for: event, attendeeEmail: me.email, to: status)
         } label: {
             Text(label)
-                .font(Editorial.sans(11.5, .medium))
+                .font(Editorial.sans(10.5, .medium))
                 .foregroundStyle(isCurrent ? Editorial.page : Editorial.ink)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3.5)
                 .liquidGlassCapsule(tint: isCurrent ? Editorial.ink : Editorial.page,
                                     tintOpacity: isCurrent ? 0.85 : 0.55)
                 .overlay(
