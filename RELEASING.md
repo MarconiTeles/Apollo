@@ -100,15 +100,28 @@ E recarregue (`source ~/.zshrc`).
 
 ### 6. Chaves EdDSA (já feito)
 
-A chave pública já está no `Info.plist`. A privada está no seu **macOS Keychain**
-(item "ed25519 sparkle key for application updates"). **Mantenha um backup**:
+A chave pública está no `Info.plist` (`SUPublicEDKey`). A privada vive no
+**macOS Keychain** (item "ed25519 sparkle key for application updates").
 
-- Abra `Keychain Access.app`
-- Procure por "ed25519 sparkle"
-- File → Export Items → salve `.p12` num lugar seguro (1Password / cofre)
+**Backup — não é opcional.** Exporte com a própria ferramenta do Sparkle:
 
-Se você perder essa chave, todos os usuários instalados ficam órfãos —
-você terá que distribuir uma versão totalmente nova manualmente.
+```bash
+.build/artifacts/sparkle/Sparkle/bin/generate_keys -x ~/chave-sparkle.txt
+chmod 600 ~/chave-sparkle.txt
+```
+
+Guarde o conteúdo no 1Password/cofre e apague o arquivo local. Para restaurar
+numa máquina nova: `generate_keys -f ~/chave-sparkle.txt`.
+
+> **Incidente 27/jul/2026 — a chave foi perdida uma vez.** O macOS recriou o
+> login keychain e renomeou o antigo para `login_renamed_1.keychain-db`,
+> travado com a senha de login anterior. Lá dentro ficaram o certificado
+> Developer ID **e** a chave EdDSA (que não tinha backup). Consequência: todo
+> mundo que estava na 1.9.8 ficou órfão do OTA e precisou reinstalar o DMG uma
+> vez. A chave em uso desde então é nova
+> (`A+74u+9dZ2/Dmdm0FNT7Fkx8xk9JHuBLDW4BDIxBRIA=`) e **tem backup**. Se você
+> perder a chave de novo, o mesmo custo se repete: todos os instalados ficam
+> órfãos e precisam de instalação manual.
 
 ---
 

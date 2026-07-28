@@ -63,7 +63,7 @@
 	<key>SUFeedURL</key>
 	<string>https://marconiteles.github.io/Apollo/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>L2b4fNayblDQ1rwco3UoAr8031tLw3UPmRP7gX20nmk=</string>
+	<string>A+74u+9dZ2/Dmdm0FNT7Fkx8xk9JHuBLDW4BDIxBRIA=</string>
 	<key>SUScheduledCheckInterval</key>
 	<integer>3600</integer>
 </dict>
