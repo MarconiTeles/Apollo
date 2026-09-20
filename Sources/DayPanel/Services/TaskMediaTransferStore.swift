@@ -683,7 +683,11 @@ final class TaskMediaTransferStore: ObservableObject {
         return destination
     }
 
-    private func hash(_ selections: [TaskMediaSelection]) async throws -> [TaskMediaSelection] {
+    /// Exposto (era `private`) para o coordenador do envio em lote poder
+    /// hashear uma vez só e reaproveitar o mesmo SHA-256 na projeção de
+    /// todas as tarefas de destino — reler o arquivo por tarefa seria
+    /// desperdício puro, já que é literalmente o mesmo arquivo.
+    func hash(_ selections: [TaskMediaSelection]) async throws -> [TaskMediaSelection] {
         try await Task.detached(priority: .userInitiated) {
             try selections.map { selection in
                 var copy = selection

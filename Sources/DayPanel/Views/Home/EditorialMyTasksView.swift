@@ -27,6 +27,7 @@ struct EditorialMyTasksView: View {
     /// before constructing the recycled task rows on route/list changes.
     @State private var listMountReady = false
     @State private var mediaFlowRequest: TaskMediaFlowRequest?
+    @State private var bulkMediaRequest: TaskBulkMediaRequest?
     @ObservedObject private var reviewQueuePresenter = TaskReviewQueuePresenter.shared
     @ObservedObject private var columnLayout = MyTasksColumnLayout.shared
     /// The column boundary currently hovered or dragged — drives the accent guide.
@@ -107,6 +108,10 @@ struct EditorialMyTasksView: View {
         }
         .sheet(item: $mediaFlowRequest) { request in
             TaskMediaFlowSheet(store: appState.taskMediaTransfers, request: request)
+                .environmentObject(appState)
+        }
+        .sheet(item: $bulkMediaRequest) { request in
+            TaskBulkMediaFlowSheet(store: appState.taskMediaTransfers, request: request)
                 .environmentObject(appState)
         }
         .sheet(item: $reviewQueuePresenter.request) { request in
@@ -225,7 +230,8 @@ struct EditorialMyTasksView: View {
                 onClearSelection: clearSelection,
                 onMediaAction: { task, mode in
                     mediaFlowRequest = TaskMediaFlowRequest(task: task, mode: mode)
-                }
+                },
+                onBulkMediaAction: { presentBulkMedia() }
             )
             .apolloStudioNode("tasks.list",
                               title: "Lista de tarefas",
@@ -354,7 +360,20 @@ struct EditorialMyTasksView: View {
     private var bulkToolbar: some View {
         TaskBulkToolbar(tasks: selectedTasks,
                         appState: appState,
-                        onClear: clearSelection)
+                        onClear: clearSelection,
+                        onAttach: selectedTasks.count >= 2 ? presentBulkMedia : nil)
+    }
+
+    /// Abre o envio em lote para a seleção atual. Os candidatos do botão
+    /// "+ tarefa" são as tarefas visíveis que ficaram fora da seleção.
+    private func presentBulkMedia() {
+        let selected = selectedTasks
+        guard selected.count >= 2 else { return }
+        let chosen = Set(selected.map(\.id))
+        bulkMediaRequest = TaskBulkMediaRequest(
+            tasks: selected,
+            candidates: orderedVisibleTasks.filter { !chosen.contains($0.id) }
+        )
     }
 
     private func activate(_ task: CUTask,

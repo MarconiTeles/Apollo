@@ -59,6 +59,9 @@ struct MyTasksAppKitList: NSViewRepresentable {
     let onEndDrag: (Bool) -> Void
     let onClearSelection: () -> Void
     let onMediaAction: (CUTask, TaskMediaFlowMode) -> Void
+    /// Clique na cápsula com várias tarefas selecionadas: abre o envio
+    /// em lote para a seleção inteira, em vez do fluxo de uma tarefa.
+    let onBulkMediaAction: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -197,6 +200,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
         private var onEndDrag: (Bool) -> Void
         private var onClearSelection: () -> Void
         private var onMediaAction: (CUTask, TaskMediaFlowMode) -> Void
+        private var onBulkMediaAction: () -> Void
         private let statusBubble = StatusPickerBubblePresenter()
         private var columnCancellable: AnyCancellable?
         private weak var studioSession: ApolloStudioSession?
@@ -213,6 +217,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
             onEndDrag = parent.onEndDrag
             onClearSelection = parent.onClearSelection
             onMediaAction = parent.onMediaAction
+            onBulkMediaAction = parent.onBulkMediaAction
             super.init()
             // Live column resize: when the user drags a divider, mark visible
             // rows dirty so each re-reads the shared metrics on its next layout.
@@ -322,6 +327,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
             onEndDrag = parent.onEndDrag
             onClearSelection = parent.onClearSelection
             onMediaAction = parent.onMediaAction
+            onBulkMediaAction = parent.onBulkMediaAction
             (collection?.backgroundView as? MyTasksSelectionBackgroundView)?
                 .onClearSelection = onClearSelection
             let newRows = Self.flatten(parent.sections)
@@ -405,7 +411,8 @@ struct MyTasksAppKitList: NSViewRepresentable {
 
         private func configure(_ item: MyTasksTaskItem, task: CUTask) {
             item.bind(task: task, appState: appState)
-            item.setBulkSelected(selectedIds.contains(task.id))
+            item.setBulkSelected(selectedIds.contains(task.id), count: selectedIds.count)
+            item.onBulkMediaAction = { [weak self] in self?.onBulkMediaAction() }
             item.onRowClick = { [weak self] task, rect in
                 self?.onActivate(task, NSEvent.modifierFlags, rect)
             }
@@ -710,6 +717,7 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
     var onEndDrag: ((Bool) -> Void)?
     var onRequestStatusPicker: ((CUTask, NSView) -> Void)?
     var onMediaAction: ((CUTask, TaskMediaFlowMode) -> Void)?
+    var onBulkMediaAction: (() -> Void)?
     var contextActionsProvider: ((CUTask) -> [TaskContextAction]?)? {
         didSet { row.contextActionsProvider = contextActionsProvider }
     }
@@ -731,6 +739,7 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
             guard let self, let task else { return }
             onMediaAction?(task, mode)
         }
+        row.onBulkMediaAction = { [weak self] in self?.onBulkMediaAction?() }
         row.onBeginDrag = { [weak self] in
             guard let self, let task else { return nil }
             return onBeginDrag?(task)
@@ -747,6 +756,7 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
         onEndDrag = nil
         onRequestStatusPicker = nil
         onMediaAction = nil
+        onBulkMediaAction = nil
         contextActionsProvider = nil
         row.prepareForReuse()
     }
@@ -758,7 +768,9 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
         row.contextActionsProvider = contextActionsProvider
     }
 
-    func setBulkSelected(_ selected: Bool) { row.setBulkSelected(selected) }
+    func setBulkSelected(_ selected: Bool, count: Int = 0) {
+        row.setBulkSelected(selected, count: count)
+    }
 }
 
 private final class MyTasksMediaButton: NSButton {
@@ -833,6 +845,11 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     private var tracking: NSTrackingArea?
     private var hovered = false
     private var bulkSelected = false
+    /// Quantas tarefas estão selecionadas no momento. A cápsula ANEXAR
+    /// usa isso para virar plural ("ANEXAR EM 3") quando a linha faz
+    /// parte de uma seleção múltipla — é o que torna óbvio, sem chrome
+    /// novo, que dá para mandar o arquivo para todas de uma vez.
+    private var bulkCount = 0
     private var pressed = false
     private var dragStarted = false
     private var mouseDownTimestamp: TimeInterval?
@@ -847,6 +864,9 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     var onActivate: (() -> Void)?
     var onStatusPicker: ((NSView) -> Void)?
     var onMediaAction: ((TaskMediaFlowMode) -> Void)?
+    /// Disparado no lugar de `onMediaAction` quando a cápsula é clicada
+    /// com várias tarefas selecionadas.
+    var onBulkMediaAction: (() -> Void)?
     var onBeginDrag: (() -> String?)?
     var onEndDrag: ((Bool) -> Void)?
     var contextActionsProvider: ((CUTask) -> [TaskContextAction]?)?
@@ -988,6 +1008,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         pressed = false
         dragStarted = false
         bulkSelected = false
+        bulkCount = 0
         setHoverMotion(active: false, animated: false)
         applyBackground()
     }
@@ -1096,7 +1117,17 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         needsLayout = true
     }
 
-    func setBulkSelected(_ selected: Bool) {
+    func setBulkSelected(_ selected: Bool, count: Int = 0) {
+        let countChanged = bulkCount != count
+        bulkCount = count
+        defer {
+            // A cápsula precisa reagir à contagem mesmo quando o estado
+            // de seleção desta linha não mudou: selecionar uma quarta
+            // tarefa tem que atualizar "ANEXAR EM 3" nas outras três.
+            if countChanged, let store = appState?.taskMediaTransfers, let id = task?.id {
+                updateMediaButton(store: store, taskId: id)
+            }
+        }
         guard bulkSelected != selected else { return }
         bulkSelected = selected
         applyBackground()
@@ -1335,6 +1366,15 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
 
     @objc private func openMedia(_ sender: NSButton) {
         guard appState?.anyPopupOpen != true, let task, let appState else { return }
+        // Seleção múltipla e nada em andamento nesta linha: o clique vale
+        // para todas as tarefas selecionadas. Com um lote em voo a cápsula
+        // volta a ser o controle daquela linha (ENVIAR/ENVIANDO/REPETIR),
+        // senão o usuário perderia o acesso ao próprio envio.
+        if appState.taskMediaTransfers.phase(for: task.id) == nil,
+           bulkSelected, bulkCount >= 2 {
+            onBulkMediaAction?()
+            return
+        }
         switch appState.taskMediaTransfers.phase(for: task.id) {
         case .ready:
             onMediaAction?(.send)
@@ -1652,7 +1692,13 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
             : (accent
                 ? NSColor.controlAccentColor.withAlphaComponent(phase == .sending ? 0.36 : 1).cgColor
                 : NSColor(Editorial.inkFaint.opacity(0.14)).cgColor)
-        media.title = label
+        // Seleção múltipla ativa e nenhum lote em andamento nesta linha:
+        // a cápsula anuncia o destino plural. Quem selecionou 3 tarefas lê
+        // "ANEXAR EM 3" no mesmo botão de sempre, sem precisar descobrir
+        // um menu de contexto escondido.
+        media.title = (phase == nil && bulkSelected && bulkCount >= 2)
+            ? "ANEXAR EM \(bulkCount)"
+            : label
         setMediaTitleColor(mediaBaseTitleColor)
         mediaTrackLayer.backgroundColor = mediaBaseBackground
         mediaProgressLayer.backgroundColor = phase == .preparing
@@ -1660,9 +1706,11 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
             : NSColor.controlAccentColor.cgColor
         mediaProgressLayer.isHidden = !isActiveProgress
         setMediaProgress(isActiveProgress ? progress : (phase == .ready ? 1 : 0), animated: true)
-        media.toolTip = media.title == "ANEXAR"
-            ? "Adicionar HOOKs, BODYs ou vídeos completos"
-            : media.title
+        media.toolTip = media.title.hasPrefix("ANEXAR EM ")
+            ? "Enviar o mesmo arquivo para as \(bulkCount) tarefas selecionadas"
+            : (media.title == "ANEXAR"
+               ? "Adicionar HOOKs, BODYs ou vídeos completos"
+               : media.title)
         let badgeCount = store.batches[taskId].map {
             phase == .partialFailure ? $0.pendingCount : $0.total
         } ?? 0
@@ -2221,7 +2269,8 @@ private struct MyTasksAppKitListCanvasPreview: View {
             onBeginDrag: { [$0.id] },
             onEndDrag: { _ in },
             onClearSelection: {},
-            onMediaAction: { _, _ in }
+            onMediaAction: { _, _ in },
+            onBulkMediaAction: {}
         )
         .frame(width: 1_180, height: 780)
         .background(Editorial.paper)

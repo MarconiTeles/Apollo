@@ -518,6 +518,10 @@ struct TaskBulkToolbar: View {
     let tasks: [CUTask]
     @ObservedObject var appState: AppState
     let onClear: () -> Void
+    /// Abre o envio de arquivo para todas as tarefas selecionadas.
+    /// Opcional porque nem toda superfície que mostra esta barra tem
+    /// para onde levar o fluxo — sem ele o botão simplesmente não aparece.
+    var onAttach: (() -> Void)? = nil
 
     private var actions: [TaskContextAction] {
         TaskBulkActions.actions(for: tasks, appState: appState)
@@ -547,6 +551,24 @@ struct TaskBulkToolbar: View {
             fieldMenu(title: "Prioridade", icon: "flag")
             fieldMenu(title: "Etiquetas", icon: "tag")
             separator
+
+            // Ação de primeira classe: assim que a pessoa seleciona tarefas,
+            // "Anexar" está visível ao lado de Status e Responsáveis. Sem
+            // isso o envio em lote só existiria dentro do menu de contexto,
+            // que ninguém descobre sem clicar com o botão direito por acaso.
+            if let onAttach {
+                Button(action: onAttach) {
+                    Label("Anexar", systemImage: "paperclip")
+                        .font(Editorial.sans(11, .medium))
+                        .padding(.horizontal, 10)
+                        .frame(height: 32)
+                        .contentShape(Capsule(style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .fixedSize()
+                .help("Enviar o mesmo arquivo para as \(tasks.count) tarefas selecionadas")
+            }
 
             Menu {
                 TaskContextMenuItems(actions: overflowActions)
