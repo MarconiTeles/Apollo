@@ -14,10 +14,15 @@ enum TaskMediaRole: String, Codable, CaseIterable, Identifiable, Sendable {
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .lowercased()
         let tokens = raw.split { !$0.isLetter && !$0.isNumber }.map(String.init)
-        if tokens.contains("hook") || tokens.contains(where: { $0.range(of: #"^h\d+$"#, options: .regularExpression) != nil }) {
+        // `h`/`b` sozinhos também contam: a convenção do time é
+        // `[Nome da tarefa] - [H ou B].mp4`, e nem sempre vem o índice.
+        // Antes só `h1`/`b1` ou a palavra inteira eram reconhecidos, e
+        // um arquivo terminado em `- H` chegava sem papel nenhum.
+        if tokens.contains("hook") || tokens.contains("h")
+            || tokens.contains(where: { $0.range(of: #"^h\d+$"#, options: .regularExpression) != nil }) {
             return .hook
         }
-        if tokens.contains("body") || tokens.contains("corpo")
+        if tokens.contains("body") || tokens.contains("corpo") || tokens.contains("b")
             || tokens.contains(where: { $0.range(of: #"^b\d+$"#, options: .regularExpression) != nil }) {
             return .body
         }

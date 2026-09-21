@@ -68,6 +68,22 @@ struct TaskBulkMediaFlowSheet: View {
 
     /// taskId → (selectionId → o que aquela tarefa mudou)
     @State private var overrides: [String: [UUID: TargetOverride]] = [:]
+
+    // MARK: Destino por arquivo
+    //
+    // Quando o nome do arquivo identifica a tarefa (`H4_REPLICA_BALDA_
+    // AIRTON_V02` → "Camiseta 1.0 - Réplica Airton 2"), cada vídeo vai
+    // para a SUA tarefa em vez de para todas. Sem nome que identifique,
+    // o comportamento original continua: um vídeo para todas.
+
+    /// selectionId → taskId. Ausente enquanto o roteamento não está ativo.
+    @State private var assignments: [UUID: String] = [:]
+    /// Arquivos cujo nome bateu com mais de uma tarefa, ou com nenhuma,
+    /// enquanto os outros bateram. Precisam de escolha manual.
+    @State private var unresolvedSelectionIds: Set<UUID> = []
+    /// Liga quando pelo menos um arquivo foi identificado pelo nome.
+    /// Antes disso a tela é a de sempre: tudo vai para todas.
+    @State private var routingActive = false
     @State private var expandedTaskIds: Set<String> = []
     @State private var trimSelectionId: UUID?
     /// Quando o corte é de uma tarefa só, guarda qual. `nil` = corte
@@ -301,7 +317,9 @@ struct TaskBulkMediaFlowSheet: View {
     private var composeBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                sectionLabel("VÍDEOS · PADRÃO PARA TODAS")
+                sectionLabel(routingActive
+                             ? "VÍDEOS · CADA UM PARA SUA TAREFA"
+                             : "VÍDEOS · PADRÃO PARA TODAS")
                 ForEach($selections) { $selection in
                     videoRow(selection: $selection)
                 }
@@ -376,11 +394,7 @@ struct TaskBulkMediaFlowSheet: View {
                     .foregroundStyle(Editorial.ink)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(selection.wrappedValue.trimmed
-                     ? "Cortado · vale para todas"
-                     : "Vale para todas as tarefas")
-                    .font(Editorial.sans(10.5))
-                    .foregroundStyle(Editorial.inkSoft)
+                destinationLine(for: selection.wrappedValue)
             }
 
             Spacer(minLength: 8)
@@ -401,6 +415,51 @@ struct TaskBulkMediaFlowSheet: View {
             .focusEffectDisabled()
         }
         .padding(.vertical, 7)
+    }
+
+    /// Segunda linha do arquivo: para onde ele vai. É aqui que o
+    /// casamento por nome se explica e se corrige — o sistema propõe,
+    /// a pessoa confirma ou troca.
+    @ViewBuilder
+    private func destinationLine(for selection: TaskMediaSelection) -> some View {
+        let assignedTask = assignments[selection.id]
+            .flatMap { id in targets.first { $0.id == id } }
+
+        Menu {
+            Button("Todas as tarefas") { assign(selection.id, to: nil) }
+            Divider()
+            ForEach(targets) { task in
+                Button(task.title) { assign(selection.id, to: task.id) }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if let assignedTask {
+                    Image(systemName: manualAssignments.contains(selection.id)
+                          ? "hand.point.right.fill" : "wand.and.stars")
+                        .font(.system(size: 8.5))
+                    Text(assignedTask.title)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else if unresolvedSelectionIds.contains(selection.id) {
+                    Image(systemName: "questionmark.circle.fill")
+                        .font(.system(size: 8.5))
+                    Text("Escolher tarefa")
+                } else {
+                    Text(selection.trimmed
+                         ? "Cortado · vale para todas"
+                         : "Vale para todas as tarefas")
+                }
+                Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+            }
+            .font(Editorial.sans(10.5))
+            .foregroundStyle(unresolvedSelectionIds.contains(selection.id)
+                             ? Color.orange
+                             : (assignedTask != nil ? Editorial.accent : Editorial.inkSoft))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     private func trimButton(selection: Binding<TaskMediaSelection>) -> some View {
@@ -472,7 +531,16 @@ struct TaskBulkMediaFlowSheet: View {
     /// O que ESTA tarefa vai receber: o padrão do topo, com o papel e o
     /// corte que ela tiver mudado aplicados por cima.
     private func effectiveSelections(for taskId: String) -> [TaskMediaSelection] {
-        selections.map { base in
+        selections.filter { base in
+            // Roteamento desligado: comportamento original, tudo para
+            // todas. Ligado: a tarefa recebe só o que foi endereçado a
+            // ela — e nada do que ficou sem destino, porque empurrar um
+            // arquivo não identificado para todas as tarefas, no meio de
+            // um lote roteado, é o tipo de surpresa que só se descobre
+            // depois de publicado.
+            guard routingActive else { return true }
+            return assignments[base.id] == taskId
+        }.map { base in
             var copy = base
             guard let override = overrides[taskId]?[base.id] else { return copy }
             if let role = override.role { copy.role = role }
@@ -483,6 +551,54 @@ struct TaskBulkMediaFlowSheet: View {
             }
             return copy
         }
+    }
+
+    /// Roda o casamento por nome para os arquivos ainda sem destino
+    /// escolhido à mão. Não sobrescreve escolha manual.
+    private func applyNameMatching() {
+        guard targets.count >= 2 else {
+            routingActive = false
+            unresolvedSelectionIds = []
+            return
+        }
+        var resolved = assignments
+        var unresolved: Set<UUID> = []
+        var matchedAny = false
+
+        for selection in selections where manualAssignments.contains(selection.id) == false {
+            let resolution = TaskMediaNameMatcher.resolve(
+                fileName: selection.fileURL.lastPathComponent, tasks: targets)
+            if let taskId = resolution.suggestedTaskId {
+                resolved[selection.id] = taskId
+                matchedAny = true
+            } else {
+                resolved.removeValue(forKey: selection.id)
+                unresolved.insert(selection.id)
+            }
+        }
+
+        assignments = resolved
+        // Só vale como "sem destino" se o roteamento estiver de pé; com
+        // nenhum arquivo identificado, a tela segue sendo a de sempre.
+        routingActive = matchedAny || !manualAssignments.isEmpty
+        unresolvedSelectionIds = routingActive ? unresolved : []
+    }
+
+    /// Destinos escolhidos à mão — o casamento automático não mexe neles.
+    @State private var manualAssignments: Set<UUID> = []
+
+    private func assign(_ selectionId: UUID, to taskId: String?) {
+        if let taskId {
+            assignments[selectionId] = taskId
+            manualAssignments.insert(selectionId)
+            unresolvedSelectionIds.remove(selectionId)
+            routingActive = true
+        } else {
+            assignments.removeValue(forKey: selectionId)
+            manualAssignments.remove(selectionId)
+            if routingActive { unresolvedSelectionIds.insert(selectionId) }
+        }
+        Task { await reproject() }
     }
 
     private func override(_ taskId: String, _ selectionId: UUID) -> TargetOverride {
@@ -501,6 +617,35 @@ struct TaskBulkMediaFlowSheet: View {
 
     private func hasOverrides(_ taskId: String) -> Bool {
         !(overrides[taskId]?.isEmpty ?? true)
+    }
+
+    /// Os arquivos que vão para esta tarefa. Com o roteamento desligado
+    /// são todos — é o comportamento original, um vídeo para todas.
+    private func selectionsRouted(to taskId: String) -> [TaskMediaSelection] {
+        guard routingActive else { return selections }
+        return selections.filter { assignments[$0.id] == taskId }
+    }
+
+    /// A tarefa declara no título quantos hooks e bodies espera
+    /// ("B1 - H5"). Compara com o que o lote está levando para ela e
+    /// devolve o aviso, se houver excesso.
+    private func quotaWarning(for task: CUTask) -> String? {
+        let quota = TaskMediaQuota.parse(title: task.title)
+        guard !quota.isEmpty else { return nil }
+        let incoming = effectiveSelections(for: task.id)
+        return quota.warning(
+            hooks: incoming.filter { $0.role == .hook }.count,
+            bodies: incoming.filter { $0.role == .body }.count)
+    }
+
+    /// Resumo do que a tarefa pede, para a pessoa ver sem abrir o ClickUp.
+    private func quotaCaption(for task: CUTask) -> String? {
+        let quota = TaskMediaQuota.parse(title: task.title)
+        guard !quota.isEmpty else { return nil }
+        var parts: [String] = []
+        if let hooks = quota.hooks { parts.append("\(hooks) hooks") }
+        if let bodies = quota.bodies { parts.append("\(bodies) body") }
+        return "pede " + parts.joined(separator: " · ")
     }
 
     /// Projeção já calculada para esta tarefa, se houver. Enquanto não
@@ -526,6 +671,15 @@ struct TaskBulkMediaFlowSheet: View {
                         .font(Editorial.sans(10.5))
                         .foregroundStyle(Editorial.inkSoft)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if let warning = quotaWarning(for: task) {
+                    Text(warning)
+                        .font(Editorial.sans(10.5, .medium))
+                        .foregroundStyle(Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let caption = quotaCaption(for: task) {
+                    Text(caption)
+                        .font(Editorial.sans(10.5))
+                        .foregroundStyle(Editorial.inkSoft.opacity(0.8))
                 }
             }
 
@@ -536,7 +690,13 @@ struct TaskBulkMediaFlowSheet: View {
                     .font(Editorial.sans(10.5, .medium))
                     .foregroundStyle(Color.red.opacity(0.9))
             } else if let target {
-                Text("gera \(target.projectedOutputs) "
+                // Com roteamento ligado, a contagem de arquivos é a prova
+                // visível de que cada vídeo foi para a sua tarefa — sem
+                // precisar abrir a gaveta para conferir.
+                Text((routingActive
+                      ? "\(selectionsRouted(to: task.id).count) arq · "
+                      : "")
+                     + "gera \(target.projectedOutputs) "
                      + (target.projectedOutputs == 1 ? "vídeo" : "vídeos"))
                     .font(Editorial.sans(10.5))
                     .foregroundStyle(Editorial.inkSoft)
@@ -597,8 +757,17 @@ struct TaskBulkMediaFlowSheet: View {
     /// vai receber. Tudo parte do padrão lá de cima; o que for mudado
     /// aqui vale só para esta tarefa.
     private func targetOverridePanel(_ task: CUTask) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(selections) { base in
+        // Só os arquivos endereçados A ESTA tarefa. Antes a gaveta
+        // listava todos, o que fazia parecer que cada vídeo ia para
+        // todas as tarefas mesmo quando o roteamento estava certo.
+        let routed = selectionsRouted(to: task.id)
+        return VStack(alignment: .leading, spacing: 8) {
+            if routed.isEmpty {
+                Text("Nenhum arquivo endereçado a esta tarefa.")
+                    .font(Editorial.sans(10.5))
+                    .foregroundStyle(Editorial.inkSoft)
+            }
+            ForEach(routed) { base in
                 let current = override(task.id, base.id)
                 let effectiveRole = current.role ?? base.role
                 HStack(spacing: 8) {
@@ -909,7 +1078,10 @@ struct TaskBulkMediaFlowSheet: View {
                         : " · \(overrides.count) com ajuste próprio")
                      + (coordinator.blockedTargets.isEmpty
                         ? ""
-                        : " · \(coordinator.blockedTargets.count) de fora"))
+                        : " · \(coordinator.blockedTargets.count) de fora")
+                     + (unresolvedSelectionIds.isEmpty
+                        ? ""
+                        : " · \(unresolvedSelectionIds.count) sem tarefa"))
                     .font(Editorial.sans(10.5))
                     .foregroundStyle(Editorial.inkSoft)
             }
@@ -917,6 +1089,7 @@ struct TaskBulkMediaFlowSheet: View {
             primaryButton("CONTINUAR",
                           enabled: !selections.isEmpty
                                 && !coordinator.sendableTargets.isEmpty
+                                && unresolvedSelectionIds.isEmpty
                                 && !working) {
                 stage = .mentions
             }
@@ -1012,6 +1185,7 @@ struct TaskBulkMediaFlowSheet: View {
         // listadas — quem abriu a janela precisa ver para onde o arquivo
         // vai antes mesmo de escolher qual é.
         guard !selections.isEmpty else { return }
+        applyNameMatching()
         working = true
         await coordinator.project(tasks: targets,
                                   selectionsFor: { effectiveSelections(for: $0.id) },
