@@ -1770,15 +1770,16 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
             : (accent
                 ? NSColor.controlAccentColor.withAlphaComponent(phase == .sending ? 0.36 : 1).cgColor
                 : NSColor(Editorial.inkFaint.opacity(0.14)).cgColor)
-        // Seleção múltipla ativa e nenhum lote em andamento nesta linha:
-        // a cápsula anuncia o destino plural. Quem selecionou 3 tarefas lê
-        // "ANEXAR EM 3" no mesmo botão de sempre, sem precisar descobrir
-        // um menu de contexto escondido.
-        media.title = fileDropActive
-            ? "ARRASTE AQUI"
-            : ((phase == nil && bulkSelected && bulkCount >= 2)
-               ? "ANEXAR EM \(bulkCount)"
-               : label)
+        // A cápsula NÃO muda de rótulo com seleção múltipla.
+        //
+        // "ANEXAR EM 4" repetido em toda linha selecionada era ruído, e
+        // não cabia nos ~64pt da coluna (com dois dígitos o texto era
+        // comprimido). A ação de lote tem dono claro: o botão "Anexar"
+        // da barra de seleção, que aparece junto com Status e
+        // Responsáveis. Aqui a cápsula continua "ANEXAR" e apenas ROTEIA
+        // para o lote quando há seleção — a contagem vai no tooltip e no
+        // rótulo de acessibilidade, onde informa sem poluir.
+        media.title = fileDropActive ? "ARRASTE AQUI" : label
         if fileDropActive {
             // Alvo de soltura: fundo laranja translúcido e contorno
             // tracejado, o mesmo vocabulário que a folha de lote usa
@@ -1793,11 +1794,20 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
             : NSColor.controlAccentColor.cgColor
         mediaProgressLayer.isHidden = !isActiveProgress
         setMediaProgress(isActiveProgress ? progress : (phase == .ready ? 1 : 0), animated: true)
-        media.toolTip = media.title.hasPrefix("ANEXAR EM ")
-            ? "Enviar o mesmo arquivo para as \(bulkCount) tarefas selecionadas"
-            : (media.title == "ANEXAR"
-               ? "Adicionar HOOKs, BODYs ou vídeos completos"
-               : media.title)
+        let actsOnSelection = phase == nil && bulkSelected && bulkCount >= 2
+        media.toolTip = fileDropActive
+            ? "Soltar para anexar nesta tarefa"
+            : (actsOnSelection
+               ? "Anexar nas \(bulkCount) tarefas selecionadas"
+               : (media.title == "ANEXAR"
+                  ? "Adicionar HOOKs, BODYs ou vídeos completos"
+                  : media.title))
+        // VoiceOver precisa dizer que a ação afeta várias tarefas — a
+        // cápsula sozinha não denuncia isso em lugar nenhum.
+        media.setAccessibilityLabel(
+            actsOnSelection
+            ? "Anexar vídeos nas \(bulkCount) tarefas selecionadas"
+            : "Anexar ou enviar vídeos desta tarefa")
         let badgeCount = store.batches[taskId].map {
             phase == .partialFailure ? $0.pendingCount : $0.total
         } ?? 0
@@ -1947,7 +1957,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         // No estado de soltura a cápsula cresce só o necessário para
         // caber "ARRASTE AQUI", e para a DIREITA: à esquerda fica o
         // título, que já vive apertado e passaria a ser encoberto.
-        let dropGrowth: CGFloat = fileDropActive ? 28 : 0
+        let dropGrowth: CGFloat = fileDropActive ? 28 : 0  // só o alvo de soltura cresce
         let dropHeight: CGFloat = fileDropActive ? 30 : 26
         media.frame = NSRect(x: m.mediaX,
                              y: centerY - dropHeight / 2,

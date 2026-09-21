@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 // Apollo · Editorial+ "Minhas tarefas".
 //
@@ -30,6 +31,8 @@ struct EditorialMyTasksView: View {
     @State private var bulkMediaRequest: TaskBulkMediaRequest?
     /// Verdadeiro enquanto um arquivo do Finder paira sobre a lista.
     @State private var fileDragOverList = false
+    /// Canal por onde os arquivos soltos chegam à folha já aberta.
+    @StateObject private var bulkInbox = TaskBulkMediaInbox()
     @ObservedObject private var reviewQueuePresenter = TaskReviewQueuePresenter.shared
     @ObservedObject private var columnLayout = MyTasksColumnLayout.shared
     /// The column boundary currently hovered or dragged — drives the accent guide.
@@ -112,12 +115,17 @@ struct EditorialMyTasksView: View {
             TaskMediaFlowSheet(store: appState.taskMediaTransfers, request: request)
                 .environmentObject(appState)
         }
-        // Arrasto de arquivo sobre a lista: com seleção ativa, o popup
-        // de anexo aparece assim que o cursor entra na área, para a
-        // pessoa soltar dentro dele.
+        // Arrasto de arquivo sobre a lista com seleção múltipla ativa:
+        // a área se destaca durante o sobrevoo e o popup abre só no
+        // drop, já com todos os arquivos.
         .onDrop(of: [.fileURL], isTargeted: $fileDragOverList) { providers in
             handleListFileDrop(providers)
         }
+        // O popup abre no SOBREVOO, não no drop: a pessoa vê o alvo
+        // antes de soltar e solta dentro dele, sem espera nenhuma. A
+        // entrega segura das URLs é responsabilidade do `bulkInbox`
+        // (abaixo) — foi a falta dele, e não o momento da abertura, que
+        // antes fazia arquivo se perder.
         .onChange(of: fileDragOverList) { _, hovering in
             guard hovering, selectedTasks.count >= 2 else { return }
             presentBulkMedia()
@@ -392,10 +400,12 @@ struct EditorialMyTasksView: View {
         // `onDrop` pode disparar mais de uma vez.
         guard bulkMediaRequest == nil else { return }
         let chosen = Set(selected.map(\.id))
+        bulkInbox.incoming = []
         bulkMediaRequest = TaskBulkMediaRequest(
             tasks: selected,
             candidates: orderedVisibleTasks.filter { !chosen.contains($0.id) },
-            initialURLs: initialURLs
+            initialURLs: initialURLs,
+            inbox: bulkInbox
         )
     }
 
@@ -404,12 +414,48 @@ struct EditorialMyTasksView: View {
     /// pessoa solta dentro dele. Se a folha não subir a tempo e o
     /// arquivo cair aqui mesmo, o drop é aceito e o vídeo entra junto
     /// com a abertura; nos dois caminhos o arquivo não se perde.
+    /// Recebe os arquivos soltos sobre a lista com seleção múltipla.
+    ///
+    /// O modal abre UMA vez, no fim, já com TODAS as URLs. A versão
+    /// anterior abria no sobrevoo (antes de existir arquivo) e tentava
+    /// completar depois: se o drop terminasse antes, a segunda chamada
+    /// era descartada porque já havia request aberta — e o arquivo se
+    /// perdia sem aviso. Abrir só no drop elimina a corrida inteira.
+    /// Entrega ao popup os arquivos soltos sobre a lista.
+    ///
+    /// Sem espera: cada URL segue para a folha assim que o provedor
+    /// responde, em vez de todas ficarem retidas até a última chegar —
+    /// era daí que vinha o atraso perceptível ao soltar.
+    ///
+    /// Se a folha ainda não estiver aberta (drop sem sobrevoo), ela
+    /// abre já com o arquivo; se estiver, o arquivo entra pelo canal.
+    /// Nos dois caminhos nada se perde.
     private func handleListFileDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard selectedTasks.count >= 2, !providers.isEmpty else { return false }
-        for provider in providers {
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let url else { return }
-                Task { @MainActor in presentBulkMedia(initialURLs: [url]) }
+        guard selectedTasks.count >= 2 else { return false }
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        let usable = fileProviders.isEmpty ? providers : fileProviders
+        guard !usable.isEmpty else { return false }
+
+        for provider in usable {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier,
+                              options: nil) { item, _ in
+                let resolved: URL?
+                switch item {
+                case let data as Data: resolved = URL(dataRepresentation: data, relativeTo: nil)
+                case let url as URL:   resolved = url
+                case let text as String: resolved = URL(string: text)
+                default: resolved = nil
+                }
+                guard let url = resolved else { return }
+                Task { @MainActor in
+                    if bulkMediaRequest == nil {
+                        presentBulkMedia(initialURLs: [url])
+                    } else {
+                        bulkInbox.deliver([url])
+                    }
+                }
             }
         }
         return true

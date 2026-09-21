@@ -5,6 +5,25 @@ import UniformTypeIdentifiers
 /// Pedido de envio em lote: o conjunto de tarefas escolhido na lista,
 /// mais o universo visível para o botão "+ tarefa" poder oferecer quem
 /// ficou de fora.
+/// Canal por onde arquivos chegam a uma folha JÁ ABERTA.
+///
+/// O popup abre assim que o arquivo paira sobre a lista — antes de o
+/// drop acontecer, e portanto antes de existir URL. Sem um canal, o
+/// drop que terminasse fora da folha não teria como entregar nada, e o
+/// arquivo se perdia em silêncio. Aqui a lista deposita as URLs e a
+/// folha as recolhe, esteja ela subindo ou já montada.
+final class TaskBulkMediaInbox: ObservableObject {
+    @Published var incoming: [URL] = []
+
+    /// Sempre chamado da main — quem resolve URL de arrasto responde em
+    /// fila de fundo e salta para cá antes de depositar.
+    @MainActor
+    func deliver(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        incoming.append(contentsOf: urls)
+    }
+}
+
 struct TaskBulkMediaRequest: Identifiable {
     let id = UUID()
     let tasks: [CUTask]
@@ -13,6 +32,8 @@ struct TaskBulkMediaRequest: Identifiable {
     /// o vídeo do Finder para cima da lista. Quando existem, a folha
     /// pula a área de soltar e abre direto no "Anexo em lote".
     var initialURLs: [URL] = []
+    /// Por onde chegam os arquivos soltos DEPOIS da abertura.
+    var inbox: TaskBulkMediaInbox = TaskBulkMediaInbox()
 }
 
 /// Envio de arquivo(s) para várias tarefas de uma vez.
@@ -71,19 +92,25 @@ struct TaskBulkMediaFlowSheet: View {
 
     // MARK: Destino por arquivo
     //
-    // Quando o nome do arquivo identifica a tarefa (`H4_REPLICA_BALDA_
-    // AIRTON_V02` → "Camiseta 1.0 - Réplica Airton 2"), cada vídeo vai
-    // para a SUA tarefa em vez de para todas. Sem nome que identifique,
-    // o comportamento original continua: um vídeo para todas.
+    // Cada vídeo tem UM destino, sempre presente e sempre explícito.
+    //
+    // A versão anterior usava `taskId?` e um `routingActive` para
+    // decidir o que o `nil` queria dizer: ora "vale para todas", ora
+    // "sem destino". Com o roteamento ligado, um arquivo marcado como
+    // "Todas as tarefas" na interface era excluído de TODAS na
+    // projeção — a tela prometia uma coisa e o envio fazia outra.
+    // Três estados nomeados eliminam a ambiguidade na origem.
 
-    /// selectionId → taskId. Ausente enquanto o roteamento não está ativo.
-    @State private var assignments: [UUID: String] = [:]
-    /// Arquivos cujo nome bateu com mais de uma tarefa, ou com nenhuma,
-    /// enquanto os outros bateram. Precisam de escolha manual.
-    @State private var unresolvedSelectionIds: Set<UUID> = []
-    /// Liga quando pelo menos um arquivo foi identificado pelo nome.
-    /// Antes disso a tela é a de sempre: tudo vai para todas.
-    @State private var routingActive = false
+    typealias Destination = TaskMediaDestination
+
+    /// selectionId → destino. Todo arquivo presente em `selections` tem
+    /// entrada aqui; a ausência é tratada como `.all` por segurança, que
+    /// é o comportamento original da tela.
+    @State private var destinations: [UUID: Destination] = [:]
+    /// Arquivos sobre os quais a PESSOA já decidiu — escolher uma
+    /// tarefa, marcar "todas" ou tirar de um cartão. O casamento
+    /// automático não mexe em nenhum deles.
+    @State private var decidedSelectionIds: Set<UUID> = []
     /// Cartão sob o cursor durante um arrasto interno de vídeo.
     @State private var dropHoverTaskId: String?
     /// Vídeo sendo arrastado da lista para um cartão de tarefa.
@@ -177,6 +204,14 @@ struct TaskBulkMediaFlowSheet: View {
         // ou com Reduzir Transparência ligado.
         .floatingPanelGlass(in: outerShape)
         .task { await start() }
+        // Arquivos soltos na lista depois que a folha abriu chegam por
+        // aqui. Consome e limpa, para um mesmo arquivo não entrar duas
+        // vezes se a folha for reavaliada.
+        .onReceive(request.inbox.$incoming) { urls in
+            guard !urls.isEmpty else { return }
+            for url in urls { accept(droppedURL: url) }
+            request.inbox.incoming = []
+        }
         .onAppear { appState.swiftUIPopupOpen = true }
         .onDisappear { appState.swiftUIPopupOpen = false }
     }
@@ -218,18 +253,39 @@ struct TaskBulkMediaFlowSheet: View {
                     .foregroundStyle(Editorial.inkSoft)
             }
             Spacer(minLength: 0)
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .semibold))
+            // Durante o envio o fechar some em vez de mentir.
+            //
+            // O coordenador vive com esta folha: fechar no meio
+            // abandonaria o laço serial, deixando tarefas publicadas e
+            // outras não, sem ninguém para retomar. Não existe
+            // "continuar em segundo plano" aqui, então não oferecemos um
+            // botão que admite três leituras (cancelar, seguir em
+            // background, só esconder). Ao terminar, CONCLUIR fecha; na
+            // falha parcial há TENTAR NOVAMENTE e DESCARTAR.
+            if isSending {
+                Text("Enviando…")
+                    .font(Editorial.sans(10.5, .medium))
                     .foregroundStyle(Editorial.inkSoft)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+                    .help("O envio precisa terminar antes de fechar")
+                    .accessibilityLabel("Enviando. A janela não pode ser fechada até terminar.")
+            } else {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Editorial.inkSoft)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .accessibilityLabel("Fechar")
             }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
         }
         .padding(.horizontal, 20)
     }
+
+    /// Envio em andamento: o laço serial ainda está rodando.
+    private var isSending: Bool { coordinator.phase == .sending }
 
     private var errorBanner: some View {
         Text(localError ?? "")
@@ -320,19 +376,20 @@ struct TaskBulkMediaFlowSheet: View {
     private var composeBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                // Só o que ainda não tem dona. Vídeo já endereçado vive
-                // dentro do cartão da tarefa dele — repetir aqui em cima
-                // dobrava a lista sem acrescentar informação.
-                sectionLabel(routingActive
-                             ? "VÍDEOS SEM TAREFA"
-                             : "VÍDEOS · PADRÃO PARA TODAS")
-                if routingActive && unassignedSelections.isEmpty {
-                    Text("Todos os vídeos já têm tarefa.")
+                // Aqui ficam os que ainda não pertencem a um cartão: os
+                // que valem para todas e os pendentes. Vídeo endereçado
+                // a uma tarefa vive dentro do cartão dela — repetir a
+                // linha inteira aqui dobrava a lista sem informar nada.
+                sectionLabel(unresolvedSelections.isEmpty
+                             ? "VÍDEOS PARA TODAS AS TAREFAS"
+                             : "VÍDEOS · \(unresolvedSelections.count) SEM TAREFA")
+                if topListSelections.isEmpty {
+                    Text("Cada vídeo já tem a sua tarefa.")
                         .font(Editorial.sans(11))
                         .foregroundStyle(Editorial.inkSoft)
                         .padding(.vertical, 4)
                 }
-                ForEach(unassignedSelections) { selection in
+                ForEach(topListSelections) { selection in
                     if let index = selections.firstIndex(where: { $0.id == selection.id }) {
                         videoRow(selection: $selections[index])
                     }
@@ -458,7 +515,7 @@ struct TaskBulkMediaFlowSheet: View {
         }
         return loadFileURLs(from: providers) { url in
             guard let added = accept(droppedURL: url) else { return }
-            assign(added, to: taskId)
+            setDestination(.task(taskId), for: added)
         }
     }
 
@@ -469,7 +526,7 @@ struct TaskBulkMediaFlowSheet: View {
         // `draggingSelectionId`. Usar o estado evita depender da carga
         // assíncrona do provider no caminho comum.
         if let id = draggingSelectionId {
-            assign(id, to: taskId)
+            setDestination(.task(taskId), for: id)
             draggingSelectionId = nil
             dropHoverTaskId = nil
             return true
@@ -478,7 +535,7 @@ struct TaskBulkMediaFlowSheet: View {
         _ = provider.loadObject(ofClass: NSString.self) { value, _ in
             guard let raw = value as? String, let id = UUID(uuidString: raw) else { return }
             Task { @MainActor in
-                assign(id, to: taskId)
+                setDestination(.task(taskId), for: id)
                 dropHoverTaskId = nil
             }
         }
@@ -490,44 +547,69 @@ struct TaskBulkMediaFlowSheet: View {
     /// a pessoa confirma ou troca.
     @ViewBuilder
     private func destinationLine(for selection: TaskMediaSelection) -> some View {
-        let assignedTask = assignments[selection.id]
-            .flatMap { id in targets.first { $0.id == id } }
+        let destination = destination(of: selection.id)
+        let assignedTask = destination.taskId.flatMap { id in targets.first { $0.id == id } }
+        let decided = decidedSelectionIds.contains(selection.id)
 
-        Menu {
-            Button("Todas as tarefas") { assign(selection.id, to: nil) }
+        return Menu {
+            Button("Todas as tarefas") { setDestination(.all, for: selection.id) }
             Divider()
             ForEach(targets) { task in
-                Button(task.title) { assign(selection.id, to: task.id) }
+                Button(task.title) { setDestination(.task(task.id), for: selection.id) }
             }
         } label: {
             HStack(spacing: 4) {
-                if let assignedTask {
-                    Image(systemName: manualAssignments.contains(selection.id)
-                          ? "hand.point.right.fill" : "wand.and.stars")
+                switch destination {
+                case .task:
+                    Image(systemName: decided ? "hand.point.right.fill" : "wand.and.stars")
                         .font(.system(size: 8.5))
-                    Text(assignedTask.title)
+                    Text(assignedTask?.title ?? "Tarefa removida")
                         .lineLimit(1)
                         .truncationMode(.middle)
-                } else if unresolvedSelectionIds.contains(selection.id) {
+                case .unresolved:
                     Image(systemName: "questionmark.circle.fill")
                         .font(.system(size: 8.5))
                     Text("Escolher tarefa")
-                } else {
+                case .all:
+                    Image(systemName: "rectangle.stack")
+                        .font(.system(size: 8.5))
                     Text(selection.trimmed
-                         ? "Cortado · vale para todas"
-                         : "Vale para todas as tarefas")
+                         ? "Cortado · todas as tarefas"
+                         : "Todas as tarefas")
                 }
                 Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
             }
             .font(Editorial.sans(10.5))
-            .foregroundStyle(unresolvedSelectionIds.contains(selection.id)
-                             ? Color.orange
-                             : (assignedTask != nil ? Editorial.accent : Editorial.inkSoft))
+            .foregroundStyle(destinationTint(destination))
             .contentShape(Rectangle())
         }
+        .accessibilityLabel(accessibilityDestination(destination, file: selection))
+        .help("Escolher para qual tarefa este vídeo vai")
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+    }
+
+    private func destinationTint(_ destination: Destination) -> Color {
+        switch destination {
+        case .unresolved: return Color.orange
+        case .task:       return Editorial.accent
+        case .all:        return Editorial.inkSoft
+        }
+    }
+
+    /// VoiceOver precisa dizer o destino por extenso — o ícone e a cor
+    /// que distinguem os três estados não chegam a quem não vê a tela.
+    private func accessibilityDestination(_ destination: Destination,
+                                          file: TaskMediaSelection) -> String {
+        let name = file.fileURL.lastPathComponent
+        switch destination {
+        case .all:        return "\(name): vai para todas as tarefas. Tocar para mudar."
+        case .unresolved: return "\(name): sem tarefa definida. Tocar para escolher."
+        case .task(let id):
+            let title = targets.first { $0.id == id }?.title ?? "tarefa removida"
+            return "\(name): vai para \(title). Tocar para mudar."
+        }
     }
 
     private func trimButton(selection: Binding<TaskMediaSelection>) -> some View {
@@ -607,9 +689,29 @@ struct TaskBulkMediaFlowSheet: View {
         .padding(.top, 6)
     }
 
-    /// Vídeos que ainda não foram endereçados a nenhuma tarefa.
-    private var unassignedSelections: [TaskMediaSelection] {
-        selections.filter { assignments[$0.id] == nil }
+    private func destination(of selectionId: UUID) -> Destination {
+        destinations[selectionId] ?? .all
+    }
+
+    /// A lista de cima reúne o que ainda não pertence a um cartão: os
+    /// que valem para todas e os que estão sem destino.
+    private var topListSelections: [TaskMediaSelection] {
+        selections.filter { destination(of: $0.id).taskId == nil }
+    }
+
+    /// Arquivos que valem para todas as tarefas.
+    private var allTasksSelections: [TaskMediaSelection] {
+        selections.filter { destination(of: $0.id).isAll }
+    }
+
+    private var unresolvedSelections: [TaskMediaSelection] {
+        selections.filter { destination(of: $0.id).isUnresolved }
+    }
+
+    /// Verdadeiro quando pelo menos um arquivo foi endereçado a uma
+    /// tarefa específica — muda só os rótulos, nunca a semântica.
+    private var routingActive: Bool {
+        selections.contains { destination(of: $0.id).taskId != nil }
     }
 
     // MARK: Linha de tarefa
@@ -617,16 +719,7 @@ struct TaskBulkMediaFlowSheet: View {
     /// O que ESTA tarefa vai receber: o padrão do topo, com o papel e o
     /// corte que ela tiver mudado aplicados por cima.
     private func effectiveSelections(for taskId: String) -> [TaskMediaSelection] {
-        selections.filter { base in
-            // Roteamento desligado: comportamento original, tudo para
-            // todas. Ligado: a tarefa recebe só o que foi endereçado a
-            // ela — e nada do que ficou sem destino, porque empurrar um
-            // arquivo não identificado para todas as tarefas, no meio de
-            // um lote roteado, é o tipo de surpresa que só se descobre
-            // depois de publicado.
-            guard routingActive else { return true }
-            return assignments[base.id] == taskId
-        }.map { base in
+        selections.filter { destination(of: $0.id).reaches(taskId) }.map { base in
             var copy = base
             guard let override = overrides[taskId]?[base.id] else { return copy }
             if let role = override.role { copy.role = role }
@@ -641,55 +734,36 @@ struct TaskBulkMediaFlowSheet: View {
 
     /// Roda o casamento por nome para os arquivos ainda sem destino
     /// escolhido à mão. Não sobrescreve escolha manual.
+    /// Roda o casamento por nome nos arquivos sobre os quais a pessoa
+    /// ainda não decidiu.
+    ///
+    /// Regra do que fazer com quem não casou:
+    ///   • nenhum arquivo casou  → todos ficam `.all`, que é a tela de
+    ///     sempre (um vídeo para todas as tarefas);
+    ///   • algum arquivo casou   → os demais viram `.unresolved`. Num
+    ///     lote claramente roteado por nome, mandar o arquivo órfão
+    ///     para todas seria uma surpresa descoberta só depois de
+    ///     publicado.
     private func applyNameMatching() {
-        guard targets.count >= 2 else {
-            routingActive = false
-            unresolvedSelectionIds = []
-            return
-        }
-        var resolved = assignments
-        var unresolved: Set<UUID> = []
-        var matchedAny = false
-
-        for selection in selections where manualAssignments.contains(selection.id) == false {
-            let resolution = TaskMediaNameMatcher.resolve(
-                fileName: selection.fileURL.lastPathComponent, tasks: targets)
-            if let taskId = resolution.suggestedTaskId {
-                resolved[selection.id] = taskId
-                matchedAny = true
-            } else {
-                resolved.removeValue(forKey: selection.id)
-                unresolved.insert(selection.id)
-            }
-        }
-
-        assignments = resolved
-        // Só vale como "sem destino" se o roteamento estiver de pé; com
-        // nenhum arquivo identificado, a tela segue sendo a de sempre.
-        routingActive = matchedAny || !manualAssignments.isEmpty
-        unresolvedSelectionIds = routingActive ? unresolved : []
+        // A regra vive em `TaskMediaRouting`, fora da View, para poder
+        // ser testada — é ela que garante que "todas" signifique todas.
+        destinations = TaskMediaRouting.resolve(
+            files: selections.map { .init(id: $0.id, name: $0.fileURL.lastPathComponent) },
+            tasks: targets,
+            decided: decidedSelectionIds.reduce(into: [:]) { result, id in
+                if let current = destinations[id] { result[id] = current }
+            })
     }
 
-    /// Arquivos sobre os quais a PESSOA já decidiu — tanto ao escolher
-    /// uma tarefa quanto ao tirar de uma. O casamento automático não
-    /// mexe em nenhum deles.
-    @State private var manualAssignments: Set<UUID> = []
-
-    private func assign(_ selectionId: UUID, to taskId: String?) {
-        if let taskId {
-            assignments[selectionId] = taskId
-            unresolvedSelectionIds.remove(selectionId)
-            routingActive = true
-        } else {
-            assignments.removeValue(forKey: selectionId)
-            if routingActive { unresolvedSelectionIds.insert(selectionId) }
-        }
-        // O id ENTRA no conjunto de decididos nos dois casos, inclusive
-        // ao tirar de uma tarefa. Antes ele saía, e o casador automático
-        // reatribuía o arquivo à mesma tarefa na projeção seguinte — o
-        // ✕ parecia não funcionar porque o vídeo voltava no mesmo
-        // instante. Decisão da pessoa manda, inclusive a de remover.
-        manualAssignments.insert(selectionId)
+    /// Registra a decisão da pessoa. Vale sobre o casamento automático,
+    /// inclusive quando a decisão é tirar o arquivo de uma tarefa.
+    private func setDestination(_ destination: Destination, for selectionId: UUID) {
+        destinations[selectionId] = destination
+        // O id entra em "decididos" em QUALQUER dos três casos. Antes,
+        // remover saía do conjunto e o casador reatribuía o arquivo à
+        // mesma tarefa na projeção seguinte — o ✕ parecia não funcionar
+        // porque o vídeo voltava no mesmo instante.
+        decidedSelectionIds.insert(selectionId)
         Task { await reproject() }
     }
 
@@ -700,7 +774,9 @@ struct TaskBulkMediaFlowSheet: View {
         forTask.removeValue(forKey: selectionId)
         if forTask.isEmpty { overrides.removeValue(forKey: taskId) }
         else { overrides[taskId] = forTask }
-        assign(selectionId, to: nil)
+        // Sai do cartão como PENDENTE, não como "todas": tirar de uma
+        // tarefa é dizer "aqui não", não "em todas".
+        setDestination(.unresolved, for: selectionId)
     }
 
     private func override(_ taskId: String, _ selectionId: UUID) -> TargetOverride {
@@ -723,9 +799,11 @@ struct TaskBulkMediaFlowSheet: View {
 
     /// Os arquivos que vão para esta tarefa. Com o roteamento desligado
     /// são todos — é o comportamento original, um vídeo para todas.
+    /// Só os arquivos endereçados NOMINALMENTE a esta tarefa. Os que
+    /// valem para todas não entram: eles aparecem no cartão como uma
+    /// linha compacta, para não repetir a mesma linha em cada cartão.
     private func selectionsRouted(to taskId: String) -> [TaskMediaSelection] {
-        guard routingActive else { return selections }
-        return selections.filter { assignments[$0.id] == taskId }
+        selections.filter { destination(of: $0.id).taskId == taskId }
     }
 
     /// A tarefa declara no título quantos hooks e bodies espera
@@ -772,7 +850,11 @@ struct TaskBulkMediaFlowSheet: View {
 
     private func state(of task: CUTask,
                        projection target: TaskBulkMediaCoordinator.Target?) -> TargetState {
-        if selectionsRouted(to: task.id).isEmpty { return .awaitingVideo }
+        // "Sem vídeo" é receber NADA — nem endereçado a ela, nem dos
+        // que valem para todas.
+        if selectionsRouted(to: task.id).isEmpty && allTasksSelections.isEmpty {
+            return .awaitingVideo
+        }
         if let reason = target?.blockedReason { return .blocked(reason) }
         return .ready(target?.projectedOutputs ?? 0)
     }
@@ -822,12 +904,27 @@ struct TaskBulkMediaFlowSheet: View {
             .padding(.top, 10)
             .padding(.bottom, routed.isEmpty ? 10 : 8)
 
-            if routed.isEmpty {
-                emptyTargetSlot(isDropTarget: isDropTarget)
+            if routed.isEmpty && allTasksSelections.isEmpty {
+                emptyTargetSlot(isDropTarget: isDropTarget, task: task)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(routed) { base in
                         routedFileRow(base, task: task)
+                    }
+                    // Os que valem para todas entram aqui também — o
+                    // cartão tem que dizer tudo o que a tarefa recebe.
+                    // Uma linha compacta em vez da linha inteira, para
+                    // não repetir o mesmo arquivo em cada cartão.
+                    if !allTasksSelections.isEmpty {
+                        HStack(spacing: 6) {
+                            Image(systemName: "rectangle.stack")
+                                .font(.system(size: 9))
+                            Text(allTasksSelections.count == 1
+                                 ? "+ 1 vídeo que vale para todas"
+                                 : "+ \(allTasksSelections.count) vídeos que valem para todas")
+                        }
+                        .font(Editorial.sans(10.5))
+                        .foregroundStyle(Editorial.inkSoft.opacity(0.9))
                     }
                 }
                 .padding(.horizontal, 12)
@@ -884,12 +981,32 @@ struct TaskBulkMediaFlowSheet: View {
     }
 
     /// Vazio chamativo: é o estado que pede ação da pessoa.
-    private func emptyTargetSlot(isDropTarget: Bool) -> some View {
+    private func emptyTargetSlot(isDropTarget: Bool, task: CUTask) -> some View {
+        // Instrução que vale para os dois caminhos: o vídeo pode vir da
+        // lista de cima OU de outro cartão. E o menu ao lado garante que
+        // dá para resolver sem arrastar — teclado e VoiceOver inclusive.
         HStack(spacing: 7) {
             Image(systemName: "arrow.down.to.line")
                 .font(.system(size: 11, weight: .medium))
-            Text(isDropTarget ? "Soltar aqui" : "Arraste um vídeo da lista acima")
+            Text(isDropTarget ? "Soltar aqui" : "Arraste um vídeo para cá")
                 .font(Editorial.sans(11, .medium))
+            if !isDropTarget && !selections.isEmpty {
+                Menu {
+                    ForEach(selections) { selection in
+                        Button(selection.fileURL.lastPathComponent) {
+                            setDestination(.task(task.id), for: selection.id)
+                        }
+                    }
+                } label: {
+                    Text("ou escolher")
+                        .font(Editorial.sans(11, .semibold))
+                        .underline()
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("Escolher um vídeo para \(task.title)")
+            }
         }
         .foregroundStyle(isDropTarget ? Editorial.accent : Color.orange.opacity(0.95))
         .frame(maxWidth: .infinity)
@@ -1130,11 +1247,12 @@ struct TaskBulkMediaFlowSheet: View {
                                 .foregroundStyle(Editorial.ink)
                                 .lineLimit(1)
                             Spacer(minLength: 8)
-                            Text(statusLabel(for: target))
+                            Text(liveStatusLabel(for: target.task.id))
                                 .font(Editorial.sans(10.5, .medium))
-                                .foregroundStyle(target.phase == .sent
+                                .foregroundStyle(store.phase(for: target.task.id) == .sent
                                                  ? Color.green.opacity(0.9)
                                                  : Editorial.inkSoft)
+                                .monospacedDigit()
                         }
                         // Barra desenhada à mão em vez de `ProgressView`.
                         // O `.tint(Editorial.accent)` não estava pegando no
@@ -1148,15 +1266,15 @@ struct TaskBulkMediaFlowSheet: View {
                                 Capsule()
                                     .fill(Editorial.inkFaint.opacity(0.18))
                                 Capsule()
-                                    .fill(target.phase == .sent
+                                    .fill(store.phase(for: target.task.id) == .sent
                                           ? Color.green.opacity(0.85)
                                           : Editorial.accent)
-                                    .frame(width: geo.size.width
-                                           * min(max(target.phase == .sent
-                                                     ? 1 : target.progress, 0), 1))
+                                    .frame(width: geo.size.width * liveProgress(for: target.task.id))
                             }
                         }
                         .frame(height: 4)
+                        .animation(.easeOut(duration: 0.2),
+                                   value: liveProgress(for: target.task.id))
                         if let failure = target.failureMessage {
                             Text(failure)
                                 .font(Editorial.sans(10.5))
@@ -1174,13 +1292,30 @@ struct TaskBulkMediaFlowSheet: View {
         }
     }
 
-    private func statusLabel(for target: TaskBulkMediaCoordinator.Target) -> String {
-        switch target.phase {
-        case .sent: return "enviado"
-        case .sending: return "\(Int((target.progress * 100).rounded()))%"
-        case .preparing: return "preparando"
-        case .partialFailure, .failed: return "falhou"
-        default: return "na fila"
+    /// Lê o estado DIRETO do store, que publica a cada passo do
+    /// preparo e do upload.
+    ///
+    /// A versão anterior lia o instantâneo gravado em `Target`, que só
+    /// é atualizado quando `prepareAdd` e `send` terminam: a tarefa
+    /// ficava "na fila" durante todo o trabalho e saltava para o estado
+    /// final de uma vez. Como a folha observa o store, ler dele faz a
+    /// barra andar de verdade — sem criar transferência nova.
+    private func liveProgress(for taskId: String) -> Double {
+        if store.phase(for: taskId) == .sent { return 1 }
+        return min(max(store.progress(for: taskId), 0), 1)
+    }
+
+    private func liveStatusLabel(for taskId: String) -> String {
+        switch store.phase(for: taskId) {
+        case .sent:           return "enviado"
+        case .sending:        return "enviando \(Int((liveProgress(for: taskId) * 100).rounded()))%"
+        case .preparing:      return store.isComposing(for: taskId)
+                                     ? "juntando \(Int((liveProgress(for: taskId) * 100).rounded()))%"
+                                     : "preparando"
+        case .ready:          return "pronto"
+        case .partialFailure: return "incompleto"
+        case .failed:         return "falhou"
+        case nil:             return "na fila"
         }
     }
 
@@ -1217,9 +1352,9 @@ struct TaskBulkMediaFlowSheet: View {
                      + (coordinator.blockedTargets.isEmpty
                         ? ""
                         : " · \(coordinator.blockedTargets.count) de fora")
-                     + (unresolvedSelectionIds.isEmpty
+                     + (unresolvedSelections.isEmpty
                         ? ""
-                        : " · \(unresolvedSelectionIds.count) sem tarefa"))
+                        : " · \(unresolvedSelections.count) sem tarefa"))
                     .font(Editorial.sans(10.5))
                     .foregroundStyle(Editorial.inkSoft)
             }
@@ -1227,7 +1362,7 @@ struct TaskBulkMediaFlowSheet: View {
             primaryButton("CONTINUAR",
                           enabled: !selections.isEmpty
                                 && !coordinator.sendableTargets.isEmpty
-                                && unresolvedSelectionIds.isEmpty
+                                && unresolvedSelections.isEmpty
                                 && !working) {
                 stage = .mentions
             }
