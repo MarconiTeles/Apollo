@@ -9,6 +9,10 @@ struct TaskBulkMediaRequest: Identifiable {
     let id = UUID()
     let tasks: [CUTask]
     let candidates: [CUTask]
+    /// Arquivos que já vieram junto com a abertura — o caso de arrastar
+    /// o vídeo do Finder para cima da lista. Quando existem, a folha
+    /// pula a área de soltar e abre direto no "Anexo em lote".
+    var initialURLs: [URL] = []
 }
 
 /// Envio de arquivo(s) para várias tarefas de uma vez.
@@ -995,6 +999,11 @@ struct TaskBulkMediaFlowSheet: View {
         // seguinte abrir com as regras já calculadas em vez de piscar
         // "calculando…" depois.
         await coordinator.warmUp(tasks: targets, appState: appState)
+        // Arrastou o arquivo direto do Finder para a lista: o vídeo já
+        // veio junto, não faz sentido pedir de novo.
+        if !request.initialURLs.isEmpty {
+            for url in request.initialURLs { accept(droppedURL: url) }
+        }
     }
 
     @MainActor

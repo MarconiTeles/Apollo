@@ -28,6 +28,8 @@ struct EditorialMyTasksView: View {
     @State private var listMountReady = false
     @State private var mediaFlowRequest: TaskMediaFlowRequest?
     @State private var bulkMediaRequest: TaskBulkMediaRequest?
+    /// Verdadeiro enquanto um arquivo do Finder paira sobre a lista.
+    @State private var fileDragOverList = false
     @ObservedObject private var reviewQueuePresenter = TaskReviewQueuePresenter.shared
     @ObservedObject private var columnLayout = MyTasksColumnLayout.shared
     /// The column boundary currently hovered or dragged — drives the accent guide.
@@ -109,6 +111,16 @@ struct EditorialMyTasksView: View {
         .sheet(item: $mediaFlowRequest) { request in
             TaskMediaFlowSheet(store: appState.taskMediaTransfers, request: request)
                 .environmentObject(appState)
+        }
+        // Arrasto de arquivo sobre a lista: com seleção ativa, o popup
+        // de anexo aparece assim que o cursor entra na área, para a
+        // pessoa soltar dentro dele.
+        .onDrop(of: [.fileURL], isTargeted: $fileDragOverList) { providers in
+            handleListFileDrop(providers)
+        }
+        .onChange(of: fileDragOverList) { _, hovering in
+            guard hovering, selectedTasks.count >= 2 else { return }
+            presentBulkMedia()
         }
         .sheet(item: $bulkMediaRequest) { request in
             TaskBulkMediaFlowSheet(store: appState.taskMediaTransfers, request: request)
@@ -361,19 +373,40 @@ struct EditorialMyTasksView: View {
         TaskBulkToolbar(tasks: selectedTasks,
                         appState: appState,
                         onClear: clearSelection,
-                        onAttach: selectedTasks.count >= 2 ? presentBulkMedia : nil)
+                        onAttach: selectedTasks.count >= 2
+                                  ? { presentBulkMedia() } : nil)
     }
 
     /// Abre o envio em lote para a seleção atual. Os candidatos do botão
     /// "+ tarefa" são as tarefas visíveis que ficaram fora da seleção.
-    private func presentBulkMedia() {
+    private func presentBulkMedia(initialURLs: [URL] = []) {
         let selected = selectedTasks
         guard selected.count >= 2 else { return }
+        // Já aberto: não empilha outra folha. Durante um arrasto o
+        // `onDrop` pode disparar mais de uma vez.
+        guard bulkMediaRequest == nil else { return }
         let chosen = Set(selected.map(\.id))
         bulkMediaRequest = TaskBulkMediaRequest(
             tasks: selected,
-            candidates: orderedVisibleTasks.filter { !chosen.contains($0.id) }
+            candidates: orderedVisibleTasks.filter { !chosen.contains($0.id) },
+            initialURLs: initialURLs
         )
+    }
+
+    /// Arrastar um vídeo do Finder para cima da lista, com tarefas
+    /// selecionadas, abre o popup de anexo já durante o arrasto — a
+    /// pessoa solta dentro dele. Se a folha não subir a tempo e o
+    /// arquivo cair aqui mesmo, o drop é aceito e o vídeo entra junto
+    /// com a abertura; nos dois caminhos o arquivo não se perde.
+    private func handleListFileDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard selectedTasks.count >= 2, !providers.isEmpty else { return false }
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                Task { @MainActor in presentBulkMedia(initialURLs: [url]) }
+            }
+        }
+        return true
     }
 
     private func activate(_ task: CUTask,
