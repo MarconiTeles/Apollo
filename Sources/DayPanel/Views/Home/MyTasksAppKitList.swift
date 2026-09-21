@@ -62,6 +62,8 @@ struct MyTasksAppKitList: NSViewRepresentable {
     /// Clique na cápsula com várias tarefas selecionadas: abre o envio
     /// em lote para a seleção inteira, em vez do fluxo de uma tarefa.
     let onBulkMediaAction: () -> Void
+    /// Vídeo do Finder solto sobre a linha de UMA tarefa.
+    let onFileDrop: (CUTask, [URL]) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -201,6 +203,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
         private var onClearSelection: () -> Void
         private var onMediaAction: (CUTask, TaskMediaFlowMode) -> Void
         private var onBulkMediaAction: () -> Void
+        private var onFileDrop: (CUTask, [URL]) -> Void
         private let statusBubble = StatusPickerBubblePresenter()
         private var columnCancellable: AnyCancellable?
         private weak var studioSession: ApolloStudioSession?
@@ -218,6 +221,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
             onClearSelection = parent.onClearSelection
             onMediaAction = parent.onMediaAction
             onBulkMediaAction = parent.onBulkMediaAction
+            onFileDrop = parent.onFileDrop
             super.init()
             // Live column resize: when the user drags a divider, mark visible
             // rows dirty so each re-reads the shared metrics on its next layout.
@@ -328,6 +332,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
             onClearSelection = parent.onClearSelection
             onMediaAction = parent.onMediaAction
             onBulkMediaAction = parent.onBulkMediaAction
+            onFileDrop = parent.onFileDrop
             (collection?.backgroundView as? MyTasksSelectionBackgroundView)?
                 .onClearSelection = onClearSelection
             let newRows = Self.flatten(parent.sections)
@@ -413,6 +418,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
             item.bind(task: task, appState: appState)
             item.setBulkSelected(selectedIds.contains(task.id), count: selectedIds.count)
             item.onBulkMediaAction = { [weak self] in self?.onBulkMediaAction() }
+            item.onFileDrop = { [weak self] task, urls in self?.onFileDrop(task, urls) }
             item.onRowClick = { [weak self] task, rect in
                 self?.onActivate(task, NSEvent.modifierFlags, rect)
             }
@@ -718,6 +724,7 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
     var onRequestStatusPicker: ((CUTask, NSView) -> Void)?
     var onMediaAction: ((CUTask, TaskMediaFlowMode) -> Void)?
     var onBulkMediaAction: (() -> Void)?
+    var onFileDrop: ((CUTask, [URL]) -> Void)?
     var contextActionsProvider: ((CUTask) -> [TaskContextAction]?)? {
         didSet { row.contextActionsProvider = contextActionsProvider }
     }
@@ -740,6 +747,7 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
             onMediaAction?(task, mode)
         }
         row.onBulkMediaAction = { [weak self] in self?.onBulkMediaAction?() }
+        row.onFileDrop = { [weak self] task, urls in self?.onFileDrop?(task, urls) }
         row.onBeginDrag = { [weak self] in
             guard let self, let task else { return nil }
             return onBeginDrag?(task)
@@ -757,6 +765,7 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
         onRequestStatusPicker = nil
         onMediaAction = nil
         onBulkMediaAction = nil
+        onFileDrop = nil
         contextActionsProvider = nil
         row.prepareForReuse()
     }
@@ -828,6 +837,21 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     private let reviewTrackLayer = CALayer()
     private let review = MyTasksMediaButton()
     private let mediaTrackLayer = CALayer()
+    /// Contorno tracejado laranja, visível só quando um arquivo do
+    /// Finder está pairando sobre esta linha.
+    private let mediaDashLayer = CAShapeLayer()
+    /// Arquivo do Finder pairando sobre a linha: a cápsula ANEXAR vira
+    /// alvo de soltura. Só vale para UMA tarefa — com seleção múltipla
+    /// ativa o arrasto pertence ao fluxo de lote.
+    private var fileDropActive = false {
+        didSet {
+            guard oldValue != fileDropActive else { return }
+            needsLayout = true
+            if let store = appState?.taskMediaTransfers, let id = task?.id {
+                updateMediaButton(store: store, taskId: id)
+            }
+        }
+    }
     private let mediaProgressLayer = CALayer()
     /// Máscara retangular que revela o preenchimento de progresso — a largura
     /// anima, o pill mantém o formato (nada de scale X deformando as pontas).
@@ -867,6 +891,8 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     /// Disparado no lugar de `onMediaAction` quando a cápsula é clicada
     /// com várias tarefas selecionadas.
     var onBulkMediaAction: (() -> Void)?
+    /// Vídeo(s) arrastados do Finder e soltos sobre esta linha.
+    var onFileDrop: ((CUTask, [URL]) -> Void)?
     var onBeginDrag: (() -> String?)?
     var onEndDrag: ((Bool) -> Void)?
     var contextActionsProvider: ((CUTask) -> [TaskContextAction]?)?
@@ -887,6 +913,13 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         }
         reviewTrackLayer.masksToBounds = false
         mediaTrackLayer.masksToBounds = false
+        mediaDashLayer.fillColor = nil
+        mediaDashLayer.lineWidth = 1.5
+        mediaDashLayer.lineDashPattern = [5, 4]
+        mediaDashLayer.isHidden = true
+        layer?.addSublayer(mediaDashLayer)
+        // A linha inteira aceita arquivo; o alvo visual é a cápsula.
+        registerForDraggedTypes([.fileURL])
         mediaProgressLayer.masksToBounds = true
         // O preenchimento de progresso fica SEMPRE do tamanho do pill (raio 13
         // intacto) e é revelado por uma MÁSCARA retangular de largura animada.
@@ -1364,6 +1397,51 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
                    in: sender)
     }
 
+    // MARK: - Arrastar arquivo do Finder sobre a linha
+
+    /// Só aceita quando NÃO há seleção múltipla: com 2+ tarefas
+    /// selecionadas o arrasto pertence ao fluxo de lote, que abre o
+    /// popup próprio. Aqui é o atalho para UMA tarefa.
+    private func canAcceptFileDrop(_ sender: NSDraggingInfo) -> Bool {
+        guard bulkCount < 2, task != nil, appState?.anyPopupOpen != true else { return false }
+        return sender.draggingPasteboard.canReadObject(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard canAcceptFileDrop(sender) else { return [] }
+        fileDropActive = true
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        fileDropActive ? .copy : []
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        fileDropActive = false
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        fileDropActive = false
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { fileDropActive = false }
+        guard canAcceptFileDrop(sender), let task else { return false }
+        let urls = (sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        let videos = urls.filter {
+            ["mp4", "mov", "m4v", "avi", "mkv", "webm"]
+                .contains($0.pathExtension.lowercased())
+        }
+        guard !videos.isEmpty else { return false }
+        onFileDrop?(task, videos)
+        return true
+    }
+
     @objc private func openMedia(_ sender: NSButton) {
         guard appState?.anyPopupOpen != true, let task, let appState else { return }
         // Seleção múltipla e nada em andamento nesta linha: o clique vale
@@ -1696,9 +1774,18 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         // a cápsula anuncia o destino plural. Quem selecionou 3 tarefas lê
         // "ANEXAR EM 3" no mesmo botão de sempre, sem precisar descobrir
         // um menu de contexto escondido.
-        media.title = (phase == nil && bulkSelected && bulkCount >= 2)
-            ? "ANEXAR EM \(bulkCount)"
-            : label
+        media.title = fileDropActive
+            ? "ARRASTE AQUI"
+            : ((phase == nil && bulkSelected && bulkCount >= 2)
+               ? "ANEXAR EM \(bulkCount)"
+               : label)
+        if fileDropActive {
+            // Alvo de soltura: fundo laranja translúcido e contorno
+            // tracejado, o mesmo vocabulário que a folha de lote usa
+            // para "sem vídeo, arraste aqui".
+            mediaBaseTitleColor = NSColor.systemOrange
+            mediaBaseBackground = NSColor.systemOrange.withAlphaComponent(0.16).cgColor
+        }
         setMediaTitleColor(mediaBaseTitleColor)
         mediaTrackLayer.backgroundColor = mediaBaseBackground
         mediaProgressLayer.backgroundColor = phase == .preparing
@@ -1857,9 +1944,26 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
             roundedRect: CGRect(origin: .zero, size: review.frame.size),
             cornerWidth: 13, cornerHeight: 13, transform: nil)
 
-        media.frame = NSRect(x: m.mediaX, y: centerY - 13,
-                             width: m.mediaWidth, height: 26)
+        // No estado de soltura a cápsula cresce só o necessário para
+        // caber "ARRASTE AQUI", e para a DIREITA: à esquerda fica o
+        // título, que já vive apertado e passaria a ser encoberto.
+        let dropGrowth: CGFloat = fileDropActive ? 28 : 0
+        let dropHeight: CGFloat = fileDropActive ? 30 : 26
+        media.frame = NSRect(x: m.mediaX,
+                             y: centerY - dropHeight / 2,
+                             width: m.mediaWidth + dropGrowth,
+                             height: dropHeight)
         mediaTrackLayer.frame = media.frame
+        mediaDashLayer.isHidden = !fileDropActive
+        if fileDropActive {
+            mediaDashLayer.frame = media.frame
+            mediaDashLayer.path = CGPath(roundedRect: CGRect(origin: .zero,
+                                                             size: media.frame.size),
+                                         cornerWidth: dropHeight / 2,
+                                         cornerHeight: dropHeight / 2,
+                                         transform: nil)
+            mediaDashLayer.strokeColor = NSColor.systemOrange.cgColor
+        }
         mediaTrackLayer.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: media.frame.size),
                                             cornerWidth: 13, cornerHeight: 13,
                                             transform: nil)
@@ -2270,7 +2374,8 @@ private struct MyTasksAppKitListCanvasPreview: View {
             onEndDrag: { _ in },
             onClearSelection: {},
             onMediaAction: { _, _ in },
-            onBulkMediaAction: {}
+            onBulkMediaAction: {},
+            onFileDrop: { _, _ in }
         )
         .frame(width: 1_180, height: 780)
         .background(Editorial.paper)

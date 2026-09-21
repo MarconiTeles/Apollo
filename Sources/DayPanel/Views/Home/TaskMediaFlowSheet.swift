@@ -14,6 +14,10 @@ struct TaskMediaFlowRequest: Identifiable {
     let id = UUID()
     let task: CUTask
     let mode: TaskMediaFlowMode
+    /// Arquivos que já vieram junto com a abertura — o caso de arrastar
+    /// o vídeo do Finder direto sobre a linha da tarefa. Quando existem,
+    /// o seletor do sistema não abre: a folha já começa na classificação.
+    var initialURLs: [URL] = []
 }
 
 struct TaskMediaFlowSheet: View {
@@ -1218,7 +1222,12 @@ struct TaskMediaFlowSheet: View {
         await store.loadCatalog(for: request.task, appState: appState)
         switch request.mode {
         case .add:
-            openAddPanel()
+            if request.initialURLs.isEmpty {
+                openAddPanel()
+            } else {
+                selections = request.initialURLs.map { TaskMediaSelection(fileURL: $0) }
+                stage = .classify
+            }
         case .replace:
             stage = .selectReplacement
         case .replacePending:

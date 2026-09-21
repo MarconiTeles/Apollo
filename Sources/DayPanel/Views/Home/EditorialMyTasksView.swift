@@ -243,7 +243,13 @@ struct EditorialMyTasksView: View {
                 onMediaAction: { task, mode in
                     mediaFlowRequest = TaskMediaFlowRequest(task: task, mode: mode)
                 },
-                onBulkMediaAction: { presentBulkMedia() }
+                onBulkMediaAction: { presentBulkMedia() },
+                onFileDrop: { task, urls in
+                    // Arrastou sobre UMA tarefa: abre o fluxo de sempre
+                    // já com o vídeo dentro, sem passar pelo seletor.
+                    mediaFlowRequest = TaskMediaFlowRequest(
+                        task: task, mode: .add, initialURLs: urls)
+                }
             )
             .apolloStudioNode("tasks.list",
                               title: "Lista de tarefas",
