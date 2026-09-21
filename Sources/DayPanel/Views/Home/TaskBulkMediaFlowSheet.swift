@@ -84,7 +84,10 @@ struct TaskBulkMediaFlowSheet: View {
     /// Liga quando pelo menos um arquivo foi identificado pelo nome.
     /// Antes disso a tela é a de sempre: tudo vai para todas.
     @State private var routingActive = false
-    @State private var expandedTaskIds: Set<String> = []
+    /// Cartão sob o cursor durante um arrasto interno de vídeo.
+    @State private var dropHoverTaskId: String?
+    /// Vídeo sendo arrastado da lista para um cartão de tarefa.
+    @State private var draggingSelectionId: UUID?
     @State private var trimSelectionId: UUID?
     /// Quando o corte é de uma tarefa só, guarda qual. `nil` = corte
     /// padrão, que vale para todas as que não divergiram.
@@ -317,11 +320,22 @@ struct TaskBulkMediaFlowSheet: View {
     private var composeBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                // Só o que ainda não tem dona. Vídeo já endereçado vive
+                // dentro do cartão da tarefa dele — repetir aqui em cima
+                // dobrava a lista sem acrescentar informação.
                 sectionLabel(routingActive
-                             ? "VÍDEOS · CADA UM PARA SUA TAREFA"
+                             ? "VÍDEOS SEM TAREFA"
                              : "VÍDEOS · PADRÃO PARA TODAS")
-                ForEach($selections) { $selection in
-                    videoRow(selection: $selection)
+                if routingActive && unassignedSelections.isEmpty {
+                    Text("Todos os vídeos já têm tarefa.")
+                        .font(Editorial.sans(11))
+                        .foregroundStyle(Editorial.inkSoft)
+                        .padding(.vertical, 4)
+                }
+                ForEach(unassignedSelections) { selection in
+                    if let index = selections.firstIndex(where: { $0.id == selection.id }) {
+                        videoRow(selection: $selections[index])
+                    }
                 }
                 addVideoRow
 
@@ -330,22 +344,20 @@ struct TaskBulkMediaFlowSheet: View {
                     .padding(.vertical, 12)
 
                 sectionLabel("TAREFAS DE DESTINO")
-                Text("Abra uma tarefa para enviar com papel ou corte próprios nela.")
+                Text("Arraste um vídeo da lista acima para a tarefa que ele pertence.")
                     .font(Editorial.sans(10.5))
                     .foregroundStyle(Editorial.inkSoft.opacity(0.8))
-                    .padding(.bottom, 6)
-                ForEach(targets) { task in
-                    VStack(alignment: .leading, spacing: 0) {
-                        targetRow(task, projection: projection(for: task))
-                        // A gaveta só existe quando a pessoa pede. Fechada,
-                        // a tela continua sendo "um vídeo para N tarefas";
-                        // aberta, vira a bancada daquela tarefa.
-                        if expandedTaskIds.contains(task.id) {
-                            targetOverridePanel(task)
-                        }
+                    .padding(.bottom, 10)
+                // Cartões sempre abertos: esconder o conteúdo de cada
+                // tarefa atrás de uma gaveta obrigava a abrir uma por uma
+                // só para conferir o que ia para onde.
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(targets) { task in
+                        targetCard(task, projection: projection(for: task))
                     }
                 }
                 addTaskRow
+                    .padding(.top, 8)
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -382,11 +394,29 @@ struct TaskBulkMediaFlowSheet: View {
 
     private func videoRow(selection: Binding<TaskMediaSelection>) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "film")
-                .font(.system(size: 13))
-                .foregroundStyle(Editorial.accent)
-                .frame(width: 26, height: 26)
-                .background(Circle().fill(Editorial.accentSoft))
+            // Alça de arrasto. Sem ela nada na linha dizia que o vídeo
+            // podia ser levado para o cartão de uma tarefa — a
+            // capacidade existia e ficava invisível.
+            HStack(spacing: 5) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Editorial.inkSoft.opacity(0.6))
+                Image(systemName: "film")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Editorial.accent)
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(Editorial.accentSoft))
+            }
+            .contentShape(Rectangle())
+            .onDrag {
+                draggingSelectionId = selection.wrappedValue.id
+                // Tipo explícito: `NSItemProvider(object: NSString)` se
+                // registra como `public.utf8-plain-text`, e um `onDrop`
+                // que aceitava só `public.text` nunca casava.
+                return NSItemProvider(item: selection.wrappedValue.id.uuidString as NSString,
+                                      typeIdentifier: UTType.plainText.identifier)
+            }
+            .help("Arraste para a tarefa a que este vídeo pertence")
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(selection.wrappedValue.fileURL.lastPathComponent)
@@ -415,6 +445,44 @@ struct TaskBulkMediaFlowSheet: View {
             .focusEffectDisabled()
         }
         .padding(.vertical, 7)
+    }
+
+    /// Recebe o que for solto num cartão de tarefa: um vídeo que já
+    /// está na tela (arrastado da lista ou de outro cartão) ou um
+    /// arquivo vindo direto do Finder, que entra já endereçado àquela
+    /// tarefa — sem passar pela lista de cima.
+    private func acceptDrop(_ providers: [NSItemProvider],
+                            onto taskId: String) -> Bool {
+        if draggingSelectionId != nil {
+            return acceptInternalDrop(providers, onto: taskId)
+        }
+        return loadFileURLs(from: providers) { url in
+            guard let added = accept(droppedURL: url) else { return }
+            assign(added, to: taskId)
+        }
+    }
+
+    /// Recebe um vídeo arrastado da lista para o cartão de uma tarefa.
+    private func acceptInternalDrop(_ providers: [NSItemProvider],
+                                    onto taskId: String) -> Bool {
+        // O id viaja no payload, mas durante o arrasto ele já está em
+        // `draggingSelectionId`. Usar o estado evita depender da carga
+        // assíncrona do provider no caminho comum.
+        if let id = draggingSelectionId {
+            assign(id, to: taskId)
+            draggingSelectionId = nil
+            dropHoverTaskId = nil
+            return true
+        }
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: NSString.self) { value, _ in
+            guard let raw = value as? String, let id = UUID(uuidString: raw) else { return }
+            Task { @MainActor in
+                assign(id, to: taskId)
+                dropHoverTaskId = nil
+            }
+        }
+        return true
     }
 
     /// Segunda linha do arquivo: para onde ele vai. É aqui que o
@@ -513,17 +581,35 @@ struct TaskBulkMediaFlowSheet: View {
 
     private var addVideoRow: some View {
         Button { openFilePanel() } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "plus")
-                Text("Adicionar vídeo · ou arraste aqui")
+            HStack(spacing: 7) {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 12, weight: .medium))
+                Text("Adicionar vídeos")
+                    .font(Editorial.sans(11, .semibold))
+                Text("· ou arraste do Finder para cá")
+                    .font(Editorial.sans(10.5))
+                    .foregroundStyle(Editorial.inkSoft)
             }
-            .font(Editorial.sans(11))
-            .foregroundStyle(Editorial.inkSoft)
-            .padding(.vertical, 6)
+            .foregroundStyle(Editorial.accent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
             .contentShape(Rectangle())
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                    .foregroundStyle(isDropTargeted
+                                     ? Editorial.accent
+                                     : Editorial.accent.opacity(0.35))
+            }
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .padding(.top, 6)
+    }
+
+    /// Vídeos que ainda não foram endereçados a nenhuma tarefa.
+    private var unassignedSelections: [TaskMediaSelection] {
+        selections.filter { assignments[$0.id] == nil }
     }
 
     // MARK: Linha de tarefa
@@ -584,21 +670,37 @@ struct TaskBulkMediaFlowSheet: View {
         unresolvedSelectionIds = routingActive ? unresolved : []
     }
 
-    /// Destinos escolhidos à mão — o casamento automático não mexe neles.
+    /// Arquivos sobre os quais a PESSOA já decidiu — tanto ao escolher
+    /// uma tarefa quanto ao tirar de uma. O casamento automático não
+    /// mexe em nenhum deles.
     @State private var manualAssignments: Set<UUID> = []
 
     private func assign(_ selectionId: UUID, to taskId: String?) {
         if let taskId {
             assignments[selectionId] = taskId
-            manualAssignments.insert(selectionId)
             unresolvedSelectionIds.remove(selectionId)
             routingActive = true
         } else {
             assignments.removeValue(forKey: selectionId)
-            manualAssignments.remove(selectionId)
             if routingActive { unresolvedSelectionIds.insert(selectionId) }
         }
+        // O id ENTRA no conjunto de decididos nos dois casos, inclusive
+        // ao tirar de uma tarefa. Antes ele saía, e o casador automático
+        // reatribuía o arquivo à mesma tarefa na projeção seguinte — o
+        // ✕ parecia não funcionar porque o vídeo voltava no mesmo
+        // instante. Decisão da pessoa manda, inclusive a de remover.
+        manualAssignments.insert(selectionId)
         Task { await reproject() }
+    }
+
+    /// Tira o vídeo desta tarefa: limpa o ajuste próprio que ele tinha
+    /// nela e devolve o arquivo à lista de cima, numa operação só.
+    private func detach(_ selectionId: UUID, from taskId: String) {
+        var forTask = overrides[taskId] ?? [:]
+        forTask.removeValue(forKey: selectionId)
+        if forTask.isEmpty { overrides.removeValue(forKey: taskId) }
+        else { overrides[taskId] = forTask }
+        assign(selectionId, to: nil)
     }
 
     private func override(_ taskId: String, _ selectionId: UUID) -> TargetOverride {
@@ -655,202 +757,238 @@ struct TaskBulkMediaFlowSheet: View {
         coordinator.targets.first { $0.id == task.id }
     }
 
-    private func targetRow(_ task: CUTask,
-                           projection target: TaskBulkMediaCoordinator.Target?)
-    -> some View {
-        let blocked = target?.blockedReason
-        return HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(task.title)
-                    .font(Editorial.sans(12.5, .medium))
-                    .foregroundStyle(blocked == nil
-                                     ? Editorial.ink : Color.red.opacity(0.9))
-                    .lineLimit(1)
-                if let blocked {
-                    Text(blocked)
-                        .font(Editorial.sans(10.5))
-                        .foregroundStyle(Editorial.inkSoft)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if let warning = quotaWarning(for: task) {
-                    Text(warning)
-                        .font(Editorial.sans(10.5, .medium))
-                        .foregroundStyle(Color.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if let caption = quotaCaption(for: task) {
-                    Text(caption)
-                        .font(Editorial.sans(10.5))
-                        .foregroundStyle(Editorial.inkSoft.opacity(0.8))
-                }
-            }
+    // MARK: Cartão da tarefa
 
-            Spacer(minLength: 8)
-
-            if blocked != nil {
-                Text("fica de fora")
-                    .font(Editorial.sans(10.5, .medium))
-                    .foregroundStyle(Color.red.opacity(0.9))
-            } else if let target {
-                // Com roteamento ligado, a contagem de arquivos é a prova
-                // visível de que cada vídeo foi para a sua tarefa — sem
-                // precisar abrir a gaveta para conferir.
-                Text((routingActive
-                      ? "\(selectionsRouted(to: task.id).count) arq · "
-                      : "")
-                     + "gera \(target.projectedOutputs) "
-                     + (target.projectedOutputs == 1 ? "vídeo" : "vídeos"))
-                    .font(Editorial.sans(10.5))
-                    .foregroundStyle(Editorial.inkSoft)
-                    .monospacedDigit()
-            } else if working {
-                Text("calculando…")
-                    .font(Editorial.sans(10.5))
-                    .foregroundStyle(Editorial.inkSoft)
-            } else {
-                Text("aguardando arquivo")
-                    .font(Editorial.sans(10.5))
-                    .foregroundStyle(Editorial.inkSoft.opacity(0.7))
-            }
-
-            if hasOverrides(task.id) {
-                Text("próprio")
-                    .font(Editorial.sans(9, .semibold))
-                    .foregroundStyle(Editorial.accent)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(Editorial.accentSoft))
-            }
-
-            Button {
-                if expandedTaskIds.contains(task.id) {
-                    expandedTaskIds.remove(task.id)
-                } else {
-                    expandedTaskIds.insert(task.id)
-                }
-            } label: {
-                Image(systemName: expandedTaskIds.contains(task.id)
-                      ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Editorial.inkSoft)
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-            .help("Enviar com papel ou corte próprios nesta tarefa")
-
-            Button {
-                remove(taskId: task.id)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Editorial.inkSoft)
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-        }
-        .padding(.vertical, 7)
+    /// Em que situação a tarefa está — cada uma pede uma cara diferente.
+    private enum TargetState {
+        /// Nenhum arquivo endereçado. NÃO é erro: é trabalho pendente,
+        /// e a pessoa resolve arrastando um vídeo da lista de cima.
+        case awaitingVideo
+        /// O planner recusou por um motivo concreto (duplicata, falta de
+        /// contraparte). Diferente de "sem vídeo" e precisa dizer o quê.
+        case blocked(String)
+        case ready(Int)
     }
 
-    /// Bancada de uma tarefa: para cada vídeo, o papel e o corte que ELA
-    /// vai receber. Tudo parte do padrão lá de cima; o que for mudado
-    /// aqui vale só para esta tarefa.
-    private func targetOverridePanel(_ task: CUTask) -> some View {
-        // Só os arquivos endereçados A ESTA tarefa. Antes a gaveta
-        // listava todos, o que fazia parecer que cada vídeo ia para
-        // todas as tarefas mesmo quando o roteamento estava certo.
+    private func state(of task: CUTask,
+                       projection target: TaskBulkMediaCoordinator.Target?) -> TargetState {
+        if selectionsRouted(to: task.id).isEmpty { return .awaitingVideo }
+        if let reason = target?.blockedReason { return .blocked(reason) }
+        return .ready(target?.projectedOutputs ?? 0)
+    }
+
+    private func targetCard(_ task: CUTask,
+                            projection target: TaskBulkMediaCoordinator.Target?)
+    -> some View {
         let routed = selectionsRouted(to: task.id)
-        return VStack(alignment: .leading, spacing: 8) {
-            if routed.isEmpty {
-                Text("Nenhum arquivo endereçado a esta tarefa.")
-                    .font(Editorial.sans(10.5))
-                    .foregroundStyle(Editorial.inkSoft)
-            }
-            ForEach(routed) { base in
-                let current = override(task.id, base.id)
-                let effectiveRole = current.role ?? base.role
-                HStack(spacing: 8) {
-                    Text(base.fileURL.deletingPathExtension().lastPathComponent)
-                        .font(Editorial.sans(11))
-                        .foregroundStyle(Editorial.inkSoft)
+        let state = state(of: task, projection: target)
+        let isDropTarget = dropHoverTaskId == task.id
+
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(task.title)
+                        .font(Editorial.sans(12.5, .semibold))
+                        .foregroundStyle(Editorial.ink)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                    if case .blocked(let reason) = state {
+                        Text(reason)
+                            .font(Editorial.sans(10.5))
+                            .foregroundStyle(Editorial.inkSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let warning = quotaWarning(for: task) {
+                        Text(warning)
+                            .font(Editorial.sans(10.5, .medium))
+                            .foregroundStyle(Color.orange)
+                    } else if let caption = quotaCaption(for: task) {
+                        Text(caption)
+                            .font(Editorial.sans(10.5))
+                            .foregroundStyle(Editorial.inkSoft.opacity(0.8))
+                    }
+                }
+                Spacer(minLength: 8)
+                stateBadge(state)
+                Button { remove(taskId: task.id) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Editorial.inkSoft)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, routed.isEmpty ? 10 : 8)
 
-                    Spacer(minLength: 6)
+            if routed.isEmpty {
+                emptyTargetSlot(isDropTarget: isDropTarget)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(routed) { base in
+                        routedFileRow(base, task: task)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(panelShape.fill(Editorial.card.opacity(isDropTarget ? 0.55 : 0.28)))
+        .overlay {
+            panelShape.strokeBorder(borderColor(for: state, hovering: isDropTarget),
+                                    lineWidth: isDropTarget ? 1.6 : 0.8)
+                .allowsHitTesting(false)
+        }
+        // Soltar aqui um vídeo arrastado da lista de cima endereça o
+        // arquivo a esta tarefa — é o conserto de um nome que não casou.
+        .onDrop(of: [.plainText, .utf8PlainText, .text, .fileURL], isTargeted: Binding(
+            get: { dropHoverTaskId == task.id },
+            set: { hovering in dropHoverTaskId = hovering ? task.id : nil }
+        )) { providers in
+            acceptDrop(providers, onto: task.id)
+        }
+        .animation(.easeOut(duration: 0.14), value: isDropTarget)
+    }
 
+    private func borderColor(for state: TargetState, hovering: Bool) -> Color {
+        if hovering { return Editorial.accent }
+        switch state {
+        case .awaitingVideo: return Color.orange.opacity(0.75)
+        case .blocked:       return Editorial.rule.opacity(0.8)
+        case .ready:         return Editorial.rule.opacity(0.45)
+        }
+    }
+
+    @ViewBuilder
+    private func stateBadge(_ state: TargetState) -> some View {
+        switch state {
+        case .awaitingVideo:
+            Text("SEM VÍDEO")
+                .font(Editorial.sans(9, .semibold))
+                .foregroundStyle(Color.orange)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.orange.opacity(0.16)))
+        case .blocked:
+            Text("não vai receber")
+                .font(Editorial.sans(10.5, .medium))
+                .foregroundStyle(Editorial.inkSoft)
+        case .ready(let count):
+            Text("gera \(count) " + (count == 1 ? "vídeo" : "vídeos"))
+                .font(Editorial.sans(10.5, .medium))
+                .foregroundStyle(Editorial.accent)
+                .monospacedDigit()
+        }
+    }
+
+    /// Vazio chamativo: é o estado que pede ação da pessoa.
+    private func emptyTargetSlot(isDropTarget: Bool) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "arrow.down.to.line")
+                .font(.system(size: 11, weight: .medium))
+            Text(isDropTarget ? "Soltar aqui" : "Arraste um vídeo da lista acima")
+                .font(Editorial.sans(11, .medium))
+        }
+        .foregroundStyle(isDropTarget ? Editorial.accent : Color.orange.opacity(0.95))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                .foregroundStyle(isDropTarget ? Editorial.accent : Color.orange.opacity(0.5))
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 11)
+    }
+
+    /// Um arquivo dentro do cartão da tarefa, com papel e corte próprios.
+    private func routedFileRow(_ base: TaskMediaSelection, task: CUTask) -> some View {
+        let current = override(task.id, base.id)
+        let effectiveRole = current.role ?? base.role
+        return HStack(spacing: 8) {
+            // Alça de arrasto: só esta parte inicia o movimento. Com a
+            // linha inteira arrastável, o gesto competia com o clique no
+            // ✕ ao lado.
+            HStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Editorial.inkSoft.opacity(0.55))
+                Text(base.fileURL.deletingPathExtension().lastPathComponent)
+                    .font(Editorial.sans(11))
+                    .foregroundStyle(Editorial.inkSoft)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .contentShape(Rectangle())
+            .onDrag {
+                draggingSelectionId = base.id
+                return NSItemProvider(item: base.id.uuidString as NSString,
+                                      typeIdentifier: UTType.plainText.identifier)
+            }
+            .help("Arraste para outra tarefa")
+
+            Spacer(minLength: 6)
+
+            Button {
+                trimSelectionId = base.id
+                trimTaskId = task.id
+                stage = .trim
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: current.fileURL != nil ? "checkmark" : "scissors")
+                    Text(current.fileURL != nil ? "CORTE PRÓPRIO" : "CORTAR AQUI")
+                }
+                .font(Editorial.sans(8.5, .semibold))
+                .foregroundStyle(current.fileURL != nil ? Color.white : Editorial.accent)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(Capsule().fill(current.fileURL != nil
+                                           ? Color.green.opacity(0.85)
+                                           : Editorial.accentSoft))
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+
+            HStack(spacing: 0) {
+                ForEach(TaskMediaRole.allCases, id: \.self) { role in
+                    let active = effectiveRole == role
                     Button {
-                        trimSelectionId = base.id
-                        trimTaskId = task.id
-                        stage = .trim
+                        var next = current
+                        next.role = (role == base.role) ? nil : role
+                        setOverride(next, taskId: task.id, selectionId: base.id)
                     } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: current.fileURL != nil
-                                  ? "checkmark" : "scissors")
-                            Text(current.fileURL != nil ? "CORTE PRÓPRIO" : "CORTAR AQUI")
-                        }
-                        .font(Editorial.sans(8.5, .semibold))
-                        .foregroundStyle(current.fileURL != nil
-                                         ? Color.white : Editorial.accent)
-                        .padding(.horizontal, 8)
-                        .frame(height: 22)
-                        .background(Capsule().fill(current.fileURL != nil
-                                                   ? Color.green.opacity(0.85)
-                                                   : Editorial.accentSoft))
+                        Text(role.rawValue.uppercased())
+                            .font(Editorial.sans(8, .semibold))
+                            .foregroundStyle(active ? Color.white : Editorial.inkSoft)
+                            .padding(.horizontal, 7)
+                            .frame(height: 22)
+                            .background(active ? Editorial.accent : Color.clear)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
-
-                    HStack(spacing: 0) {
-                        ForEach(TaskMediaRole.allCases, id: \.self) { role in
-                            let active = effectiveRole == role
-                            Button {
-                                var next = current
-                                next.role = (role == base.role) ? nil : role
-                                setOverride(next, taskId: task.id, selectionId: base.id)
-                            } label: {
-                                Text(role.rawValue.uppercased())
-                                    .font(Editorial.sans(8, .semibold))
-                                    .foregroundStyle(active ? Color.white : Editorial.inkSoft)
-                                    .padding(.horizontal, 7)
-                                    .frame(height: 22)
-                                    .background(active ? Editorial.accent : Color.clear)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .focusEffectDisabled()
-                        }
-                    }
-                    .background(Capsule().fill(Editorial.inkFaint.opacity(0.14)))
-                    .clipShape(Capsule(style: .continuous))
-
-                    if !current.isEmpty {
-                        Button {
-                            setOverride(TargetOverride(), taskId: task.id,
-                                        selectionId: base.id)
-                        } label: {
-                            Image(systemName: "arrow.uturn.backward")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(Editorial.inkSoft)
-                                .frame(width: 20, height: 20)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .focusEffectDisabled()
-                        .help("Voltar ao padrão")
-                    }
                 }
             }
+            .background(Capsule().fill(Editorial.inkFaint.opacity(0.14)))
+            .clipShape(Capsule(style: .continuous))
+
+            // Tira o vídeo desta tarefa e devolve para a lista de cima,
+            // de onde ele pode ser arrastado para outra.
+            Button {
+                detach(base.id, from: task.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(Editorial.inkSoft)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .help("Tirar desta tarefa")
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 4)
-        .padding(.vertical, 8)
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(Editorial.accent.opacity(0.35))
-                .frame(width: 2)
-        }
-        .padding(.bottom, 6)
     }
 
     private var availableCandidates: [CUTask] {
@@ -1210,19 +1348,23 @@ struct TaskBulkMediaFlowSheet: View {
     private func remove(taskId: String) {
         targets.removeAll { $0.id == taskId }
         overrides.removeValue(forKey: taskId)
-        expandedTaskIds.remove(taskId)
         Task { await reproject() }
     }
 
-    private func append(urls: [URL]) {
+    @discardableResult
+    private func append(urls: [URL]) -> [UUID] {
         let known = Set(selections.map(\.fileURL))
+        var added: [UUID] = []
         for url in urls where !known.contains(url) {
-            selections.append(TaskMediaSelection(fileURL: url))
+            let selection = TaskMediaSelection(fileURL: url)
+            selections.append(selection)
+            added.append(selection.id)
         }
         // Primeiro arquivo aceito: a área de soltar deu lugar à tela que
         // mostra o vídeo em cima e as tarefas com suas regras embaixo.
         if stage == .dropZone, !selections.isEmpty { stage = .compose }
         Task { await reproject() }
+        return added
     }
 
     /// Aceita o arquivo arrastado para dentro da janela.
@@ -1235,11 +1377,40 @@ struct TaskBulkMediaFlowSheet: View {
     /// Aqui seguimos o mesmo recibo do compositor de comentários, que
     /// funciona: aceita o drop e resolve o tipo depois de carregar.
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !providers.isEmpty else { return false }
-        for provider in providers {
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let url else { return }
-                Task { @MainActor in accept(droppedURL: url) }
+        loadFileURLs(from: providers) { url in accept(droppedURL: url) }
+    }
+
+    /// Extrai URLs de arquivo de um arrasto do Finder.
+    ///
+    /// `loadObject(ofClass: URL.self)` parecia funcionar (o alvo até
+    /// acendia) mas não entregava nada nesta folha. O caminho confiável
+    /// é pedir o item cru por `public.file-url` e montar a URL a partir
+    /// do que vier — o Finder manda `Data` com a representação da URL,
+    /// e outros remetentes mandam `URL` ou `String`.
+    private func loadFileURLs(from providers: [NSItemProvider],
+                              handle: @escaping @MainActor (URL) -> Void) -> Bool {
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        let usable = fileProviders.isEmpty ? providers : fileProviders
+        guard !usable.isEmpty else { return false }
+
+        for provider in usable {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier,
+                              options: nil) { item, _ in
+                var resolved: URL?
+                switch item {
+                case let data as Data:
+                    resolved = URL(dataRepresentation: data, relativeTo: nil)
+                case let url as URL:
+                    resolved = url
+                case let text as String:
+                    resolved = URL(string: text)
+                default:
+                    resolved = nil
+                }
+                guard let url = resolved else { return }
+                Task { @MainActor in handle(url) }
             }
         }
         return true
@@ -1248,13 +1419,14 @@ struct TaskBulkMediaFlowSheet: View {
     /// O fluxo é de vídeo. Um arquivo de outro tipo não pode sumir em
     /// silêncio — a pessoa precisa saber por que ele não entrou.
     @MainActor
-    private func accept(droppedURL url: URL) {
+    @discardableResult
+    private func accept(droppedURL url: URL) -> UUID? {
         let videoExtensions: Set<String> = ["mp4", "mov", "m4v", "avi", "mkv", "webm"]
         guard videoExtensions.contains(url.pathExtension.lowercased()) else {
             showError("\(url.lastPathComponent) não é um vídeo — este envio aceita só vídeo.")
-            return
+            return nil
         }
-        append(urls: [url])
+        return append(urls: [url]).first
     }
 
     @MainActor
