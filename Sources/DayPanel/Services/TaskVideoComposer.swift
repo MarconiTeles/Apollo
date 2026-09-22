@@ -97,16 +97,26 @@ actor TaskVideoComposer {
         try bodyCompositionTrack.insertTimeRange(CMTimeRange(start: .zero, duration: bodyDuration),
                                                  of: bodyTrack, at: hookDuration)
 
-        if let audioTrack = composition.addMutableTrack(withMediaType: .audio,
+        // Faixa de áudio só quando algum dos dois tem áudio. Uma faixa
+        // criada e deixada vazia (hook e body mudos, comum em clipe de
+        // teste ou exportado sem som) faz o exportador HEVC recusar a
+        // composição inteira com -11838 "Operation Stopped".
+        let hookAudio = try await hook.loadTracks(withMediaType: .audio).first
+        let bodyAudio = try await body.loadTracks(withMediaType: .audio).first
+        if hookAudio != nil || bodyAudio != nil,
+           let audioTrack = composition.addMutableTrack(withMediaType: .audio,
                                                          preferredTrackID: kCMPersistentTrackID_Invalid) {
-            if let hookAudio = try await hook.loadTracks(withMediaType: .audio).first {
+            if let hookAudio {
                 try? audioTrack.insertTimeRange(CMTimeRange(start: .zero, duration: hookDuration),
                                                 of: hookAudio, at: .zero)
             }
-            if let bodyAudio = try await body.loadTracks(withMediaType: .audio).first {
+            if let bodyAudio {
                 try? audioTrack.insertTimeRange(CMTimeRange(start: .zero, duration: bodyDuration),
                                                 of: bodyAudio, at: hookDuration)
             }
+            // O insert pode falhar em silêncio (`try?`): sobrando vazia,
+            // a faixa sai para não derrubar o export pelo mesmo motivo.
+            if audioTrack.segments.isEmpty { composition.removeTrack(audioTrack) }
         }
 
         let hookLayer = AVMutableVideoCompositionLayerInstruction(assetTrack: hookCompositionTrack)
