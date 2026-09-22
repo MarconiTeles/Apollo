@@ -6,6 +6,8 @@ Movimento posterior dos popups: [entrada por baixo e saída para baixo](POPUP_MO
 
 Controles adicionados posteriormente por solicitação explícita: [Minhas tarefas e + Tarefa na toolbar](TOOLBAR_CONTROLS_2026-09-22.md).
 
+Ajuste visual posterior do filtro: [cápsula de ação azul e switch verde](TOGGLE_MATERIAL_2026-09-22.md).
+
 ## Contrato do merge inicial
 
 Base exclusiva: **Apollo estável 1.9.9 (97)**, commit `dcf22830944bbe93f6787a08eff3c90077b4d2d8`. O aplicativo instalado também foi conferido como 1.9.9 (97). No merge inicial, nenhum código ou controle de DEV-01 foi incorporado. Os controles de toolbar foram portados posteriormente por solicitação explícita, conforme o relatório acima.

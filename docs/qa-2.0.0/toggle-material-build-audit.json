@@ -1,0 +1,15 @@
+{
+  "base_commit": "f4c48d2718f7f14e361cdaddfb8d8f6c84b9cd52",
+  "version": "2.0.0 (98)",
+  "build": "./build.sh release --universal passed",
+  "signature": "codesign --verify --deep --strict passed",
+  "architectures": "x86_64 arm64",
+  "binary_sha256": "b03659937a2e5c2f8766121481b886c32ac0e805da0e27dba1d40a34c94b955b",
+  "source_sha256": {
+    "Sources/DayPanel/Views/Common/MyTasksFilterToggle.swift": "e65b9aebcb134d3b6522eec73071ef5c1e8abed18a1848f24521f6b0ef481bf5"
+  },
+  "scope": "Capsule material, white label, green switch tint only",
+  "visual_evidence": "toggle-material.png: blue capsule, glow and white text inspected in actual app; switch OFF, active green appearance not visually verified",
+  "launch_pid": 83730,
+  "published": false
+}
