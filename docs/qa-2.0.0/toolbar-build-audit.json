@@ -1,0 +1,22 @@
+{
+  "base_commit": "ba851dbfc4f78805dfa553c039f3617855abe920",
+  "recovered_from": "4d5880c865828d3bfeef82e8f1424c7ceff8fb34",
+  "version": "2.0.0 (98)",
+  "build": "./build.sh release --universal passed",
+  "signature": "codesign --verify --deep --strict passed",
+  "architectures": "x86_64 arm64",
+  "tests": {
+    "passed": 197,
+    "skipped_external": 4,
+    "failed": 0
+  },
+  "binary_sha256": "36ec029ea1d14730706e28b4a72fedd038ec960c8be2e17f82cff41817730951",
+  "source_sha256": {
+    "Sources/DayPanel/Models/TaskFilters.swift": "5152df9dfbeaa2e189a4a20b083d8cae25a8f5244482b8bd4632117019fe5eec",
+    "Sources/DayPanel/Views/Common/MyTasksFilterToggle.swift": "34eff6538ff68506b6e9c5049fc538ce9e0a515760ad6d69c4b5d5731bf4ca8b",
+    "Tests/DayPanelTests/TaskFiltersTests.swift": "d78c777f260d4ae6885bdcfba8101710c939b41d6977d9fbf21f15745789bebe",
+    "Sources/DayPanel/Views/ContentView.swift": "5bd447b101bbafe5c86cb5ea55912c667fc19bcb444cc6216a279d2db5e04780"
+  },
+  "published": false,
+  "visual_evidence": "toolbar-controls.png: both toolbar controls inspected in the actual app window; no interactive filter acceptance claimed"
+}

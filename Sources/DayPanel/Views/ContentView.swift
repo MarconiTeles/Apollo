@@ -1384,6 +1384,15 @@ struct ContentView: View {
             .captureFrame($newEventOrigin)
             .padding(.leading, 10)
 
+            Button { showNewTask = true } label: {
+                Text("+ Tarefa")
+            }
+            .buttonStyle(TBButtonStyle())
+            .focusEffectDisabled()
+            .help("Nova tarefa")
+            .accessibilityIdentifier("newTaskButton")
+            .captureFrame($newTaskOrigin)
+
             // Hoje — jump to today + resync
             Button {
                 dateDirection = appState.selectedDate < Date() ? 1 : -1
@@ -1475,41 +1484,14 @@ struct ContentView: View {
             .focusEffectDisabled()
             .captureFrame($settingsOrigin)
 
-            // Vertical separator — divides the icon cluster (bell
-            // + gear) from the primary CTA on the right, matching
-            // the prototype's visual rhythm.
-            Rectangle()
-                .fill(Editorial.rule)
-                .frame(width: 1, height: 22)
-                .padding(.horizontal, -8)
-
-            // + Nova tarefa — primary CTA. Cinnabar pill instead
-            // of the text-link "+ Tarefa" the leading cluster
-            // used to carry (now removed); this is the prototype's
-            // emphasised "new task" affordance.
-            Button { showNewTask = true } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .bold))
-                    Text("Nova tarefa")
-                        .font(Editorial.sans(13.5, .semibold))
-                }
-                .foregroundStyle(Color.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                // Liquid Glass material tinted with the cinnabar accent —
-                // interactive glass carries its own hover/press feedback.
-                .liquidGlassCapsule(tint: Editorial.accent, tintOpacity: 0.9)
-                .accentGlow()
+            if sidebarRoute == .tasks || sidebarRoute == .board {
+                Rectangle()
+                    .fill(Editorial.rule)
+                    .frame(width: 1, height: 22)
+                    .padding(.horizontal, -8)
+                MyTasksFilterToggle(filters: $appState.taskFilters, auth: appState.clickUpAuthService)
+                    .padding(.leading, -11)
             }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-            .help("Nova tarefa")
-            // Pull the CTA ~11pt closer to the separator: the gap was
-            // 18pt (HStack spacing 26 − the separator's −8 inset); −11
-            // brings it to ~7pt, a 60% reduction.
-            .padding(.leading, -11)
-            .captureFrame($newTaskOrigin)
         }
         // Leading kept tight (14pt) so the Apollo brand mark sits
         // right next to the sidebar's trailing edge. The 220pt

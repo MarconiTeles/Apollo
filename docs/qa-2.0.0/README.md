@@ -4,13 +4,15 @@ Ajustes posteriores solicitados pelo usuário: [tamanho de Anexar, diálogo opac
 
 Movimento posterior dos popups: [entrada por baixo e saída para baixo](POPUP_MOTION_2026-09-22.md), conforme pedido do usuário.
 
-## Contrato final
+Controles adicionados posteriormente por solicitação explícita: [Minhas tarefas e + Tarefa na toolbar](TOOLBAR_CONTROLS_2026-09-22.md).
 
-Base exclusiva: **Apollo estável 1.9.9 (97)**, commit `dcf22830944bbe93f6787a08eff3c90077b4d2d8`. O aplicativo instalado também foi conferido como 1.9.9 (97). Nenhum código ou controle de DEV-01 foi incorporado ao resultado final.
+## Contrato do merge inicial
+
+Base exclusiva: **Apollo estável 1.9.9 (97)**, commit `dcf22830944bbe93f6787a08eff3c90077b4d2d8`. O aplicativo instalado também foi conferido como 1.9.9 (97). No merge inicial, nenhum código ou controle de DEV-01 foi incorporado. Os controles de toolbar foram portados posteriormente por solicitação explícita, conforme o relatório acima.
 
 PR de origem: https://github.com/MarconiTeles/Apollo/pull/1, head original `db87ba582a3d31ff72602c731f4b5436267f9d29`. A branch main anterior recebia o feed de distribuição; a integração incorpora o código da estável e os anexos em lote na main, preservando o feed público existente.
 
-A instrução final preserva **todas as mudanças visuais originais do PR do Gabriel**. Somente as alterações visuais acrescentadas durante esta revisão foram retiradas. Os botões, glow, avisos e comportamento visual durante arrasto permanecem como no PR original. Nenhuma toolbar ou controle de DEV foi incorporado.
+A instrução final preserva **todas as mudanças visuais originais do PR do Gabriel**. Somente as alterações visuais acrescentadas durante esta revisão foram retiradas. Os botões, glow, avisos e comportamento visual durante arrasto permanecem como no PR original. Naquela integração, nenhuma toolbar ou controle de DEV foi incorporado.
 
 ## Correções de integração
 

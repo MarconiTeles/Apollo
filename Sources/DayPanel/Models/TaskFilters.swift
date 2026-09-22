@@ -83,6 +83,17 @@ struct TaskFilters: Equatable {
         return n
     }
 
+    func isMine(userId: Int?) -> Bool {
+        guard let userId else { return false }
+        return assigneeIds == [userId]
+    }
+
+    mutating func setMine(_ enabled: Bool, userId: Int?) {
+        guard let userId else { return }
+        // This is the existing assignee dimension, never an independent filter.
+        assigneeIds = enabled ? [userId] : []
+    }
+
     func matches(_ task: CUTask) -> Bool {
         if !priorities.isEmpty {
             // Map priority 0 (none) explicitly so users can filter "no

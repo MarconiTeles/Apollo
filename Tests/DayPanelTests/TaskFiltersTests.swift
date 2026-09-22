@@ -53,6 +53,28 @@ final class TaskFiltersTests: XCTestCase {
         XCTAssertTrue(TaskFilters().matches(task(priority: 4)))
     }
 
+    func testMyTasksToggleUsesAssigneeFilterAndPreservesOtherFilters() {
+        var filters = TaskFilters()
+        filters.priorities = [1]
+        filters.assigneeIds = [17, 29]
+        filters.setMine(true, userId: 17)
+        XCTAssertTrue(filters.isMine(userId: 17))
+        XCTAssertTrue(filters.matches(task(priority: 1, assigneeId: 17)))
+        XCTAssertFalse(filters.matches(task(priority: 1, assigneeId: 29)))
+        XCTAssertFalse(filters.matches(task(priority: 2, assigneeId: 17)))
+        filters.setMine(false, userId: 17)
+        XCTAssertTrue(filters.matches(task(priority: 1, assigneeId: 29)))
+        XCTAssertEqual(filters.priorities, [1])
+    }
+
+    func testMyTasksWithoutConnectedUserDoesNotChangeAssigneeSelection() {
+        var filters = TaskFilters()
+        filters.assigneeIds = [29]
+        filters.setMine(true, userId: nil)
+        XCTAssertEqual(filters.assigneeIds, [29])
+        XCTAssertFalse(filters.isMine(userId: nil))
+    }
+
     func testDimensionsCombineWithAndAndValuesWithinDimensionUseOr() {
         var filters = TaskFilters()
         filters.priorities = [1, 2]
