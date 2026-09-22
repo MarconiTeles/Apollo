@@ -113,6 +113,11 @@ struct TaskBulkMediaFlowSheet: View {
     @State private var decidedSelectionIds: Set<UUID> = []
     /// Cartão sob o cursor durante um arrasto interno de vídeo.
     @State private var dropHoverTaskId: String?
+    /// Cartões que acabaram de receber arquivo: acendem por um instante.
+    @State private var flashTaskIds: Set<String> = []
+    /// Liga a linha do arquivo entre cartões: ao mudar de tarefa ela
+    /// desliza de um cartão para o outro.
+    @Namespace private var routedFileSpace
     /// Vídeo sendo arrastado da lista para um cartão de tarefa.
     @State private var draggingSelectionId: UUID?
     @State private var trimSelectionId: UUID?
@@ -288,12 +293,7 @@ struct TaskBulkMediaFlowSheet: View {
     private var isSending: Bool { coordinator.phase == .sending }
 
     private var errorBanner: some View {
-        Text(localError ?? "")
-            .font(Editorial.sans(11.5, .medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(Capsule().fill(Color.red.opacity(0.88)))
+        TaskMediaNoticeBanner(message: localError ?? "")
     }
 
     // MARK: - Stages
@@ -758,7 +758,14 @@ struct TaskBulkMediaFlowSheet: View {
     /// Registra a decisão da pessoa. Vale sobre o casamento automático,
     /// inclusive quando a decisão é tirar o arquivo de uma tarefa.
     private func setDestination(_ destination: Destination, for selectionId: UUID) {
-        destinations[selectionId] = destination
+        let previous = destinations[selectionId]
+        withAnimation(Self.routeMove) {
+            destinations[selectionId] = destination
+            dropHoverTaskId = nil
+        }
+        if let taskId = destination.taskId, previous?.taskId != taskId {
+            flash(taskId)
+        }
         // O id entra em "decididos" em QUALQUER dos três casos. Antes,
         // remover saía do conjunto e o casador reatribuía o arquivo à
         // mesma tarefa na projeção seguinte — o ✕ parecia não funcionar
@@ -777,6 +784,16 @@ struct TaskBulkMediaFlowSheet: View {
         // Sai do cartão como PENDENTE, não como "todas": tirar de uma
         // tarefa é dizer "aqui não", não "em todas".
         setDestination(.unresolved, for: selectionId)
+    }
+
+    /// Mola curta, sem quicar: o movimento explica a mudança e acaba.
+    private static let routeMove = Animation.spring(response: 0.38, dampingFraction: 0.86)
+
+    private func flash(_ taskId: String) {
+        withAnimation(.easeOut(duration: 0.15)) { _ = flashTaskIds.insert(taskId) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            withAnimation(.easeOut(duration: 0.5)) { _ = flashTaskIds.remove(taskId) }
+        }
     }
 
     private func override(_ taskId: String, _ selectionId: UUID) -> TargetOverride {
@@ -910,6 +927,8 @@ struct TaskBulkMediaFlowSheet: View {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(routed) { base in
                         routedFileRow(base, task: task)
+                            .matchedGeometryEffect(id: base.id, in: routedFileSpace)
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
                     // Os que valem para todas entram aqui também — o
                     // cartão tem que dizer tudo o que a tarefa recebe.
@@ -937,6 +956,14 @@ struct TaskBulkMediaFlowSheet: View {
             panelShape.strokeBorder(borderColor(for: state, hovering: isDropTarget),
                                     lineWidth: isDropTarget ? 1.6 : 0.8)
                 .allowsHitTesting(false)
+        }
+        .overlay {
+            if flashTaskIds.contains(task.id) {
+                panelShape.fill(Editorial.accent.opacity(0.08))
+                    .overlay(panelShape.strokeBorder(Editorial.accent.opacity(0.9), lineWidth: 1.4))
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
         }
         // Soltar aqui um vídeo arrastado da lista de cima endereça o
         // arquivo a esta tarefa — é o conserto de um nome que não casou.

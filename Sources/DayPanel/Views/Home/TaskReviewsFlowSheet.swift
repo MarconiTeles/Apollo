@@ -76,13 +76,7 @@ struct TaskReviewsFlowSheet: View {
             .padding(.bottom, footerHeight)
 
             if let errorMessage {
-                Text(errorMessage)
-                    .font(Editorial.sans(11.5, .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(Editorial.accent))
-                    .shadow(color: Editorial.accent.opacity(0.22), radius: 7, y: 3)
+                TaskMediaNoticeBanner(message: errorMessage)
                     .padding(.top, headerHeight + 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .zIndex(30)

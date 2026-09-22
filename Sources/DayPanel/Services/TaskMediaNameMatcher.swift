@@ -104,12 +104,30 @@ enum TaskMediaNameMatcher {
 
     // MARK: - Pontuação
 
+    /// Qualquer coisa com nome contra a qual comparar um arquivo: uma
+    /// tarefa, ou um vídeo já existente na tarefa (para sugerir qual
+    /// deles o arquivo novo substitui).
+    struct Candidate: Equatable {
+        let id: String
+        let text: String
+    }
+
     /// Ordena as tarefas pela semelhança do assunto com o nome do arquivo.
     static func rank(fileName: String, tasks: [CUTask]) -> [Match] {
-        let fileTokens = Set(tokens(of: fileName))
-        guard !fileTokens.isEmpty, !tasks.isEmpty else { return [] }
+        rank(fileName: fileName,
+             candidates: tasks.map { .init(id: $0.id, text: $0.title) })
+    }
 
-        let taskTokens = tasks.map { (task: $0, tokens: Set(tokens(of: $0.title))) }
+    static func resolve(fileName: String, candidates: [Candidate]) -> Resolution {
+        let ranked = rank(fileName: fileName, candidates: candidates)
+        return Resolution(best: ranked.first, runnerUp: ranked.dropFirst().first)
+    }
+
+    static func rank(fileName: String, candidates: [Candidate]) -> [Match] {
+        let fileTokens = Set(tokens(of: fileName))
+        guard !fileTokens.isEmpty, !candidates.isEmpty else { return [] }
+
+        let taskTokens = candidates.map { (task: $0, tokens: Set(tokens(of: $0.text))) }
 
         // Peso por raridade dentro do conjunto de candidatas: um token em
         // todas as tarefas vale quase nada; um que só aparece numa vale
@@ -118,7 +136,7 @@ enum TaskMediaNameMatcher {
         func weight(_ token: String) -> Double {
             let hits = taskTokens.filter { $0.tokens.contains(token) }.count
             guard hits > 0 else { return 0 }
-            return log(Double(tasks.count + 1) / Double(hits))
+            return log(Double(candidates.count + 1) / Double(hits))
         }
 
         let weights = Dictionary(uniqueKeysWithValues: fileTokens.map { ($0, weight($0)) })

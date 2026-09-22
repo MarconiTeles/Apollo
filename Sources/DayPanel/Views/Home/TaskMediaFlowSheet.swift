@@ -18,6 +18,18 @@ struct TaskMediaFlowRequest: Identifiable {
     /// o vídeo do Finder direto sobre a linha da tarefa. Quando existem,
     /// o seletor do sistema não abre: a folha já começa na classificação.
     var initialURLs: [URL] = []
+    /// Resposta da pergunta "adicionar ou substituir?", feita pela lista
+    /// ANTES da folha abrir (`TaskMediaDropDecisionCard`). Com ela a
+    /// folha já nasce na etapa certa.
+    var dropChoice: TaskMediaDropChoice?
+    /// "Voltar" na tela de substituição: fecha a folha e devolve a
+    /// pergunta para a lista, com os mesmos arquivos.
+    var onBackToDropDecision: (() -> Void)?
+}
+
+enum TaskMediaDropChoice {
+    case add
+    case replace
 }
 
 struct TaskMediaFlowSheet: View {
@@ -28,6 +40,8 @@ struct TaskMediaFlowSheet: View {
 
     private enum Stage {
         case loading
+        /// Escolhido substituir: qual arquivo novo troca qual existente.
+        case mapReplacements
         case classify
         case trim
         case selectReplacement
@@ -44,6 +58,22 @@ struct TaskMediaFlowSheet: View {
     @State private var selections: [TaskMediaSelection] = []
     @State private var trimSelectionId: UUID?
     @State private var replacementURLs: [UUID: URL] = [:]
+    /// Arquivo solto → vídeo existente que ele substitui. `nil` quer
+    /// dizer "entra como novo", e é uma escolha legítima, não ausência.
+    @State private var dropReplacementChoice: [UUID: UUID?] = [:]
+    /// Arrasto interno na tela de substituição: arquivo em movimento e
+    /// cartão sob o cursor.
+    @State private var draggingSelectionId: UUID?
+    @State private var dropHoverAssetId: UUID?
+    /// Cartões que acabaram de ganhar ou trocar arquivo: acendem por um
+    /// instante para o olho achar onde cada arquivo foi parar.
+    @State private var dropFlashAssetIds: Set<UUID> = []
+    /// O mesmo aceso para a lista de cima, quando um arquivo volta a ela.
+    @State private var dropFlashWell = false
+    /// Liga a linha do arquivo entre a lista de cima e os cartões: na
+    /// troca ela desliza de um lugar para o outro em vez de sumir aqui e
+    /// brotar ali.
+    @Namespace private var dropFileSpace
     @State private var selectedMemberIds: Set<Int> = []
     @State private var memberQuery = ""
     /// Espelho local dos favoritos (UserDefaults) pra UI reagir na hora.
@@ -116,6 +146,14 @@ struct TaskMediaFlowSheet: View {
     }
 
     var body: some View {
+        panelChrome
+            .frame(width: 680, height: 540)
+            .task { await start() }
+            .onAppear { appState.swiftUIPopupOpen = true }
+            .onDisappear { appState.swiftUIPopupOpen = false }
+    }
+
+    private var panelChrome: some View {
         ZStack(alignment: .top) {
             // Scrollable stage content — fills the whole card and is padded so
             // it lives behind the two glass bars.
@@ -167,11 +205,7 @@ struct TaskMediaFlowSheet: View {
                 .zIndex(20)
             }
         }
-        .frame(width: 680, height: 540)
         .solidPopupSurface(in: outerShape)
-        .task { await start() }
-        .onAppear { appState.swiftUIPopupOpen = true }
-        .onDisappear { appState.swiftUIPopupOpen = false }
     }
 
     // MARK: Header
@@ -212,6 +246,7 @@ struct TaskMediaFlowSheet: View {
     private var title: String {
         switch stage {
         case .trim: return "Cortar clipe"
+        case .mapReplacements: return "O que cada arquivo substitui"
         case .selectReplacement, .confirmReplacement: return "Substituir arquivo"
         case .readyPrompt: return "Vídeos preparados"
         case .mentions: return "Enviar para revisão"
@@ -225,6 +260,7 @@ struct TaskMediaFlowSheet: View {
     @ViewBuilder private var stageContent: some View {
         switch stage {
         case .loading: loadingBody
+        case .mapReplacements: mapReplacementsBody
         case .classify: classificationBody
         case .trim: trimBody
         case .selectReplacement: replacementPicker
@@ -638,6 +674,434 @@ struct TaskMediaFlowSheet: View {
         .overlay(Capsule().strokeBorder(Editorial.rule))
     }
 
+    // MARK: Decisão do arrasto
+
+    /// Alvos que um arquivo arrastado pode substituir: os vídeos
+    /// completos e as fontes (hook/body) já publicadas.
+    private var replaceableAssets: [TaskMediaAsset] {
+        store.catalog(for: request.task.id).assets
+            .filter { asset in
+                guard let revision = asset.activeRevision else { return false }
+                let hasAttachment = !(revision.attachmentId ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                return hasAttachment || revision.remoteURL != nil
+            }
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName)
+                      == .orderedAscending }
+    }
+
+    /// Qual vídeo existente este arquivo provavelmente substitui, pelo
+    /// nome. Só sugere; a pessoa confirma, troca ou recusa.
+    private func suggestedReplacement(for selection: TaskMediaSelection) -> UUID? {
+        TaskMediaReplacementSuggestion.suggest(
+            fileName: selection.fileURL.lastPathComponent,
+            among: replaceableAssets.map {
+                .init(id: $0.id, name: $0.displayName, role: $0.role)
+            })
+    }
+
+    /// Glifo do tipo do arquivo. Hoje o fluxo só aceita vídeo, mas o
+    /// ícone segue a extensão para não mentir caso isso mude.
+    private func mediaGlyph(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "mp4", "mov", "m4v", "avi", "mkv", "webm": return "film"
+        case "png", "jpg", "jpeg", "heic", "gif", "webp", "tiff", "bmp": return "photo"
+        case "pdf": return "doc.richtext"
+        default: return "doc"
+        }
+    }
+
+    // MARK: Qual arquivo substitui qual vídeo
+
+    /// Sugestão por nome, um arquivo por vídeo: dois hooks novos podem
+    /// apontar para o mesmo hook existente, e sem essa trava um deles
+    /// sumiria na sobrescrita do plano. O segundo fica na lista de cima
+    /// para a pessoa decidir.
+    private func prefillReplacementSuggestions() {
+        var taken: Set<UUID> = []
+        for selection in selections {
+            guard let assetId = suggestedReplacement(for: selection),
+                  !taken.contains(assetId) else {
+                dropReplacementChoice[selection.id] = UUID?.none
+                continue
+            }
+            taken.insert(assetId)
+            dropReplacementChoice[selection.id] = assetId
+        }
+    }
+
+    /// Os arquivos que ainda não têm alvo — entram como novos se
+    /// ficarem aqui.
+    private var unassignedDropSelections: [TaskMediaSelection] {
+        selections.filter { (dropReplacementChoice[$0.id] ?? nil) == nil }
+    }
+
+    private func dropSelection(replacing assetId: UUID) -> TaskMediaSelection? {
+        guard let pair = dropReplacementChoice.first(where: { $0.value == assetId })
+        else { return nil }
+        return selections.first { $0.id == pair.key }
+    }
+
+    /// Um arquivo por vídeo. Quem já estava no alvo não some na
+    /// sobrescrita do plano: se o arquivo arrastado veio de outro
+    /// vídeo, os dois trocam de lugar; se veio da lista de cima, o
+    /// ocupante volta para ela.
+    private func assignDrop(_ selectionId: UUID, replacing assetId: UUID) {
+        let origin = dropReplacementChoice[selectionId] ?? nil
+        var touched: Set<UUID> = [assetId]
+        var returnsToWell = false
+        withAnimation(Self.dropMove) {
+            for (fileId, target) in dropReplacementChoice
+            where target == assetId && fileId != selectionId {
+                dropReplacementChoice[fileId] = origin
+                if let origin { touched.insert(origin) } else { returnsToWell = true }
+            }
+            dropReplacementChoice[selectionId] = assetId
+            dropHoverAssetId = nil
+            draggingSelectionId = nil
+        }
+        flashDropTargets(touched)
+        if returnsToWell { flashWell() }
+    }
+
+    private func clearDrop(_ selectionId: UUID) {
+        guard (dropReplacementChoice[selectionId] ?? nil) != nil else { return }
+        withAnimation(Self.dropMove) {
+            dropReplacementChoice[selectionId] = UUID?.none
+            dropHoverAssetId = nil
+            draggingSelectionId = nil
+        }
+        flashWell()
+    }
+
+    private func flashWell() {
+        withAnimation(.easeOut(duration: 0.15)) { dropFlashWell = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            withAnimation(.easeOut(duration: 0.5)) { dropFlashWell = false }
+        }
+    }
+
+    /// Mola curta, sem quicar: o movimento explica a troca e acaba.
+    private static let dropMove = Animation.spring(response: 0.38, dampingFraction: 0.86)
+
+    private func flashDropTargets(_ ids: Set<UUID>) {
+        withAnimation(.easeOut(duration: 0.15)) { dropFlashAssetIds.formUnion(ids) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            withAnimation(.easeOut(duration: 0.5)) { dropFlashAssetIds.subtract(ids) }
+        }
+    }
+
+    /// Mesma gramática do envio em lote: a lista do que chegou fica em
+    /// cima e os alvos embaixo, e o vínculo se faz arrastando. O menu
+    /// suspenso que existia antes dizia o destino mas não deixava ver,
+    /// de relance, o que ia trocar o quê.
+    private var mapReplacementsBody: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                dropSectionLabel("VÍDEOS PARA ADICIONAR")
+                    .padding(.bottom, 3)
+
+                unassignedDropWell
+
+                Rectangle()
+                    .fill(Editorial.rule.opacity(0.5))
+                    .frame(height: 1)
+                    .padding(.vertical, 14)
+
+                dropSectionLabel("VÍDEOS PARA SUBSTITUIR")
+                    .padding(.bottom, 4)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(replaceableAssets) { asset in
+                        replacementTargetCard(asset)
+                    }
+                }
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
+        }
+    }
+
+    private func dropSectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(Editorial.sans(9.5, .semibold))
+            .tracking(0.8)
+            .foregroundStyle(Editorial.inkSoft.opacity(0.85))
+            .padding(.bottom, 6)
+    }
+
+    /// A área dos arquivos sem alvo também recebe drop: é assim que se
+    /// desfaz uma substituição sem caçar o ✕ dentro do cartão.
+    private var unassignedDropWell: some View {
+        let hovering = dropHoverAssetId == nil && draggingSelectionId != nil
+        return VStack(alignment: .leading, spacing: 6) {
+            if unassignedDropSelections.isEmpty {
+                Text("Nenhum — tudo virou substituição.")
+                    .font(Editorial.sans(11))
+                    .foregroundStyle(Editorial.inkSoft.opacity(0.75))
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 10)
+            } else {
+                ForEach(unassignedDropSelections) { selection in
+                    unassignedDropRow(selection)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Editorial.card.opacity(0.28)))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(hovering ? Editorial.accent.opacity(0.7)
+                                       : Editorial.rule.opacity(0.45),
+                              lineWidth: hovering ? 1.4 : 0.7)
+                .allowsHitTesting(false)
+        }
+        .overlay {
+            if dropFlashWell {
+                let wellShape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+                wellShape.fill(Editorial.accent.opacity(0.08))
+                    .overlay(wellShape.strokeBorder(Editorial.accent.opacity(0.9), lineWidth: 1.4))
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .onDrop(of: [.plainText, .utf8PlainText, .text], isTargeted: nil) { providers in
+            acceptUnassignDrop(providers)
+        }
+    }
+
+    private func unassignedDropRow(_ selection: TaskMediaSelection) -> some View {
+        HStack(spacing: 9) {
+            HStack(spacing: 5) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Editorial.inkSoft.opacity(0.6))
+                Image(systemName: mediaGlyph(for: selection.fileURL))
+                    .font(.system(size: 12))
+                    .foregroundStyle(Editorial.accent)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Editorial.accentSoft))
+            }
+            .contentShape(Rectangle())
+            .onDrag {
+                draggingSelectionId = selection.id
+                // Tipo explícito: `NSItemProvider(object: NSString)` se
+                // registra como `public.utf8-plain-text`, e um `onDrop`
+                // que aceitava só `public.text` nunca casava.
+                return NSItemProvider(item: selection.id.uuidString as NSString,
+                                      typeIdentifier: UTType.plainText.identifier)
+            }
+            .help("Arraste para o vídeo que este arquivo substitui")
+
+            Text(selection.fileURL.lastPathComponent)
+                .font(Editorial.sans(12, .medium))
+                .foregroundStyle(Editorial.ink)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 6)
+        }
+        .padding(.vertical, 5)
+        .matchedGeometryEffect(id: selection.id, in: dropFileSpace)
+    }
+
+    private func replacementTargetCard(_ asset: TaskMediaAsset) -> some View {
+        let incoming = dropSelection(replacing: asset.id)
+        let hovering = dropHoverAssetId == asset.id
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text(asset.role.label)
+                    .font(Editorial.sans(9, .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(Editorial.inkSoft)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Editorial.inkFaint.opacity(0.14)))
+                Text(asset.displayName)
+                    .font(Editorial.sans(12.5, .semibold))
+                    .foregroundStyle(Editorial.ink)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                if incoming == nil {
+                    // Mesmo laranja do anexo em lote: é o estado que
+                    // pede ação — ou recebe um arquivo, ou fica como está.
+                    Text("SEM VÍDEO")
+                        .font(Editorial.sans(9, .semibold))
+                        .foregroundStyle(Color.orange)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.orange.opacity(0.16)))
+                } else {
+                    Text("SUBSTITUI")
+                        .font(Editorial.sans(9, .semibold))
+                        .tracking(0.6)
+                        .foregroundStyle(Editorial.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Editorial.accentSoft))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, incoming == nil ? 9 : 7)
+
+            if let incoming {
+                // Identidade do ARQUIVO, não do cartão: numa troca entre
+                // dois cartões cheios, sem isso o SwiftUI via a mesma
+                // linha só mudando de texto e não havia o que animar.
+                incomingReplacementRow(incoming, asset: asset)
+                    .id(incoming.id)
+            } else {
+                emptyReplacementSlot(asset, hovering: hovering)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(shape.fill(Editorial.card.opacity(hovering ? 0.55
+                                                     : (incoming == nil ? 0.22 : 0.34))))
+        .overlay {
+            shape.strokeBorder(hovering ? Editorial.accent
+                               : (incoming == nil ? Color.orange.opacity(0.75)
+                                                  : Editorial.accent.opacity(0.4)),
+                               lineWidth: hovering ? 1.6 : 0.8)
+                .allowsHitTesting(false)
+        }
+        // Acende e apaga logo depois de receber arquivo numa troca.
+        .overlay {
+            if dropFlashAssetIds.contains(asset.id) {
+                shape.fill(Editorial.accent.opacity(0.08))
+                    .overlay(shape.strokeBorder(Editorial.accent.opacity(0.9), lineWidth: 1.4))
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .onDrop(of: [.plainText, .utf8PlainText, .text], isTargeted: Binding(
+            get: { dropHoverAssetId == asset.id },
+            set: { over in dropHoverAssetId = over ? asset.id : nil }
+        )) { providers in
+            acceptReplacementDrop(providers, replacing: asset.id)
+        }
+        .animation(.easeOut(duration: 0.14), value: hovering)
+    }
+
+    private func incomingReplacementRow(_ selection: TaskMediaSelection,
+                                        asset: TaskMediaAsset) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.down.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Editorial.accent)
+            HStack(spacing: 5) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Editorial.inkSoft.opacity(0.55))
+                Text(selection.fileURL.lastPathComponent)
+                    .font(Editorial.sans(11.5, .medium))
+                    .foregroundStyle(Editorial.ink)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .contentShape(Rectangle())
+            .onDrag {
+                draggingSelectionId = selection.id
+                return NSItemProvider(item: selection.id.uuidString as NSString,
+                                      typeIdentifier: UTType.plainText.identifier)
+            }
+            .help("Arraste para outro vídeo, ou de volta para a lista de cima")
+
+            Spacer(minLength: 6)
+
+            Button {
+                clearDrop(selection.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Editorial.inkSoft)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .accessibilityLabel("Cancelar a substituição de \(asset.displayName)")
+            .help("Este arquivo volta a entrar como novo")
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
+        .matchedGeometryEffect(id: selection.id, in: dropFileSpace)
+    }
+
+    private func emptyReplacementSlot(_ asset: TaskMediaAsset,
+                                      hovering: Bool) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "arrow.down.to.line")
+                .font(.system(size: 10, weight: .medium))
+            Text(hovering ? "Soltar aqui" : "Arraste um arquivo para substituir")
+                .font(Editorial.sans(11, .medium))
+            if !hovering && !unassignedDropSelections.isEmpty {
+                Menu {
+                    ForEach(unassignedDropSelections) { selection in
+                        Button(selection.fileURL.lastPathComponent) {
+                            assignDrop(selection.id, replacing: asset.id)
+                        }
+                    }
+                } label: {
+                    Text("ou escolher")
+                        .font(Editorial.sans(11, .semibold))
+                        .underline()
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("Escolher o arquivo que substitui \(asset.displayName)")
+            }
+        }
+        .foregroundStyle(hovering ? Editorial.accent : Color.orange.opacity(0.95))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 11)
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                .foregroundStyle(hovering ? Editorial.accent : Color.orange.opacity(0.5))
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 11)
+    }
+
+    /// O id viaja no payload, mas durante o arrasto ele já está em
+    /// `draggingSelectionId`; usar o estado evita depender da carga
+    /// assíncrona do provider no caminho comum.
+    private func acceptReplacementDrop(_ providers: [NSItemProvider],
+                                       replacing assetId: UUID) -> Bool {
+        if let id = draggingSelectionId {
+            assignDrop(id, replacing: assetId)
+            return true
+        }
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: NSString.self) { value, _ in
+            guard let raw = value as? String, let id = UUID(uuidString: raw) else { return }
+            Task { @MainActor in assignDrop(id, replacing: assetId) }
+        }
+        return true
+    }
+
+    private func acceptUnassignDrop(_ providers: [NSItemProvider]) -> Bool {
+        if let id = draggingSelectionId {
+            clearDrop(id)
+            draggingSelectionId = nil
+            return true
+        }
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: NSString.self) { value, _ in
+            guard let raw = value as? String, let id = UUID(uuidString: raw) else { return }
+            Task { @MainActor in clearDrop(id) }
+        }
+        return true
+    }
+
     private var replacementPicker: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
@@ -1027,6 +1491,15 @@ struct TaskMediaFlowSheet: View {
         switch stage {
         case .loading, .trim:
             EmptyView()
+        case .mapReplacements:
+            footerRow {
+                secondaryButton("Voltar") { backToDropDecision() }
+                Spacer()
+                primaryButton(mapReplacementsActionTitle,
+                              disabled: preparing) {
+                    applyDropReplacements()
+                }
+            }
         case .classify:
             footerRow {
                 secondaryButton("Escolher outros") { openAddPanel() }
@@ -1109,14 +1582,11 @@ struct TaskMediaFlowSheet: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Na tela de status a mesma mensagem já aparece embaixo do título
+    /// — a faixa de cima só repetia.
     @ViewBuilder private var errorBanner: some View {
-        if let localError {
-            Text(localError)
-                .font(Editorial.sans(11.5, .medium))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(Capsule().fill(Editorial.accent))
-                .shadow(color: Editorial.accent.opacity(0.3), radius: 8, y: 3)
+        if let localError, stage != .status {
+            TaskMediaNoticeBanner(message: localError)
                 .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
@@ -1219,14 +1689,23 @@ struct TaskMediaFlowSheet: View {
 
     @MainActor
     private func start() async {
-        await store.loadCatalog(for: request.task, appState: appState)
+        // Com a pergunta do arrasto já respondida, a lista acabou de
+        // ler o catálogo para decidir se perguntava: não lê de novo.
+        if request.dropChoice == nil {
+            await store.loadCatalog(for: request.task, appState: appState)
+        }
         switch request.mode {
         case .add:
             if request.initialURLs.isEmpty {
                 openAddPanel()
             } else {
                 selections = request.initialURLs.map { TaskMediaSelection(fileURL: $0) }
-                stage = .classify
+                if request.dropChoice == .replace, !replaceableAssets.isEmpty {
+                    prefillReplacementSuggestions()
+                    stage = .mapReplacements
+                } else {
+                    stage = .classify
+                }
             }
         case .replace:
             stage = .selectReplacement
@@ -1252,6 +1731,74 @@ struct TaskMediaFlowSheet: View {
         }
         selections = panel.urls.map { TaskMediaSelection(fileURL: $0) }
         stage = .classify
+    }
+
+    // MARK: Aplicar a decisão do arrasto
+
+    /// A decisão vive em `TaskMediaDropDecision`, fora da View, porque
+    /// é ela que precisa de teste — em especial o caso misto.
+    private var dropPlan: TaskMediaDropDecision.Plan {
+        TaskMediaDropDecision.plan(
+            dropped: selections.map { .init(id: $0.id, url: $0.fileURL) },
+            choices: dropReplacementChoice)
+    }
+
+    private var mappedReplacements: [UUID: URL] { dropPlan.replacements }
+
+    private var unmappedSelections: [TaskMediaSelection] {
+        let ids = Set(dropPlan.leftovers)
+        return selections.filter { ids.contains($0.id) }
+    }
+
+    private var mapReplacementsActionTitle: String {
+        TaskMediaDropDecision.actionTitle(for: dropPlan)
+    }
+
+    /// O store guarda UM lote por tarefa, então adicionar e substituir
+    /// não cabem na mesma preparação. Quando a pessoa mistura os dois,
+    /// a substituição roda agora (é a intenção explícita dela) e os
+    /// arquivos sem alvo ficam para a etapa de classificação logo em
+    /// seguida — em vez de sumirem sem aviso.
+    private func applyDropReplacements() {
+        let replacements = mappedReplacements
+        guard !replacements.isEmpty else {
+            stage = .classify
+            return
+        }
+        let leftovers = unmappedSelections
+        preparing = true
+        Task { @MainActor in
+            await store.prepareReplacements(task: request.task,
+                                            replacementURLs: replacements,
+                                            appState: appState)
+            preparing = false
+            if store.phase(for: request.task.id) == .failed {
+                localError = store.batches[request.task.id]?.errorMessage
+                    ?? "Não foi possível preparar a substituição."
+                return
+            }
+            if leftovers.isEmpty {
+                stage = .readyPrompt
+            } else {
+                // Sobrou arquivo sem alvo: segue para a classificação
+                // deles, sem perder o que acabou de ser substituído.
+                selections = leftovers
+                dropReplacementChoice = [:]
+                stage = .classify
+            }
+        }
+    }
+
+    /// A pergunta mora na lista, não aqui: voltar é fechar a folha e
+    /// deixar a lista perguntar de novo. Sem pergunta para onde voltar
+    /// (abriu por outro caminho), vira adicionar como novo.
+    private func backToDropDecision() {
+        guard let back = request.onBackToDropDecision else {
+            stage = .classify
+            return
+        }
+        dismiss()
+        back()
     }
 
     private func chooseReplacement(for asset: TaskMediaAsset) {
@@ -1428,6 +1975,8 @@ struct TaskMediaCapsuleButton: View {
     let primary: Bool
     let disabled: Bool
     let badge: Int?
+    /// Ocupa a largura toda — par de escolhas lado a lado num diálogo.
+    var fillsWidth = false
     let action: () -> Void
     @State private var hovered = false
 
@@ -1438,30 +1987,35 @@ struct TaskMediaCapsuleButton: View {
                 .tracking(primary ? 0.4 : 0)
                 .foregroundStyle(primary ? Color.white : Editorial.ink)
                 .padding(.horizontal, primary ? 18 : 15)
+                .frame(maxWidth: fillsWidth ? .infinity : nil)
                 .frame(height: 34)
+                .contentShape(Capsule())
                 .background {
-                    Capsule()
-                        .fill(primary ? Editorial.accent : Editorial.card)
-                        .overlay {
-                            Capsule().fill(
-                                LinearGradient(
-                                    colors: [Color.white.opacity(hovered ? 0.20 : 0.05), .clear],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
+                    // O primário é vidro azul (abaixo); o fill sólido
+                    // por baixo achataria a refração.
+                    if !primary {
+                        Capsule()
+                            .fill(Editorial.card)
+                            .overlay {
+                                Capsule().fill(
+                                    LinearGradient(
+                                        colors: [Color.white.opacity(hovered ? 0.20 : 0.05), .clear],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
                                 )
-                            )
-                        }
+                            }
+                    }
                 }
+                .accentGlassButton(in: Capsule(style: .continuous),
+                                   isOn: primary, glow: !disabled)
                 .overlay {
-                    Capsule().strokeBorder(
-                        primary
-                            ? Color.white.opacity(hovered ? 0.28 : 0.10)
-                            : Editorial.rule.opacity(hovered ? 1 : 0.78),
-                        lineWidth: 1
-                    )
+                    if !primary {
+                        Capsule().strokeBorder(Editorial.rule.opacity(hovered ? 1 : 0.78),
+                                               lineWidth: 1)
+                    }
                 }
-                .shadow(color: (primary ? Editorial.accent : Color.black)
-                    .opacity(hovered ? (primary ? 0.22 : 0.11) : 0),
+                .shadow(color: Color.black.opacity(!primary && hovered ? 0.11 : 0),
                         radius: hovered ? 7 : 0, x: 0, y: hovered ? 3 : 0)
                 .overlay(alignment: .topTrailing) {
                     if let badge, badge > 0 {
@@ -1484,5 +2038,30 @@ struct TaskMediaCapsuleButton: View {
         .opacity(disabled ? 0.42 : 1)
         .onHover { hovered = !disabled && $0 }
         .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.82), value: hovered)
+    }
+}
+
+/// Aviso flutuante dos fluxos de anexo e revisão.
+///
+/// Vidro neutro com o ícone em laranja — o mesmo laranja de "SEM
+/// VÍDEO". A cápsula azul sólida de antes competia com o botão
+/// principal: no app, azul preenchido é só para o que pede clique.
+struct TaskMediaNoticeBanner: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(Color.orange)
+            Text(message)
+                .font(Editorial.sans(11.5, .medium))
+                .foregroundStyle(Editorial.ink)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .liquidGlassCapsule(tint: .white, tintOpacity: 0.05, interactive: false)
+        .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
     }
 }

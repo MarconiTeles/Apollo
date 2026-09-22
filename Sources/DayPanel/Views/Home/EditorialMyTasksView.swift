@@ -28,6 +28,9 @@ struct EditorialMyTasksView: View {
     /// before constructing the recycled task rows on route/list changes.
     @State private var listMountReady = false
     @State private var mediaFlowRequest: TaskMediaFlowRequest?
+    /// Vídeo solto numa tarefa, esperando a resposta de "adicionar ou
+    /// substituir?" — que aparece por cima da lista, não numa folha.
+    @State private var pendingDrop: PendingMediaDrop?
     @State private var bulkMediaRequest: TaskBulkMediaRequest?
     /// Verdadeiro enquanto um arquivo do Finder paira sobre a lista.
     @State private var fileDragOverList = false
@@ -86,6 +89,21 @@ struct EditorialMyTasksView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay {
+            if let drop = pendingDrop {
+                TaskMediaDropDecisionOverlay(
+                    isLoading: drop.isLoading,
+                    canReplace: true,
+                    onAdd: { resolvePendingDrop(.add) },
+                    onReplace: { resolvePendingDrop(.replace) },
+                    onCancel: { pendingDrop = nil })
+                .onAppear { appState.swiftUIPopupOpen = true }
+                .onDisappear { appState.swiftUIPopupOpen = false }
+                .transition(.opacity)
+                .zIndex(4)
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: pendingDrop == nil)
         .background(Editorial.paper)
         .background {
             EscapeSelectionMonitor(isActive: !selectedTaskIds.isEmpty,
@@ -255,8 +273,7 @@ struct EditorialMyTasksView: View {
                 onFileDrop: { task, urls in
                     // Arrastou sobre UMA tarefa: abre o fluxo de sempre
                     // já com o vídeo dentro, sem passar pelo seletor.
-                    mediaFlowRequest = TaskMediaFlowRequest(
-                        task: task, mode: .add, initialURLs: urls)
+                    beginFileDrop(task: task, urls: urls)
                 }
             )
             .apolloStudioNode("tasks.list",
@@ -393,6 +410,42 @@ struct EditorialMyTasksView: View {
 
     /// Abre o envio em lote para a seleção atual. Os candidatos do botão
     /// "+ tarefa" são as tarefas visíveis que ficaram fora da seleção.
+    /// Tarefa que já tem vídeo pergunta antes; tarefa vazia vai direto
+    /// para a classificação. O catálogo é lido aqui, com o cartão de
+    /// carregamento no lugar da pergunta, para a folha não abrir só
+    /// para descobrir que precisava perguntar.
+    private func beginFileDrop(task: CUTask, urls: [URL]) {
+        let drop = PendingMediaDrop(task: task, urls: urls)
+        pendingDrop = drop
+        Task { @MainActor in
+            let store = appState.taskMediaTransfers
+            await store.loadCatalog(for: task, appState: appState)
+            // Cancelado (clique fora) ou trocado por outro arrasto.
+            guard pendingDrop?.id == drop.id else { return }
+            if store.catalog(for: task.id).hasReplaceablePublishedMedia {
+                pendingDrop?.isLoading = false
+            } else {
+                resolvePendingDrop(.add)
+            }
+        }
+    }
+
+    private func resolvePendingDrop(_ choice: TaskMediaDropChoice) {
+        guard let drop = pendingDrop else { return }
+        pendingDrop = nil
+        mediaFlowRequest = TaskMediaFlowRequest(
+            task: drop.task, mode: .add, initialURLs: drop.urls,
+            dropChoice: choice,
+            onBackToDropDecision: {
+                // Espera a folha sair antes de perguntar de novo.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    var again = PendingMediaDrop(task: drop.task, urls: drop.urls)
+                    again.isLoading = false
+                    pendingDrop = again
+                }
+            })
+    }
+
     private func presentBulkMedia(initialURLs: [URL] = []) {
         let selected = selectedTasks
         guard selected.count >= 2 else { return }
@@ -1152,4 +1205,12 @@ private struct MyTasksColumnHeader: View {
                     .onEnded { _ in layout.commit() }
             )
     }
+}
+
+/// Um arrasto de vídeo sobre uma tarefa, antes da folha abrir.
+private struct PendingMediaDrop: Identifiable {
+    let id = UUID()
+    let task: CUTask
+    let urls: [URL]
+    var isLoading = true
 }
