@@ -23,7 +23,7 @@ Publicação autorizada explicitamente pelo usuário em 22/09/2026, após os aju
 
 ## Estado da publicação
 
-Release pública estável criada em https://github.com/MarconiTeles/Apollo/releases/tag/v2.0.0, marcada como latest em 2026-09-22T23:26:48Z. SHA-256 e tamanhos dos dois assets remotos conferidos iguais aos pacotes locais validados. ZIP público respondeu HTTP 200 com 50.770.414 bytes. Feed público promovido neste commit para 2.0.0 (98), sem canal silent; a propagação no GitHub Pages será conferida após o push. Não foi executada uma atualização real sobre a instalação estável deste Mac.
+Release pública estável criada em https://github.com/MarconiTeles/Apollo/releases/tag/v2.0.0, marcada como latest em 2026-09-22T23:26:48Z. SHA-256 e tamanhos dos dois assets remotos conferidos iguais aos pacotes locais validados. ZIP público respondeu HTTP 200 com 50.770.414 bytes. Feed público promovido neste commit para 2.0.0 (98), sem canal silent; GitHub Pages concluiu com sucesso (run `35797503114`) e a URL canônica do feed foi lida novamente: 2.0.0 (98), assinatura e tamanho iguais ao pacote validado. Os dois arquivos foram baixados pelas URLs públicas e seus SHA-256 conferem com os originais. A tag `v2.0.0` aponta para a fonte `2e50a9e`. Não foi executada uma atualização real sobre a instalação estável deste Mac.
 
 ## Continuidade
 

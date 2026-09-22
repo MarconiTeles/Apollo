@@ -32,5 +32,10 @@
   "published_at": "2026-09-22T23:26:48Z",
   "remote_asset_sha256": "Both GitHub uploaded asset digests match local SHA-256",
   "public_zip_http_status": 200,
-  "public_feed_verification": "pending propagation after this commit"
+  "public_feed_verification": "Live canonical URL serves 2.0.0 (98), public channel, expected enclosure URL, Ed25519 signature and byte length",
+  "feed_url": "https://marconiteles.github.io/Apollo/appcast.xml",
+  "feed_verified_at": "2026-09-22T23:28:54.454873+00:00",
+  "pages_run_id": 35797503114,
+  "public_download_verification": "Both DMG and ZIP downloaded from public URLs; SHA-256 and lengths match validated local artifacts",
+  "tag_target_verified": "2e50a9e6d3c64e996e133b7d305014dceb731c6b"
 }
