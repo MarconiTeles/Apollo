@@ -191,7 +191,8 @@ struct ClipTrimmerView: View {
                 .font(Editorial.sans(11.5, .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 18).frame(height: 34)
-                .background(Capsule().fill(Editorial.accent))
+                .accentGlassButton(in: Capsule(style: .continuous),
+                                   glow: model.isReady && model.trimmedDuration >= 0.15)
             }
             .buttonStyle(.plain)
             .focusable(false)

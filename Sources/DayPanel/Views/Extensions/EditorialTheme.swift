@@ -421,6 +421,7 @@ struct AccentButtonStyle: ButtonStyle {
                 .padding(.horizontal, 12).padding(.vertical, 5)
                 .glassControl(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
                               tint: enabled ? Editorial.accent : nil)
+                .accentGlow(enabled)
                 .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                 .scaleEffect(configuration.isPressed ? 0.96 : (hover && enabled ? 1.02 : 1.0))
                 .opacity(configuration.isPressed ? 0.85 : 1)

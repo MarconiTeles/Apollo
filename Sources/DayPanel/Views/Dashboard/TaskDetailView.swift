@@ -2053,7 +2053,8 @@ struct TaskDetailView: View, Equatable {
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 5)
-                                .background(Capsule().fill(Editorial.accent))
+                                .accentGlassButton(in: Capsule(style: .continuous),
+                                                   glow: newReminderDate > Date())
                         }
                         .buttonStyle(.plain)
                         .focusEffectDisabled()

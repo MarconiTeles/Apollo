@@ -1099,7 +1099,8 @@ struct OnboardingView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, minHeight: 38)
-                .background(tint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accentGlassButton(in: RoundedRectangle(cornerRadius: 10, style: .continuous),
+                                   tint: tint)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()

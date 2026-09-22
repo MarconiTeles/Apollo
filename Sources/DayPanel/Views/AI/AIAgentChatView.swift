@@ -1213,10 +1213,9 @@ struct AIAgentChatView: View {
                             .foregroundStyle(canSend ? Editorial.page
                                                      : Editorial.inkMute)
                             .frame(width: 32, height: 32)
-                            .background(
-                                (canSend ? Editorial.accent : Editorial.rule),
-                                in: Circle()
-                            )
+                            .background(canSend ? Color.clear : Editorial.rule,
+                                        in: Circle())
+                            .accentGlassButton(in: Circle(), isOn: canSend)
                     }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()

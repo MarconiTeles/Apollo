@@ -1497,6 +1497,7 @@ struct ContentView: View {
                 // Liquid Glass material tinted with the cinnabar accent —
                 // interactive glass carries its own hover/press feedback.
                 .liquidGlassCapsule(tint: Editorial.accent, tintOpacity: 0.9)
+                .accentGlow()
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()

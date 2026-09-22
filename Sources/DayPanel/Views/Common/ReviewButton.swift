@@ -63,7 +63,7 @@ struct ReviewButton: View {
             .foregroundStyle(Editorial.page)
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 4).fill(Editorial.accent))
+            .accentGlassButton(in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             .overlay(alignment: .topTrailing) {
                 if unseen {
                     Circle()

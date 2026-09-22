@@ -1510,7 +1510,7 @@ struct TaskCommentsSection: View, Equatable {
                         .foregroundStyle(Editorial.page)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 4)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(Editorial.accent))
+                        .accentGlassButton(in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

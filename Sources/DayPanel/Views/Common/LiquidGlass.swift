@@ -299,6 +299,30 @@ extension View {
                     lightweight: lightweight)
     }
 
+    /// Botão azul do Apollo: vidro Liquid Glass tingido de azul e um
+    /// glow da mesma cor em volta. Um lugar só para o visual de todo
+    /// botão de ação primária — ajustar o glow aqui muda o app inteiro.
+    /// `isOn: false` devolve a view intacta (botão que só é azul quando
+    /// é o primário); `glow: false` apaga o brilho (desabilitado).
+    @ViewBuilder
+    func accentGlassButton<S: InsettableShape>(in shape: S,
+                                               tint: Color = Editorial.accent,
+                                               isOn: Bool = true,
+                                               glow: Bool = true) -> some View {
+        if isOn {
+            liquidGlass(in: shape, tint: tint, tintOpacity: 0.9, interactive: glow)
+                .accentGlow(glow, tint: tint)
+        } else {
+            self
+        }
+    }
+
+    /// Só o brilho, para botão azul que já tem o próprio vidro. Duas
+    /// sombras: uma larga e suave (o halo) e uma curta (a borda acesa).
+    func accentGlow(_ active: Bool = true, tint: Color = Editorial.accent) -> some View {
+        modifier(AccentGlowModifier(active: active, tint: tint))
+    }
+
     /// Applies a Liquid Glass "selected" pill ONLY when `active` —
     /// otherwise the view is returned untouched. For toggle/segmented
     /// surfaces (sidebar selection, filter pills) where only the chosen
@@ -316,5 +340,22 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+/// Janela fora de foco: o sistema apaga o azul do vidro para cinza, e o
+/// brilho azul em volta de um botão cinza parecia defeito. O glow segue
+/// o foco da janela — volta sozinho quando ela é ativada de novo.
+private struct AccentGlowModifier: ViewModifier {
+    let active: Bool
+    let tint: Color
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    func body(content: Content) -> some View {
+        let lit = active && controlActiveState != .inactive
+        content
+            .shadow(color: tint.opacity(lit ? 0.55 : 0), radius: 12)
+            .shadow(color: tint.opacity(lit ? 0.35 : 0), radius: 3)
+            .animation(.easeOut(duration: 0.18), value: lit)
     }
 }
