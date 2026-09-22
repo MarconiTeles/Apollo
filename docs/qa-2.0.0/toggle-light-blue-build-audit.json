@@ -1,0 +1,14 @@
+{
+  "base_commit": "7d50c7de0364afc0ab959f18fbb620374a4db420",
+  "version": "2.0.0 (98)",
+  "build": "Release universal compiled; timestamp service failed initially, identical signing commands retried successfully",
+  "signature": "codesign --verify --deep --strict passed; required entitlements passed",
+  "architectures": "x86_64 arm64",
+  "binary_sha256": "9e52240c441b0d352b08c2eff444c870807570753b740684ac94a44bdaff0688",
+  "source_sha256": {
+    "Sources/DayPanel/Views/Common/MyTasksFilterToggle.swift": "074a586bc4ed53b4f10cd2a85faa437a24cdb15d5df997f8cf059bc100ba7eb5"
+  },
+  "switch_tint": "#BFE9FF",
+  "visual_validation": "Active switch color not visually verified",
+  "published": false
+}

@@ -9,7 +9,7 @@ struct MyTasksFilterToggle: View {
             set: { filters.setMine($0, userId: auth.userId) }
         ))
         .toggleStyle(.switch)
-        .tint(.green)
+        .tint(Color(red: 191 / 255, green: 233 / 255, blue: 1))
         .foregroundStyle(.white)
         .controlSize(.small)
         .font(Editorial.sans(12.5, .medium))
