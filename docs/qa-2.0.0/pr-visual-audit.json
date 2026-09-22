@@ -1,0 +1,604 @@
+{
+  "reference": "original PR #1 including its visual changes",
+  "original_pr_head": "db87ba582a3d31ff72602c731f4b5436267f9d29",
+  "stable_base": "dcf22830944bbe93f6787a08eff3c90077b4d2d8",
+  "scope": "Static source audit, not screenshot or physical acceptance",
+  "views_total": 84,
+  "byte_identical_views": 81,
+  "functional_view_paths": [
+    "Sources/DayPanel/Views/Home/MyTasksAppKitList.swift",
+    "Sources/DayPanel/Views/Home/TaskBulkMediaFlowSheet.swift",
+    "Sources/DayPanel/Views/Home/TaskMediaFlowSheet.swift"
+  ],
+  "shared_capsule_and_notice_renderer_identical_to_pr": true,
+  "files": [
+    {
+      "path": "Sources/DayPanel/Views/AI/AIAgentChatView.swift",
+      "original_pr_sha256": "d7f6c088ef89da11a0ba7ff7398a7728edea15b7a63eeb4e6d64dbd658bd2902",
+      "final_sha256": "d7f6c088ef89da11a0ba7ff7398a7728edea15b7a63eeb4e6d64dbd658bd2902",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/CommandPalette/CommandPaletteController.swift",
+      "original_pr_sha256": "42fa47a0d5b38aa47b4d3eb4f20647bdf369b7bbf757ad125cde593f51b6bc99",
+      "final_sha256": "42fa47a0d5b38aa47b4d3eb4f20647bdf369b7bbf757ad125cde593f51b6bc99",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/CommandPalette/CommandPaletteEngine.swift",
+      "original_pr_sha256": "2161a5c069f742778a9550b9332453d16ce34b160e4e8baefc2a537f115c28ae",
+      "final_sha256": "2161a5c069f742778a9550b9332453d16ce34b160e4e8baefc2a537f115c28ae",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/CommandPalette/CommandPaletteItem.swift",
+      "original_pr_sha256": "e31f338e45c5c62239af794f5729e77d9739da87f4f356659deefc859ec86d72",
+      "final_sha256": "e31f338e45c5c62239af794f5729e77d9739da87f4f356659deefc859ec86d72",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/CommandPalette/CommandPaletteModel.swift",
+      "original_pr_sha256": "b438f4a62a55e4981e45556794212de5d2739c290ec67d0fdb176dd7850e8221",
+      "final_sha256": "b438f4a62a55e4981e45556794212de5d2739c290ec67d0fdb176dd7850e8221",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/CommandPalette/CommandPaletteView.swift",
+      "original_pr_sha256": "9253f534efbd34f1d92e6212814dbc2b14affdbf49b186df9d48a086e4a8bfe5",
+      "final_sha256": "9253f534efbd34f1d92e6212814dbc2b14affdbf49b186df9d48a086e4a8bfe5",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/AppIconLoader.swift",
+      "original_pr_sha256": "19a3171627a3c793973a4b62b7ca122c0bcd75d10ea997ef7e010c438a920bca",
+      "final_sha256": "19a3171627a3c793973a4b62b7ca122c0bcd75d10ea997ef7e010c438a920bca",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/CachedAvatar.swift",
+      "original_pr_sha256": "74dacb1ad368ae057b02778b672d9fa015549a733440ce56ca52f6109dfcaa2a",
+      "final_sha256": "74dacb1ad368ae057b02778b672d9fa015549a733440ce56ca52f6109dfcaa2a",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/DescriptionAttachmentRenderer.swift",
+      "original_pr_sha256": "e25ddf6d3b890dcb18fd153c08f1cca58f036110c2093908a091e4d20f609e8e",
+      "final_sha256": "e25ddf6d3b890dcb18fd153c08f1cca58f036110c2093908a091e4d20f609e8e",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/GrowingTextView.swift",
+      "original_pr_sha256": "f8e696806bff41f7b55ed92d4d27025d32f66f4c6407b04e8f673a70baf7dc36",
+      "final_sha256": "f8e696806bff41f7b55ed92d4d27025d32f66f4c6407b04e8f673a70baf7dc36",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/Haptics.swift",
+      "original_pr_sha256": "b87af45e1c9ce644a2fdfb73338b16dae7734dede9fdab2540f47b6138513475",
+      "final_sha256": "b87af45e1c9ce644a2fdfb73338b16dae7734dede9fdab2540f47b6138513475",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/LiquidGlass.swift",
+      "original_pr_sha256": "3b524214314a7cba3e425c6e903bd183535986ffea5e12200d15360a7e8e01e9",
+      "final_sha256": "3b524214314a7cba3e425c6e903bd183535986ffea5e12200d15360a7e8e01e9",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/MouseOriginCapture.swift",
+      "original_pr_sha256": "465df840c30c0eb3bd51b424f90cd44524538e9531360fa45c2bca64b1034299",
+      "final_sha256": "465df840c30c0eb3bd51b424f90cd44524538e9531360fa45c2bca64b1034299",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/NSCollectionListView.swift",
+      "original_pr_sha256": "b072dcda35b434521aabfa76d78b633d4c8010eba750f95dcf3dcd9951f1f9fe",
+      "final_sha256": "b072dcda35b434521aabfa76d78b633d4c8010eba750f95dcf3dcd9951f1f9fe",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/OfflineQueueIndicator.swift",
+      "original_pr_sha256": "0136c1331ddd83ff31f252c8f92b09fb9eae532e840cd079e7a326aa24b80e88",
+      "final_sha256": "0136c1331ddd83ff31f252c8f92b09fb9eae532e840cd079e7a326aa24b80e88",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/ReviewButton.swift",
+      "original_pr_sha256": "476cfe4eb0dd30606f4349b694be229271f849b38465adebdf4dbc171b638a71",
+      "final_sha256": "476cfe4eb0dd30606f4349b694be229271f849b38465adebdf4dbc171b638a71",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/RichTextEditor.swift",
+      "original_pr_sha256": "5122a43480087bee7a99dff4d74dd515c0c57acc7e34c2e1d6bc9e699c4c5428",
+      "final_sha256": "5122a43480087bee7a99dff4d74dd515c0c57acc7e34c2e1d6bc9e699c4c5428",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/ScrollGate.swift",
+      "original_pr_sha256": "1ee39dcaf3f947a82e8bdea96943271204f9e0666e2fdc1c63b1a1b1508a56c1",
+      "final_sha256": "1ee39dcaf3f947a82e8bdea96943271204f9e0666e2fdc1c63b1a1b1508a56c1",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/ScrollablePopupContent.swift",
+      "original_pr_sha256": "2df90c13c235747ee50985693a973824e7257a5fcac4fe09c3dc130665d3b174",
+      "final_sha256": "2df90c13c235747ee50985693a973824e7257a5fcac4fe09c3dc130665d3b174",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/SharedDateFormatters.swift",
+      "original_pr_sha256": "014a303981089c618221a8be699aeb3e2d65fdf2b42f91088c07f174701626ef",
+      "final_sha256": "014a303981089c618221a8be699aeb3e2d65fdf2b42f91088c07f174701626ef",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/TaskBulkActions.swift",
+      "original_pr_sha256": "c55b4a09f8f5d8621877326ced5092ec716426582cdc30242701d7ea20e84dde",
+      "final_sha256": "c55b4a09f8f5d8621877326ced5092ec716426582cdc30242701d7ea20e84dde",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/TaskCollectionView.swift",
+      "original_pr_sha256": "6fdab2509dd849d8d8b2fca923e1b58fee57184b6423dd0b1558fbd57ea8d11e",
+      "final_sha256": "6fdab2509dd849d8d8b2fca923e1b58fee57184b6423dd0b1558fbd57ea8d11e",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/TaskContextMenu.swift",
+      "original_pr_sha256": "c251b3f2444cefaf533e7272744d12ce824946360eb907fce65110d1f9bc4d2e",
+      "final_sha256": "c251b3f2444cefaf533e7272744d12ce824946360eb907fce65110d1f9bc4d2e",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/TaskRowCellView.swift",
+      "original_pr_sha256": "1e88a9164ba1eda75cc121c08bdf33ed4cc2b7597b9438cdfa85d2c2380ce7a7",
+      "final_sha256": "1e88a9164ba1eda75cc121c08bdf33ed4cc2b7597b9438cdfa85d2c2380ce7a7",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/TextEditorEnhancements.swift",
+      "original_pr_sha256": "996e928e14feba419f8b91bf36f13be1d9b082d3145adef702e4309e3acabe27",
+      "final_sha256": "996e928e14feba419f8b91bf36f13be1d9b082d3145adef702e4309e3acabe27",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/TodayCache.swift",
+      "original_pr_sha256": "39d77851ec7a5fd370925d60179f2f3c3c57baa7eabbe3a2556a0af7d503b456",
+      "final_sha256": "39d77851ec7a5fd370925d60179f2f3c3c57baa7eabbe3a2556a0af7d503b456",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/TwoFingerSwipeRecognizer.swift",
+      "original_pr_sha256": "751e7ac92a04ebd36d9dc85442348f99eaa36f79b0dbca88f9e15c38e074b6f6",
+      "final_sha256": "751e7ac92a04ebd36d9dc85442348f99eaa36f79b0dbca88f9e15c38e074b6f6",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/UpdateAvailableBanner.swift",
+      "original_pr_sha256": "458b8cbf40b47dcc03d05c8f96d5279988c38b4e4120e73e803f1b6012a886b8",
+      "final_sha256": "458b8cbf40b47dcc03d05c8f96d5279988c38b4e4120e73e803f1b6012a886b8",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/UpdaterCardView.swift",
+      "original_pr_sha256": "1a9f483509dfdc8d25542d5ce0237ccc4dfa6eac9c6e1b4426187b29d64d25f7",
+      "final_sha256": "1a9f483509dfdc8d25542d5ce0237ccc4dfa6eac9c6e1b4426187b29d64d25f7",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/VisualEffectView.swift",
+      "original_pr_sha256": "321b710280e321a50c215f4aac540dd73e5d4e23eb101f5c691c23ecf391408a",
+      "final_sha256": "321b710280e321a50c215f4aac540dd73e5d4e23eb101f5c691c23ecf391408a",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/WindowDragArea.swift",
+      "original_pr_sha256": "88884fc5be8566d185a25de909a0b3d9bea4668c249a951f1c35523f7924eef4",
+      "final_sha256": "88884fc5be8566d185a25de909a0b3d9bea4668c249a951f1c35523f7924eef4",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Common/WindowSizeEnvironment.swift",
+      "original_pr_sha256": "f8754ba59d66329292f494843b66b33fc3fb1648bbdf420d000e4f0c8e707da7",
+      "final_sha256": "f8754ba59d66329292f494843b66b33fc3fb1648bbdf420d000e4f0c8e707da7",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Components/StatusIndicator.swift",
+      "original_pr_sha256": "98fbdb0396a4425e3695163770dab078073db6ce4ce0630dd277a6feb386f6bf",
+      "final_sha256": "98fbdb0396a4425e3695163770dab078073db6ce4ce0630dd277a6feb386f6bf",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Components/SyncButton.swift",
+      "original_pr_sha256": "179d2a106f954f142f00c2b6b7b5e866b012b27329a02ed87e29ebce201a662c",
+      "final_sha256": "179d2a106f954f142f00c2b6b7b5e866b012b27329a02ed87e29ebce201a662c",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/ContentView.swift",
+      "original_pr_sha256": "eebb72694ef45ee6b644502c60cc42ff2e31a08dd2472e135dfc353207974eff",
+      "final_sha256": "eebb72694ef45ee6b644502c60cc42ff2e31a08dd2472e135dfc353207974eff",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/CommentBodyView.swift",
+      "original_pr_sha256": "d044cb529f767802bc63576e0d530c334a2995e4316215b0da2664416fbefa57",
+      "final_sha256": "d044cb529f767802bc63576e0d530c334a2995e4316215b0da2664416fbefa57",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/DatePickerPopover.swift",
+      "original_pr_sha256": "10af6d02c5d5a5be5b9246d7b0a6e886e88f757fe18ad7e972f63b9bb21d8fdc",
+      "final_sha256": "10af6d02c5d5a5be5b9246d7b0a6e886e88f757fe18ad7e972f63b9bb21d8fdc",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/EventDetailOverlay.swift",
+      "original_pr_sha256": "998b999d56f57600d1f8b1728e965d2cb3da40110fcb4f3332bad1ab5a808ad4",
+      "final_sha256": "998b999d56f57600d1f8b1728e965d2cb3da40110fcb4f3332bad1ab5a808ad4",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/EventDetailView.swift",
+      "original_pr_sha256": "a676e18579218e127dd4af81f53dcc9e9936d38b24b415c2b7b047fa18ffb2d4",
+      "final_sha256": "a676e18579218e127dd4af81f53dcc9e9936d38b24b415c2b7b047fa18ffb2d4",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/EventInlineDetail.swift",
+      "original_pr_sha256": "ab8c5cc836fd361755aefd9ba65246cd55025a77413237ba0f3edf3688482044",
+      "final_sha256": "ab8c5cc836fd361755aefd9ba65246cd55025a77413237ba0f3edf3688482044",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/FloatingModal.swift",
+      "original_pr_sha256": "08e758ed71e2f6a47faf128f48f08a4aa4227bf8d1f57202c8a3380e10eee9be",
+      "final_sha256": "08e758ed71e2f6a47faf128f48f08a4aa4227bf8d1f57202c8a3380e10eee9be",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/SharedCalendarSearchBar.swift",
+      "original_pr_sha256": "4bd032534a14f9417952d8e184b229cae568e0cce83181f2fcaa9d52708e17bb",
+      "final_sha256": "4bd032534a14f9417952d8e184b229cae568e0cce83181f2fcaa9d52708e17bb",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/StatusPickerBubblePresenter.swift",
+      "original_pr_sha256": "4f02c0373bca8daab22b2d2ece4dfc80dfbf69b0b45da0e14e5012b25b32569c",
+      "final_sha256": "4f02c0373bca8daab22b2d2ece4dfc80dfbf69b0b45da0e14e5012b25b32569c",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/StatusPickerPopover.swift",
+      "original_pr_sha256": "d176fe891819182a9ff67eb9a6d34a45cd1516dc3b5b164f920c8ea0496e3f98",
+      "final_sha256": "d176fe891819182a9ff67eb9a6d34a45cd1516dc3b5b164f920c8ea0496e3f98",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/TaskCommentsSection.swift",
+      "original_pr_sha256": "6b9118c4084dc1b8059fa00e6f03d0de54877a6359ba9baafa959939637bfcd1",
+      "final_sha256": "6b9118c4084dc1b8059fa00e6f03d0de54877a6359ba9baafa959939637bfcd1",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/TaskDetailOverlay.swift",
+      "original_pr_sha256": "7e57b2c182478c7ec1b9b645f90d0e2267bef5c5894043e7c237852c0cb8c4ef",
+      "final_sha256": "7e57b2c182478c7ec1b9b645f90d0e2267bef5c5894043e7c237852c0cb8c4ef",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/TaskDetailSheet.swift",
+      "original_pr_sha256": "445ec1a259ed9193c37a9444cabbcce9ce304ca578700f998aa8ba1f64b90793",
+      "final_sha256": "445ec1a259ed9193c37a9444cabbcce9ce304ca578700f998aa8ba1f64b90793",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/TaskDetailView.swift",
+      "original_pr_sha256": "9fde5adf450326b7afe2f73bcf5fce9f2d56f1ec8037d97785d084b9e66bb332",
+      "final_sha256": "9fde5adf450326b7afe2f73bcf5fce9f2d56f1ec8037d97785d084b9e66bb332",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/TaskFilterPopover.swift",
+      "original_pr_sha256": "db2e1097f59552028fd01f11ebcc402af40837fa2a100c18683701bc3f86dfd4",
+      "final_sha256": "db2e1097f59552028fd01f11ebcc402af40837fa2a100c18683701bc3f86dfd4",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/TaskListView.swift",
+      "original_pr_sha256": "d0ac3f850a4a581bc249c4945c1a8d5fedeb6768b4f2685f0bb9ead08c43b15e",
+      "final_sha256": "d0ac3f850a4a581bc249c4945c1a8d5fedeb6768b4f2685f0bb9ead08c43b15e",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/TaskRowView.swift",
+      "original_pr_sha256": "04adfa4be5c2238362e00e37fff49270c2a0c00189175c5bd6abb5e77f8f411c",
+      "final_sha256": "04adfa4be5c2238362e00e37fff49270c2a0c00189175c5bd6abb5e77f8f411c",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Dashboard/TimelineView.swift",
+      "original_pr_sha256": "579a43c462a65872f1e86cd0ad73b1f34f6c840ba13289b35071d3ba3a2e0292",
+      "final_sha256": "579a43c462a65872f1e86cd0ad73b1f34f6c840ba13289b35071d3ba3a2e0292",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Extensions/CascadeAppear.swift",
+      "original_pr_sha256": "cf79e214fab12385387445610b78b96accd794e40fdff7f869908f6e24581759",
+      "final_sha256": "cf79e214fab12385387445610b78b96accd794e40fdff7f869908f6e24581759",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Extensions/Color+Hex.swift",
+      "original_pr_sha256": "37153bc444c6f32ad11150f2d1648fa835a76d828e4c700ac63c54f87fd2fc69",
+      "final_sha256": "37153bc444c6f32ad11150f2d1648fa835a76d828e4c700ac63c54f87fd2fc69",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Extensions/Design.swift",
+      "original_pr_sha256": "8da0a7731ac00115c4e2474eaa3fcef7d0638bf5980e6ce7364659aa68db73dc",
+      "final_sha256": "8da0a7731ac00115c4e2474eaa3fcef7d0638bf5980e6ce7364659aa68db73dc",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Extensions/EditorialSkeletonCard.swift",
+      "original_pr_sha256": "31897166a7886ca669bfd22ba7c15eeb4cc8e0b9a0e1c16fd9d7b232e3b08d60",
+      "final_sha256": "31897166a7886ca669bfd22ba7c15eeb4cc8e0b9a0e1c16fd9d7b232e3b08d60",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Extensions/EditorialSkeletonRow.swift",
+      "original_pr_sha256": "27725ab9ee822aa586132ffbf0c3ad94fa04ee2083f2a1dc450c52362624d4af",
+      "final_sha256": "27725ab9ee822aa586132ffbf0c3ad94fa04ee2083f2a1dc450c52362624d4af",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Extensions/EditorialTheme.swift",
+      "original_pr_sha256": "502a2c4e92c6a37160b471bd1a775c96fb39d800eb7b387ba4dfe240cc86322f",
+      "final_sha256": "502a2c4e92c6a37160b471bd1a775c96fb39d800eb7b387ba4dfe240cc86322f",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Extensions/Materials.swift",
+      "original_pr_sha256": "e1d08eb2cc255e26cd96a9c0d701cfeacd02706daea6c0492d5bb8635272602f",
+      "final_sha256": "e1d08eb2cc255e26cd96a9c0d701cfeacd02706daea6c0492d5bb8635272602f",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Forms/CreateEventSheet.swift",
+      "original_pr_sha256": "3037a1be27ba90ea4eddf5353f5df41b5201cca52849bc51ef795c8c6e05fa9a",
+      "final_sha256": "3037a1be27ba90ea4eddf5353f5df41b5201cca52849bc51ef795c8c6e05fa9a",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Forms/CreateTaskSheet.swift",
+      "original_pr_sha256": "c3275ebf9b306f87332ba5951752b958daef27d9ac1a124a1bc33ce80d405fa0",
+      "final_sha256": "c3275ebf9b306f87332ba5951752b958daef27d9ac1a124a1bc33ce80d405fa0",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Forms/GlassFormComponents.swift",
+      "original_pr_sha256": "7089cb6ae635894ab2f570cf65a906c2f9d0d38532ac0bb8737e77d9550ad74e",
+      "final_sha256": "7089cb6ae635894ab2f570cf65a906c2f9d0d38532ac0bb8737e77d9550ad74e",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/AssignedCommentsView.swift",
+      "original_pr_sha256": "0c59d0cab0e50e66e99be5d4b062651113131c85392eed8d530ab111701d6533",
+      "final_sha256": "0c59d0cab0e50e66e99be5d4b062651113131c85392eed8d530ab111701d6533",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/ClipTrimmerView.swift",
+      "original_pr_sha256": "758a7dfa3bbb78855335c6e5c55958df692dc4e079dc788d1c037e23fbe746fa",
+      "final_sha256": "758a7dfa3bbb78855335c6e5c55958df692dc4e079dc788d1c037e23fbe746fa",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/EditorialBoardView.swift",
+      "original_pr_sha256": "508889cc1a5d2cab3d56ac5165ada00772b9a54d8edbfa8df8a9348c9483478e",
+      "final_sha256": "508889cc1a5d2cab3d56ac5165ada00772b9a54d8edbfa8df8a9348c9483478e",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/EditorialHomeHeader.swift",
+      "original_pr_sha256": "fafa3123165dee476f3c172e338bebce77fd90f950a4598aacecd529c5e7089d",
+      "final_sha256": "fafa3123165dee476f3c172e338bebce77fd90f950a4598aacecd529c5e7089d",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/EditorialHomeInboxColumn.swift",
+      "original_pr_sha256": "725ff09246c5c9a95b637f774a094b982e716bdb4c0f3587d1d1ab854bd757ee",
+      "final_sha256": "725ff09246c5c9a95b637f774a094b982e716bdb4c0f3587d1d1ab854bd757ee",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/EditorialHomeTasksColumn.swift",
+      "original_pr_sha256": "97c58d4473c4d0ba7616ce8e5f3d428de9a9ff7237908fd55b0cc277ae50048e",
+      "final_sha256": "97c58d4473c4d0ba7616ce8e5f3d428de9a9ff7237908fd55b0cc277ae50048e",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/EditorialMyTasksView.swift",
+      "original_pr_sha256": "6e450b5bb9dc28a44174e46bb881e7f5f1818877e93f7315d70f96dde9e0660a",
+      "final_sha256": "6e450b5bb9dc28a44174e46bb881e7f5f1818877e93f7315d70f96dde9e0660a",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/EditorialSidebar.swift",
+      "original_pr_sha256": "a5315bfaac505171e1503f7785f5d221c70fd77c676bf7ddec2cbfeee1510540",
+      "final_sha256": "a5315bfaac505171e1503f7785f5d221c70fd77c676bf7ddec2cbfeee1510540",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/EditorialSyncBar.swift",
+      "original_pr_sha256": "4be6e878b116e60cb03bbb0b3e038ae8e2beac22288109b96bc43d4a814d30af",
+      "final_sha256": "4be6e878b116e60cb03bbb0b3e038ae8e2beac22288109b96bc43d4a814d30af",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/InboxAppKitList.swift",
+      "original_pr_sha256": "9c1d80f8363b04a8d7c989030651ed54b874117bdfb5739a283f7cc523823582",
+      "final_sha256": "9c1d80f8363b04a8d7c989030651ed54b874117bdfb5739a283f7cc523823582",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/MyTasksAppKitList.swift",
+      "original_pr_sha256": "ecdc60dd2a65f8db165897b01d2f9488c8880c7ebfebb26e3f69acad09d0c1f9",
+      "final_sha256": "639f1982d4102b7c37ef273c23a6ef5172de8680ed53678e8bfcac8e28fd116b",
+      "byte_identical": false,
+      "functional_corrections_only": true
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/NextEventHighlightCard.swift",
+      "original_pr_sha256": "81d655c081f94ba6e44fae666f54a8e5a085f9ad0c040859d5246b5dd0e112fc",
+      "final_sha256": "81d655c081f94ba6e44fae666f54a8e5a085f9ad0c040859d5246b5dd0e112fc",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/TaskBulkMediaFlowSheet.swift",
+      "original_pr_sha256": "4098e2dad3dd76aac9b0fb1a6b782c40f6330033d8b204570fe5058094da7da1",
+      "final_sha256": "b12d1b7fad10d584f2c0ebf6c63548536ed7ffa27acf0f6fbd379da4e680ae7a",
+      "byte_identical": false,
+      "functional_corrections_only": true
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/TaskMediaDropDecisionCard.swift",
+      "original_pr_sha256": "9cd51f925e6959f6d65cfc0ac3fd949249c2ec5da80e030b3040add0f6897503",
+      "final_sha256": "9cd51f925e6959f6d65cfc0ac3fd949249c2ec5da80e030b3040add0f6897503",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/TaskMediaFlowSheet.swift",
+      "original_pr_sha256": "3c93c33527064b1b51fd45d4b4b90d8ba0cb399966bd9c7687e00270362d41c3",
+      "final_sha256": "328966661bf41ad8fc362fe1d0598126780348d5691fee24578d98f9d78ffa95",
+      "byte_identical": false,
+      "functional_corrections_only": true
+    },
+    {
+      "path": "Sources/DayPanel/Views/Home/TaskReviewsFlowSheet.swift",
+      "original_pr_sha256": "77401f997ea9f58fa7db8deccb27941320b329ab71b80795e8efd44db23d014f",
+      "final_sha256": "77401f997ea9f58fa7db8deccb27941320b329ab71b80795e8efd44db23d014f",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Notifications/BellPill.swift",
+      "original_pr_sha256": "76e25c175aaa1031e587a3fc902100e25a9336ce09baa869f325d8a384cdb65e",
+      "final_sha256": "76e25c175aaa1031e587a3fc902100e25a9336ce09baa869f325d8a384cdb65e",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Notifications/InAppToastOverlay.swift",
+      "original_pr_sha256": "09e512db8a5d6107552d8b7ba0355420afe3ca52b9175c4f9c563ddc5e262bd9",
+      "final_sha256": "09e512db8a5d6107552d8b7ba0355420afe3ca52b9175c4f9c563ddc5e262bd9",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Notifications/NotificationsCenterView.swift",
+      "original_pr_sha256": "e4c0f3c0b51ffbc938632436035719a8368c0e871b1f607e791bb22adac870ef",
+      "final_sha256": "e4c0f3c0b51ffbc938632436035719a8368c0e871b1f607e791bb22adac870ef",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Onboarding/OnboardingView.swift",
+      "original_pr_sha256": "548af40a0663d5a949fb37044663712990e4bc91b2ea8da921f5367673896b4d",
+      "final_sha256": "548af40a0663d5a949fb37044663712990e4bc91b2ea8da921f5367673896b4d",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/Onboarding/WelcomeAnimationView.swift",
+      "original_pr_sha256": "831503d5e40a7e16fb3d673c87f6c2bd5a688e2c8284ced0d68121b90c387ae8",
+      "final_sha256": "831503d5e40a7e16fb3d673c87f6c2bd5a688e2c8284ced0d68121b90c387ae8",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    },
+    {
+      "path": "Sources/DayPanel/Views/SettingsView.swift",
+      "original_pr_sha256": "0c62d719a28a611cdedccdc017b032cdbd80972cb905647bfd69772d67b23013",
+      "final_sha256": "0c62d719a28a611cdedccdc017b032cdbd80972cb905647bfd69772d67b23013",
+      "byte_identical": true,
+      "functional_corrections_only": false
+    }
+  ]
+}

@@ -9,42 +9,149 @@ private extension Data {
 }
 
 final class ClickUpService {
+    struct UploadedAttachment: Sendable, Equatable {
+        let id: String?
+        let url: URL
+    }
+
     private let auth: ClickUpAuthService
     init(auth: ClickUpAuthService) { self.auth = auth }
 
     private var token:  String? { auth.accessToken }   // reads dp_clickup_token
     private var listId: String? { KeychainHelper.load(for: KeychainHelper.Keys.clickupListId) }
 
+    /// Drop-in replacement for `URLSession.shared.data(for:)`
+    /// used by every ClickUp call. ClickUp caps the API at
+    /// 100 req/min; a 429 used to come back as an unparseable
+    /// body that `parseTasks` silently turned into an empty
+    /// array — lists rendered PARTIAL/empty with no error.
+    /// Now: 429 retries after the server's `Retry-After` hint
+    /// (mutations included — a 429 was never processed, so the
+    /// retry can't double-apply), transient 5xx retries with
+    /// exponential backoff on idempotent GETs only, and if the
+    /// retry budget runs out the classified `APIError` is THROWN
+    /// instead of letting garbage flow into the parsers.
+    static func data(retrying req: URLRequest,
+                     attempts: Int = 3) async throws -> (Data, URLResponse) {
+        var attempt = 0
+        while true {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return (data, response) }
+
+            let isGet = (req.httpMethod ?? "GET").uppercased() == "GET"
+            let retryable = http.statusCode == 429 ||
+                            ((500...599).contains(http.statusCode) && isGet)
+            if !retryable { return (data, response) }
+
+            if attempt >= attempts - 1 {
+                // Out of budget — surface the typed error so the
+                // caller's catch keeps its previous data instead
+                // of applying a truncated parse.
+                throw APIError.classify(response: response, data: data, thrown: nil)
+                    ?? APIError.serverError(statusCode: http.statusCode)
+            }
+            let serverHint = http.value(forHTTPHeaderField: "Retry-After")
+                .flatMap(TimeInterval.init)
+            // 1s → 2s → 4s, capped; server hint (when present) wins.
+            let backoff = min(serverHint ?? pow(2, Double(attempt)), 15)
+            try await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+            attempt += 1
+        }
+    }
+
 
     // MARK: - Tasks
 
-    func listTasks() async throws -> [CUTask] {
-        guard let token, let listId else { throw CUError.notConfigured }
+    /// Convenience wrapper that uses the keychain-pinned active
+    /// listId. Preserves all existing call sites that assume
+    /// "the current list".
+    func listTasks(maxPages: Int = 10) async throws -> [CUTask] {
+        guard let listId else { throw CUError.notConfigured }
+        return try await listTasks(listId: listId, maxPages: maxPages)
+    }
 
+    /// Single-page fetch for a specific list — exposed so callers
+    /// can STREAM tasks into the UI as each page lands, rather
+    /// than waiting for the full paginated set. Returns up to
+    /// 100 tasks (ClickUp's page cap); caller knows it's the
+    /// last page when the response has <100 entries.
+    func listTasksPage(listId: String, page: Int) async throws -> [CUTask] {
+        guard let token else { throw CUError.notConfigured }
         var comps = URLComponents(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))/task")!
         comps.queryItems = [
             URLQueryItem(name: "include_closed", value: "true"),
-            // `subtasks=true` makes ClickUp include child tasks in
-            // the response (each with its `parent` field set to
-            // the parent task's id). The app filters them out of
-            // the top-level list view and only surfaces them
-            // under the parent's detail popup.
             URLQueryItem(name: "subtasks",       value: "true"),
-            // `markdown_description` opt-in: ClickUp's plain
-            // `description` / `text_content` fields silently drop
-            // inline file references (Google Drive embeds,
-            // pasted-as-link attachments). The markdown version
-            // includes them as `[label](url)` so the renderer can
-            // surface them. parseTasks falls back to the plain
-            // field when markdown_description isn't returned.
             URLQueryItem(name: "include_markdown_description", value: "true"),
+            URLQueryItem(name: "page",           value: String(page)),
         ]
-
         var req = URLRequest(url: comps.url!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         return parseTasks(data)
+    }
+
+    /// Paginated fetch for a SPECIFIC list — the variant used by
+    /// the per-list prefetch cache in AppState so we can warm any
+    /// list without flipping the keychain `clickupListId`.
+    func listTasks(listId: String, maxPages: Int = 10) async throws -> [CUTask] {
+        guard let token else { throw CUError.notConfigured }
+
+        // ClickUp's `/list/{listId}/task` endpoint pages at 100
+        // tasks per response. Without walking the pages, lists
+        // bigger than 100 silently truncate — Listas / Copy with
+        // ~100 tasks was hitting exactly this and dropping tasks
+        // that lived on page 2. (`subtasks=true` and
+        // `include_markdown_description` rationale lives in
+        // `listTasksPage`, which builds the actual request.)
+        // 10 pages = 1000 tasks is generous; the cap just bounds
+        // a pathological list size.
+        //
+        // PERF: pages after the first are fetched in PARALLEL
+        // batches of 3 — a 900-task list used to cost 9 serial
+        // round-trips (~4-5s of pure latency on every sync); now
+        // it's ~4 round-trip windows. Page order is preserved on
+        // assembly. The only waste is ≤2 empty fetches when the
+        // last page falls mid-batch.
+        _ = token  // keep the notConfigured guard above meaningful
+        return try await Self.paginated(maxPages: maxPages) { page in
+            try await self.listTasksPage(listId: listId, page: page)
+        }
+    }
+
+    /// Shared batched-parallel pagination walker. Fetches page 0
+    /// first (most lists fit in one page — no speculative cost),
+    /// then walks the remainder in concurrent batches of 3 until
+    /// a short page (<100) or `maxPages`. Results are stitched in
+    /// page order. Internal (not private) so the assembly-order
+    /// invariant is unit-testable with a fake `fetchPage`.
+    static func paginated(
+        maxPages: Int,
+        batchSize: Int = 3,
+        fetchPage: @escaping (Int) async throws -> [CUTask]
+    ) async throws -> [CUTask] {
+        var all = try await fetchPage(0)
+        if all.count < 100 || maxPages <= 1 { return all }
+
+        var nextPage = 1
+        while nextPage < maxPages {
+            let batch = Array(nextPage..<min(nextPage + batchSize, maxPages))
+            var byPage: [Int: [CUTask]] = [:]
+            try await withThrowingTaskGroup(of: (Int, [CUTask]).self) { group in
+                for p in batch {
+                    group.addTask { (p, try await fetchPage(p)) }
+                }
+                for try await (p, pageTasks) in group { byPage[p] = pageTasks }
+            }
+            var reachedEnd = false
+            for p in batch {
+                let pageTasks = byPage[p] ?? []
+                all += pageTasks
+                if pageTasks.count < 100 { reachedEnd = true; break }
+            }
+            if reachedEnd { break }
+            nextPage += batch.count
+        }
+        return all
     }
 
     /// Cross-list "My Work": every task in the workspace
@@ -59,34 +166,42 @@ final class ClickUpService {
     /// when a page comes back short (last page). 500 is way
     /// past any realistic "assigned to me right now" set; the
     /// cap just bounds a pathological workspace.
+    /// Single-page variant of `listMyTasks` — exposed so callers
+    /// can STREAM the assigned-to-me set into the UI as each
+    /// page arrives. Same shape as `listTasksPage` but hits
+    /// the cross-list team endpoint with `assignees[]` filter.
+    func listMyTasksPage(workspaceId: String,
+                         userId: Int,
+                         page: Int) async throws -> [CUTask] {
+        guard let token else { throw CUError.notConfigured }
+        var comps = URLComponents(string:
+            "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/task")!
+        comps.queryItems = [
+            URLQueryItem(name: "assignees[]",   value: String(userId)),
+            URLQueryItem(name: "include_closed", value: "true"),
+            URLQueryItem(name: "subtasks",       value: "true"),
+            URLQueryItem(name: "include_markdown_description", value: "true"),
+            URLQueryItem(name: "page",           value: String(page)),
+            URLQueryItem(name: "order_by",       value: "updated"),
+        ]
+        var req = URLRequest(url: comps.url!)
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        let (data, _) = try await Self.data(retrying: req)
+        return parseTasks(data)
+    }
+
     func listMyTasks(workspaceId: String,
                      userId: Int,
                      maxPages: Int = 5) async throws -> [CUTask] {
-        guard let token else { throw CUError.notConfigured }
-        var all: [CUTask] = []
-        for page in 0..<maxPages {
-            var comps = URLComponents(string:
-                "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/task")!
-            comps.queryItems = [
-                URLQueryItem(name: "assignees[]",   value: String(userId)),
-                URLQueryItem(name: "include_closed", value: "true"),
-                URLQueryItem(name: "subtasks",       value: "true"),
-                URLQueryItem(name: "include_markdown_description", value: "true"),
-                URLQueryItem(name: "page",           value: String(page)),
-                // Newest-updated first so the most relevant work
-                // is at the top before Apollo's own grouping.
-                URLQueryItem(name: "order_by",       value: "updated"),
-            ]
-            var req = URLRequest(url: comps.url!)
-            req.setValue(token, forHTTPHeaderField: "Authorization")
-            let (data, _) = try await URLSession.shared.data(for: req)
-            let pageTasks = parseTasks(data)
-            all += pageTasks
-            // ClickUp's team endpoint pages at 100. A short page
-            // means we've reached the end.
-            if pageTasks.count < 100 { break }
+        guard token != nil else { throw CUError.notConfigured }
+        // Same batched-parallel walk as `listTasks` — page 0
+        // first, then concurrent batches. Request shape lives in
+        // `listMyTasksPage`.
+        return try await Self.paginated(maxPages: maxPages) { page in
+            try await self.listMyTasksPage(workspaceId: workspaceId,
+                                           userId: userId,
+                                           page: page)
         }
-        return all
     }
 
     func createTask(
@@ -122,7 +237,7 @@ final class ClickUpService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let task = parseTasks(data, single: true).first else { throw CUError.parse }
         return task
     }
@@ -170,7 +285,7 @@ final class ClickUpService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard var task = parseTasks(data, single: true).first else { throw CUError.parse }
         // Belt-and-suspenders: ClickUp sometimes echoes back
         // the parent only on subsequent fetches, so fill it in
@@ -202,7 +317,7 @@ final class ClickUpService {
         ]
         var req = URLRequest(url: comps.url!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let task = parseTasks(data, single: true).first else {
             throw CUError.parse
         }
@@ -233,7 +348,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (_, response) = try await URLSession.shared.data(for: req)
+        let (_, response) = try await Self.data(retrying: req)
         if let http = response as? HTTPURLResponse,
            !(200..<300).contains(http.statusCode) {
             throw CUError.parse
@@ -248,20 +363,63 @@ final class ClickUpService {
         try await updateTask(id: id, fields: ["archived": true])
     }
 
-    /// Moves a task to a different list within the same
-    /// workspace. ClickUp's `Move task` endpoint preserves
-    /// the task id (the url stays the same) and migrates
-    /// status / priority / assignees as long as the target
-    /// list has matching values; otherwise they reset to
-    /// the new list's defaults.
-    func moveTask(id: String, toListId: String) async throws {
+    /// Moves the task's HOME list through ClickUp's public v3 endpoint.
+    /// Unlike the legacy "Add Task To List" endpoint, this is a real move:
+    /// the task is removed from its previous home list and appears in the
+    /// destination after the next sync. Additional-list memberships remain.
+    func moveTask(id: String,
+                  workspaceId: String,
+                  toListId: String) async throws {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(
-            string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(toListId))/task/\(Self.cuPathSafe(id))"
+            string: "https://api.clickup.com/api/v3/workspaces/\(Self.cuPathSafe(workspaceId))/tasks/\(Self.cuPathSafe(id))/home_list/\(Self.cuPathSafe(toListId))"
+        )!)
+        req.httpMethod = "PUT"
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Carry compatible custom fields into the destination. ClickUp only
+        // requires explicit status mappings when the destination lacks the
+        // current status; same-workflow Apollo lists therefore need no map.
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "move_custom_fields": true
+        ])
+        let (_, response) = try await Self.data(retrying: req)
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            throw CUError.parse
+        }
+    }
+
+    /// Adds an existing task to an additional list — implements
+    /// the multi-list ("Tasks in Multiple Lists") feature. Requires
+    /// the workspace to have that ClickApp enabled; otherwise the
+    /// API returns 400.
+    func addTaskToList(taskId: String, listId: String) async throws {
+        guard let token else { throw CUError.notConfigured }
+        var req = URLRequest(url: URL(
+            string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))/task/\(Self.cuPathSafe(taskId))"
         )!)
         req.httpMethod = "POST"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (_, response) = try await URLSession.shared.data(for: req)
+        let (_, response) = try await Self.data(retrying: req)
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            throw CUError.parse
+        }
+    }
+
+    /// Removes a task from an additional list. The HOME list
+    /// cannot be removed via this endpoint — ClickUp returns an
+    /// error. Callers should always keep the home list in the
+    /// desired set when diffing.
+    func removeTaskFromList(taskId: String, listId: String) async throws {
+        guard let token else { throw CUError.notConfigured }
+        var req = URLRequest(url: URL(
+            string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))/task/\(Self.cuPathSafe(taskId))"
+        )!)
+        req.httpMethod = "DELETE"
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        let (_, response) = try await Self.data(retrying: req)
         if let http = response as? HTTPURLResponse,
            !(200..<300).contains(http.statusCode) {
             throw CUError.parse
@@ -278,7 +436,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))?include_subtasks=false&custom_task_ids=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return [] }
 
@@ -297,7 +455,7 @@ final class ClickUpService {
         // Try the dedicated activity endpoint.
         var actReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/history")!)
         actReq.setValue(token, forHTTPHeaderField: "Authorization")
-        if let (actData, _) = try? await URLSession.shared.data(for: actReq),
+        if let (actData, _) = try? await Self.data(retrying: actReq),
            let actJson = try? JSONSerialization.jsonObject(with: actData) as? [String: Any],
            let items = actJson["history_items"] as? [[String: Any]] {
             // One-shot ground-truth dump so the activity-timeline
@@ -352,7 +510,7 @@ final class ClickUpService {
         //    so we always have a "task created" anchor.
         var taskReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))?include_subtasks=false&custom_task_ids=false")!)
         taskReq.setValue(token, forHTTPHeaderField: "Authorization")
-        let (taskData, _) = try await URLSession.shared.data(for: taskReq)
+        let (taskData, _) = try await Self.data(retrying: taskReq)
         let taskJson = (try? JSONSerialization.jsonObject(with: taskData)) as? [String: Any]
 
         var events: [TaskActivityEvent] = []
@@ -380,7 +538,8 @@ final class ClickUpService {
         //    front-and-centre in ClickUp's own Activity panel.
         if let attsRaw = taskJson?["attachments"] as? [[String: Any]] {
             for attRaw in attsRaw {
-                guard let att = Self.parseAttachment(attRaw) else { continue }
+                guard let att = Self.parseAttachment(attRaw),
+                      !att.isApolloMediaTechnical else { continue }
                 let date  = Self.parseEpochMs(attRaw["date"]) ?? Date()
                 let actor = Self.parseAssignee(attRaw["user"] as? [String: Any])
                 events.append(TaskActivityEvent(
@@ -408,7 +567,7 @@ final class ClickUpService {
         //    client like ours can't reach it.
         var actReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/history")!)
         actReq.setValue(token, forHTTPHeaderField: "Authorization")
-        if let (actData, _) = try? await URLSession.shared.data(for: actReq),
+        if let (actData, _) = try? await Self.data(retrying: actReq),
            let actJson = try? JSONSerialization.jsonObject(with: actData) as? [String: Any],
            let items = actJson["history_items"] as? [[String: Any]] {
             events.append(contentsOf: items.compactMap(Self.parseActivityItem))
@@ -702,7 +861,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/time")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let items = json["data"] as? [[String: Any]]
         else { return [] }
@@ -754,7 +913,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/tag/\(encoded)")!)
         req.httpMethod = "POST"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await Self.data(retrying: req)
     }
 
     func removeTaskTag(id: String, tag: String) async throws {
@@ -763,7 +922,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(id))/tag/\(encoded)")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await Self.data(retrying: req)
     }
 
     // MARK: - Comments
@@ -772,7 +931,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/task/\(Self.cuPathSafe(taskId))/comment")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         return parseComments(data)
     }
 
@@ -851,7 +1010,7 @@ final class ClickUpService {
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         // The POST response carries id/date but not the full user object, so
         // re-fetch for the canonical record. ClickUp's read lags a beat, so if
         // the re-fetch misses, fall back to a minimal record built from the POST
@@ -874,6 +1033,17 @@ final class ClickUpService {
     /// text + a labeled-link segment). Used by the review flow's top-level
     /// fallback so the "Ver review" hyperlink renders cleanly. Returns the new
     /// comment's id from the POST response (no re-fetch) for an instant insert.
+    /// ClickUp's documented create-comment response carries `id` as a NUMBER;
+    /// live workspaces have been seen returning a string. Accept both —
+    /// treating a created comment as "no id" reads as failure upstream and a
+    /// retry would then post a duplicate.
+    private static func createdCommentId(from data: Data) -> String? {
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if let s = json?["id"] as? String { return s }
+        if let n = json?["id"] as? NSNumber { return n.stringValue }
+        return nil
+    }
+
     func addTaskComment(taskId: String, segments: [[String: Any]],
                         assignee: Int? = nil, notifyAll: Bool = false) async throws -> String? {
         guard let token else { throw CUError.notConfigured }
@@ -884,8 +1054,8 @@ final class ClickUpService {
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: req)
-        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String
+        let (data, _) = try await Self.data(retrying: req)
+        return Self.createdCommentId(from: data)
     }
 
     /// Create a comment with text + mentions, optional embedded file attachments,
@@ -895,7 +1065,9 @@ final class ClickUpService {
     /// REVISAR link always lands. Returns the new comment's id.
     func addTaskComment(taskId: String, text: String, mentionedMembers: [CUMember],
                         attachmentIds: [String] = [],
-                        links: [(label: String, url: String, title: String)], assignee: Int? = nil) async throws -> String? {
+                        links: [(label: String, url: String, title: String)],
+                        assignee: Int? = nil,
+                        requireAttachmentEmbed: Bool = false) async throws -> String? {
         var base = Self.buildCommentSegments(text: text, members: mentionedMembers)
         for l in links {
             base.append(["text": "\n▶\u{00A0}"])
@@ -907,9 +1079,15 @@ final class ClickUpService {
             for aid in attachmentIds {
                 withAtt.append(["type": "attachment", "attachment_id": aid])
             }
-            if let id = try? await addTaskComment(taskId: taskId, segments: withAtt, assignee: assignee) {
-                return id
+            do {
+                if let id = try await addTaskComment(taskId: taskId, segments: withAtt, assignee: assignee) {
+                    return id
+                }
+            } catch {
+                if requireAttachmentEmbed { throw error }
+                Log.error("addTaskComment: embed-attachment create failed: \(error)")
             }
+            if requireAttachmentEmbed { throw CUError.parse }
             Log.error("addTaskComment: embed-attachment create failed; retrying without embed")
         }
         return try await addTaskComment(taskId: taskId, segments: base, assignee: assignee)
@@ -994,7 +1172,54 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await Self.data(retrying: req)
+    }
+
+    /// ClickUp's Update Comment endpoint is the canonical mutation path for
+    /// assigned-comment actions. The API requires the current text and
+    /// assignee alongside the resolved flag, so callers pass the full comment
+    /// snapshot rather than risking an accidental blank/unassign operation.
+    func updateAssignedComment(_ comment: CUComment,
+                               assigneeId: Int,
+                               resolved: Bool) async throws {
+        guard let token else { throw CUError.notConfigured }
+        var req = URLRequest(url: URL(string:
+            "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(comment.id))")!)
+        req.httpMethod = "PUT"
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "comment_text": comment.text,
+            "assignee": assigneeId,
+            "resolved": resolved,
+        ])
+        _ = try await Self.data(retrying: req)
+    }
+
+    /// Finalizes a media-transfer comment after its attachment upload returned
+    /// the permanent URL. The upload is anchored to this same comment via
+    /// `comment_id`, so replacing the placeholder text keeps one chronological
+    /// item containing mention, video and REVISAR link.
+    func updateCommentText(commentId: String, text: String,
+                           assigneeId: Int?) async throws {
+        guard let token else { throw CUError.notConfigured }
+        var body: [String: Any] = [
+            "comment_text": text,
+            "resolved": false,
+        ]
+        if let assigneeId { body["assignee"] = assigneeId }
+        var req = URLRequest(url: URL(string:
+            "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))")!)
+        req.httpMethod = "PUT"
+        req.setValue(token, forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await Self.data(retrying: req)
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            throw APIError.classify(response: response, data: data, thrown: nil)
+                ?? APIError.serverError(statusCode: http.statusCode)
+        }
     }
 
     // MARK: - Reactions
@@ -1006,7 +1231,7 @@ final class ClickUpService {
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["reaction": emoji])
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await Self.data(retrying: req)
     }
 
     func removeCommentReaction(commentId: String, emoji: String) async throws {
@@ -1015,7 +1240,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))/reaction/\(encoded)")!)
         req.httpMethod = "DELETE"
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await Self.data(retrying: req)
     }
 
     // MARK: - Threaded replies
@@ -1024,7 +1249,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/comment/\(Self.cuPathSafe(commentId))/reply")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         return parseComments(data)
     }
 
@@ -1050,8 +1275,8 @@ final class ClickUpService {
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: req)
-        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String
+        let (data, _) = try await Self.data(retrying: req)
+        return Self.createdCommentId(from: data)
     }
 
     private func postReply(commentId: String, body: [String: Any]) async throws -> CUComment? {
@@ -1061,14 +1286,23 @@ final class ClickUpService {
         req.setValue(token,             forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: req)
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let cid = json["id"] as? String {
-            let replies = try await getCommentReplies(commentId: commentId)
-            return replies.first { $0.id == cid }
-        }
-        return nil
+        let (data, _) = try await Self.data(retrying: req)
+        // ClickUp returns the reply id as a NUMBER; reading it as a String
+        // failed silently, so a successful reply looked like an error and the
+        // draft stayed stuck in the composer. `createdCommentId` accepts both.
+        guard let cid = Self.createdCommentId(from: data) else { return nil }
+        let replies = try await getCommentReplies(commentId: commentId)
+        return replies.first { $0.id == cid }
     }
+
+    /// Deletes a task attachment. ClickUp's public v2 docs don't list an
+    /// attachment-delete route, but its web client calls `DELETE
+    /// /attachment/{id}` and it accepts a personal token. Any non-2xx is
+    /// surfaced so the caller can fall back gracefully if a plan/workspace
+    /// rejects it.
+    // Note: ClickUp's public v2 API has no attachment-delete route
+    // (DELETE /attachment/{id} → 404), so Apollo can't remove a task
+    // attachment programmatically — only add/replace-with-a-new-version.
 
     // MARK: - Attachments
     //
@@ -1083,7 +1317,7 @@ final class ClickUpService {
     @discardableResult
     func uploadAttachment(taskId: String, fileURL: URL,
                           commentId: String? = nil,
-                          onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> URL? {
+                          onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> UploadedAttachment? {
         guard let token else { throw CUError.notConfigured }
         guard fileURL.startAccessingSecurityScopedResource() ||
               FileManager.default.isReadableFile(atPath: fileURL.path) else {
@@ -1091,7 +1325,6 @@ final class ClickUpService {
         }
         defer { fileURL.stopAccessingSecurityScopedResource() }
 
-        let fileData = try Data(contentsOf: fileURL)
         // Sanitize the filename before injecting into the
         // Content-Disposition header. ClickUp lets users name a
         // file whatever they want, including bytes that would
@@ -1116,47 +1349,76 @@ final class ClickUpService {
         req.setValue("multipart/form-data; boundary=\(boundary)",
                      forHTTPHeaderField: "Content-Type")
 
-        var body = Data()
-
-        // Optional `comment_id` multipart field — when present,
-        // ClickUp's attachment endpoint anchors the upload to the
-        // specified comment instead of creating a standalone
-        // "uploaded N files" activity entry. The web client uses
-        // this for the chat-style flow where one bubble carries
-        // both text and files. If the field is absent (or the
-        // server ignores it on an older account), the file still
-        // attaches to the task — same as the legacy task-level
-        // upload — which is a graceful fallback rather than a
-        // hard error.
-        if let commentId {
-            body.append("--\(boundary)\r\n")
-            body.append("Content-Disposition: form-data; name=\"comment_id\"\r\n\r\n")
-            body.append("\(commentId)\r\n")
-        }
-
-        body.append("--\(boundary)\r\n")
-        body.append("Content-Disposition: form-data; name=\"attachment\"; filename=\"\(filename)\"\r\n")
-        body.append("Content-Type: \(mime)\r\n\r\n")
-        body.append(fileData)
-        body.append("\r\n--\(boundary)--\r\n")
-        req.httpBody = body
+        // Build the multipart envelope as a temporary file instead of loading
+        // the movie (and then a second multipart copy) into RAM. Two concurrent
+        // background uploads therefore keep memory bounded even for large MOVs.
+        let multipartURL = try Self.makeMultipartBodyFile(
+            sourceURL: fileURL,
+            filename: filename,
+            mime: mime,
+            commentId: commentId,
+            boundary: boundary
+        )
+        defer { try? FileManager.default.removeItem(at: multipartURL) }
 
         let delegate = onProgress.map { UploadProgressDelegate(onProgress: $0) }
-        let (data, _) = try await URLSession.shared.upload(for: req,
-                                                           from: body,
-                                                           delegate: delegate)
+        let (data, response) = try await URLSession.shared.upload(for: req,
+                                                                  fromFile: multipartURL,
+                                                                  delegate: delegate)
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            throw APIError.classify(response: response, data: data, thrown: nil)
+                ?? APIError.serverError(statusCode: http.statusCode)
+        }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        lastUploadedAttachmentId = json["id"] as? String
-        if let s = json["url"]         as? String, let u = URL(string: s) { return u }
-        if let s = json["url_w_query"] as? String, let u = URL(string: s) { return u }
+        else { throw CUError.parse }
+        let id = json["id"] as? String
+        if let s = json["url"] as? String, let u = URL(string: s) {
+            return UploadedAttachment(id: id, url: u)
+        }
+        if let s = json["url_w_query"] as? String, let u = URL(string: s) {
+            return UploadedAttachment(id: id, url: u)
+        }
         return nil
     }
 
-    /// Attachment id from the most recent `uploadAttachment` call. Lets the
-    /// comment flow embed the file as a comment segment (the upload + the read
-    /// happen back-to-back on the same actor, so this is safe).
-    private(set) var lastUploadedAttachmentId: String?
+    static func makeMultipartBodyFile(sourceURL: URL,
+                                      filename: String,
+                                      mime: String,
+                                      commentId: String?,
+                                      boundary: String) throws -> URL {
+        let target = FileManager.default.temporaryDirectory
+            .appendingPathComponent("apollo-upload-\(UUID().uuidString).multipart")
+        guard FileManager.default.createFile(atPath: target.path, contents: nil) else {
+            throw CUError.parse
+        }
+        let output = try FileHandle(forWritingTo: target)
+        defer { try? output.close() }
+
+        func write(_ string: String) throws {
+            guard let data = string.data(using: .utf8) else { throw CUError.parse }
+            try output.write(contentsOf: data)
+        }
+
+        if let commentId {
+            try write("--\(boundary)\r\n")
+            try write("Content-Disposition: form-data; name=\"comment_id\"\r\n\r\n")
+            try write("\(commentId)\r\n")
+        }
+        try write("--\(boundary)\r\n")
+        try write("Content-Disposition: form-data; name=\"attachment\"; filename=\"\(filename)\"\r\n")
+        try write("Content-Type: \(mime)\r\n\r\n")
+
+        let input = try FileHandle(forReadingFrom: sourceURL)
+        defer { try? input.close() }
+        while true {
+            let chunk = try input.read(upToCount: 1_048_576) ?? Data()
+            if chunk.isEmpty { break }
+            try output.write(contentsOf: chunk)
+        }
+        try write("\r\n--\(boundary)--\r\n")
+        return target
+    }
 
     /// Flattens ClickUp's markdown `[label](url)` link syntax into a
     /// form the RichTextEditor (which relies on `NSDataDetector` for
@@ -1327,7 +1589,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/team")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
 
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let teams = json["teams"] as? [[String: Any]],
               let team  = teams.first,
@@ -1350,21 +1612,49 @@ final class ClickUpService {
 
     // MARK: - Space tags (for tag picker)
 
+    /// list → space resolution cache. A list's space NEVER
+    /// changes, yet `getSpaceTags` re-resolved it with an extra
+    /// `/list/{id}` request on every sync — duplicating the very
+    /// fetch `getListStatuses` makes in the same cycle. One
+    /// round-trip per list per app launch is enough.
+    private static var spaceIdByListId: [String: String] = [:]
+    private static let spaceIdLock = NSLock()
+
+    /// Synchronous accessors so the lock isn't taken directly
+    /// inside an async function (NSLock.lock is flagged
+    /// unavailable-from-async; the critical section here is a
+    /// dictionary read/write — microseconds, no await inside).
+    private static func cachedSpaceId(for listId: String) -> String? {
+        spaceIdLock.lock(); defer { spaceIdLock.unlock() }
+        return spaceIdByListId[listId]
+    }
+    private static func storeSpaceId(_ spaceId: String, for listId: String) {
+        spaceIdLock.lock(); defer { spaceIdLock.unlock() }
+        spaceIdByListId[listId] = spaceId
+    }
+
     func getSpaceTags() async throws -> [CUTask.Tag] {
         guard let token, let listId else { throw CUError.notConfigured }
 
-        // 1) Resolve list → space ID
-        var listReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))")!)
-        listReq.setValue(token, forHTTPHeaderField: "Authorization")
-        let (listData, _) = try await URLSession.shared.data(for: listReq)
-        guard let listJson = try? JSONSerialization.jsonObject(with: listData) as? [String: Any],
-              let space    = listJson["space"] as? [String: Any],
-              let spaceId  = space["id"] as? String else { throw CUError.parse }
+        // 1) Resolve list → space ID (cached after first hit)
+        let spaceId: String
+        if let cached = Self.cachedSpaceId(for: listId) {
+            spaceId = cached
+        } else {
+            var listReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))")!)
+            listReq.setValue(token, forHTTPHeaderField: "Authorization")
+            let (listData, _) = try await Self.data(retrying: listReq)
+            guard let listJson = try? JSONSerialization.jsonObject(with: listData) as? [String: Any],
+                  let space    = listJson["space"] as? [String: Any],
+                  let resolved = space["id"] as? String else { throw CUError.parse }
+            Self.storeSpaceId(resolved, for: listId)
+            spaceId = resolved
+        }
 
         // 2) Fetch tags for that space
         var tagsReq = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(Self.cuPathSafe(spaceId))/tag")!)
         tagsReq.setValue(token, forHTTPHeaderField: "Authorization")
-        let (tagsData, _) = try await URLSession.shared.data(for: tagsReq)
+        let (tagsData, _) = try await Self.data(retrying: tagsReq)
         guard let json = try? JSONSerialization.jsonObject(with: tagsData) as? [String: Any],
               let raw  = json["tags"] as? [[String: Any]] else { return [] }
 
@@ -1386,7 +1676,7 @@ final class ClickUpService {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/list/\(Self.cuPathSafe(listId))")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
 
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json     = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let statuses = json["statuses"] as? [[String: Any]] else { throw CUError.parse }
 
@@ -1406,7 +1696,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/team")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let teams = json["teams"] as? [[String: Any]] else { throw CUError.parse }
         return teams.compactMap { t in
@@ -1419,7 +1709,7 @@ final class ClickUpService {
         guard let token else { throw CUError.notConfigured }
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/space?archived=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let spaces = json["spaces"] as? [[String: Any]] else { throw CUError.parse }
         return spaces.compactMap { s in
@@ -1439,7 +1729,7 @@ final class ClickUpService {
     private func fetchFolderlessLists(spaceId: String, token: String) async throws -> [CUList] {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(Self.cuPathSafe(spaceId))/list?archived=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let lists = json["lists"] as? [[String: Any]] else { return [] }
         return lists.compactMap { l in
@@ -1451,7 +1741,7 @@ final class ClickUpService {
     private func fetchFolderLists(spaceId: String, token: String) async throws -> [CUList] {
         var req = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/space/\(Self.cuPathSafe(spaceId))/folder?archived=false")!)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json    = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let folders = json["folders"] as? [[String: Any]] else { return [] }
 
@@ -1516,6 +1806,12 @@ final class ClickUpService {
                 ?? (item["description"] as? String)
                 ?? (item["text_content"] as? String)
             let description = rawDescription.map(Self.flattenMarkdownLinks(_:))
+            let commentCount: Int? = {
+                if let value = item["comment_count"] as? Int { return value }
+                if let value = item["comment_count"] as? NSNumber { return value.intValue }
+                if let value = item["comment_count"] as? String { return Int(value) }
+                return nil
+            }()
 
             let assignees: [CUTask.Assignee] = (item["assignees"] as? [[String: Any]] ?? [])
                 .compactMap { a in
@@ -1563,6 +1859,15 @@ final class ClickUpService {
             var dateCreated: Date?
             if let ms = item["date_created"] as? String, let val = Double(ms) {
                 dateCreated = Date(timeIntervalSince1970: val / 1000)
+            }
+
+            // `date_updated` bumps whenever the task changes — including a new
+            // comment — so the Assigned Comments indexer scans by it.
+            var dateUpdated: Date?
+            if let ms = item["date_updated"] as? String, let val = Double(ms) {
+                dateUpdated = Date(timeIntervalSince1970: val / 1000)
+            } else if let ms = item["date_updated"] as? NSNumber {
+                dateUpdated = Date(timeIntervalSince1970: ms.doubleValue / 1000)
             }
 
             var dateClosed: Date?
@@ -1649,6 +1954,21 @@ final class ClickUpService {
                     return other
                 }
 
+            // Multi-list memberships ("Tasks in Multiple Lists").
+            // ClickUp returns a `locations` array on tasks that
+            // belong to more than one list. Each entry carries
+            // `{id, name, access?}`. Excludes the home list — we
+            // surface that one through `listId`/`listName` and
+            // dedupe at the model layer via `allListMemberships`.
+            let locations: [CUTask.TaskLocation] = (item["locations"] as? [[String: Any]] ?? [])
+                .compactMap { loc in
+                    guard let lid = loc["id"] as? String,
+                          let lname = loc["name"] as? String
+                    else { return nil }
+                    if lid == listId { return nil }   // skip home list
+                    return CUTask.TaskLocation(id: lid, name: lname)
+                }
+
             return CUTask(
                 id:                id,
                 title:             name,
@@ -1662,18 +1982,21 @@ final class ClickUpService {
                 listName:          listName,
                 isCompleted:       statusType == "closed",
                 description:       (description?.isEmpty == false) ? description : nil,
+                commentCount:      commentCount,
                 assignees:         assignees,
                 tags:              tags,
                 url:               url,
                 archived:          archived,
                 creator:           creator,
                 dateCreated:       dateCreated,
+                dateUpdated:       dateUpdated,
                 dateClosed:        dateClosed,
                 lastEditorId:      lastEditorId,
                 parentId:          parentId,
                 topLevelParentId:  topLevelParentId,
                 attachments:       attachments,
                 checklists:        checklists,
+                locations:         locations,
                 customFields:      customFields,
                 dependencies:      dependencies,
                 linkedTaskIds:     linkedTaskIds
@@ -1896,7 +2219,7 @@ final class ClickUpService {
             "https://api.clickup.com/api/v2/team/\(Self.cuPathSafe(workspaceId))/time_entries/current")!
         var req = URLRequest(url: url)
         req.setValue(token, forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await Self.data(retrying: req)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let d = json["data"] as? [String: Any],
               let task = d["task"] as? [String: Any],
@@ -2187,6 +2510,20 @@ final class ClickUpService {
             }
 
             let user = item["user"] as? [String: Any]
+            func participant(_ raw: Any?) -> CUComment.Participant? {
+                guard let value = raw as? [String: Any] else { return nil }
+                let id = (value["id"] as? Int)
+                    ?? Int(value["id"] as? String ?? "")
+                guard let id else { return nil }
+                return CUComment.Participant(
+                    id: id,
+                    username: value["username"] as? String ?? "Pessoa",
+                    email: value["email"] as? String,
+                    color: value["color"] as? String,
+                    initials: value["initials"] as? String,
+                    profilePicture: value["profilePicture"] as? String
+                )
+            }
 
             // Group reactions by emoji → list of user IDs.
             var grouped: [String: [Int]] = [:]
@@ -2227,11 +2564,24 @@ final class ClickUpService {
             // dedupes by URL, so collecting from all four shapes
             // is safe.
             var rawAttachments: [[String: Any]] = []
+            // Ids referenced by segments, kept even when the segment carries
+            // no url (an id-only segment can't become a full Attachment via
+            // `attachmentsForTask`, but the id alone still proves the comment
+            // carries the file — the media-transfer verification needs it).
+            var segmentAttachmentIds: [String] = []
             if let arr = item["attachments"] as? [[String: Any]] {
                 rawAttachments.append(contentsOf: arr)
             }
             if let segs = item["comment"] as? [[String: Any]] {
                 for seg in segs {
+                    if let rawId = seg["attachment_id"] as? String, !rawId.isEmpty {
+                        segmentAttachmentIds.append(rawId)
+                    } else if let rawId = seg["attachment_id"] as? NSNumber {
+                        segmentAttachmentIds.append(rawId.stringValue)
+                    } else if let att = seg["attachment"] as? [String: Any],
+                              let rawId = att["id"] as? String, !rawId.isEmpty {
+                        segmentAttachmentIds.append(rawId)
+                    }
                     // Shape 2 — nested object.
                     if let att = seg["attachment"] as? [String: Any] {
                         rawAttachments.append(att)
@@ -2287,7 +2637,10 @@ final class ClickUpService {
                 resolved:     item["resolved"] as? Bool ?? false,
                 reactions:    reactions,
                 replyCount:   replyCount,
-                attachments:  attachments
+                attachments:  attachments,
+                attachmentIds: segmentAttachmentIds,
+                assignee:     participant(item["assignee"]),
+                assignedBy:   participant(item["assigned_by"])
             )
         }
     }
@@ -2303,7 +2656,7 @@ final class ClickUpService {
     /// remains the legacy path until they're refactored.
     func sendClassified(_ req: URLRequest) async throws -> Data {
         do {
-            let (data, response) = try await URLSession.shared.data(for: req)
+            let (data, response) = try await Self.data(retrying: req)
             if let err = APIError.classify(response: response,
                                            data: data,
                                            thrown: nil) {
@@ -2328,6 +2681,13 @@ final class ClickUpService {
 
 /// Streams URLSession upload progress (0.0 → 1.0) back to the caller.
 /// Used by `uploadAttachment` to drive a SwiftUI progress bar.
+enum UploadProgressMath {
+    static func fraction(sent: Int64, expected: Int64) -> Double? {
+        guard expected > 0 else { return nil }
+        return max(0, min(1, Double(sent) / Double(expected)))
+    }
+}
+
 private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     let onProgress: @Sendable (Double) -> Void
     init(onProgress: @escaping @Sendable (Double) -> Void) {
@@ -2338,8 +2698,10 @@ private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @u
                     didSendBodyData bytesSent: Int64,
                     totalBytesSent: Int64,
                     totalBytesExpectedToSend: Int64) {
-        guard totalBytesExpectedToSend > 0 else { return }
-        let p = Double(totalBytesSent) / Double(totalBytesExpectedToSend)
-        onProgress(p)
+        guard let fraction = UploadProgressMath.fraction(
+            sent: totalBytesSent,
+            expected: totalBytesExpectedToSend
+        ) else { return }
+        onProgress(fraction)
     }
 }

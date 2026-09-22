@@ -48,4 +48,65 @@ enum SharedDateFormatters {
         f.dateFormat = "EEEE, d 'de' MMMM 'de' yyyy 'às' HH:mm"
         return f
     }()
+
+    /// "29 de abr." — due-date chip on Editorial task rows and
+    /// board cards (was allocated per row per render).
+    static let dayOfMonthAbbrevPTBR: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "pt_BR")
+        f.dateFormat = "d 'de' MMM."
+        return f
+    }()
+
+    /// "terça-feira" — Editorial home header masthead.
+    static let weekdayFullPTBR: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "pt_BR")
+        f.dateFormat = "EEEE"
+        return f
+    }()
+
+    /// "ter." — compact weekday (header strips the trailing dot).
+    static let weekdayShortPTBR: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "pt_BR")
+        f.dateFormat = "EEE"
+        return f
+    }()
+
+    /// "29 de abril" — header day+full-month line.
+    static let dayMonthFullPTBR: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "pt_BR")
+        f.dateFormat = "d 'de' MMMM"
+        return f
+    }()
+
+    /// "abr." — month ticker (header strips the trailing dot).
+    static let monthAbbrevPTBR: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "pt_BR")
+        f.dateFormat = "MMM"
+        return f
+    }()
+
+    /// Reminder pill labels in the task detail.
+    static let reminderTodayPTBR: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "pt_BR")
+        f.dateFormat = "'hoje' HH:mm"
+        return f
+    }()
+    static let reminderTomorrowPTBR: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "pt_BR")
+        f.dateFormat = "'amanhã' HH:mm"
+        return f
+    }()
+    static let reminderFullPTBR: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "pt_BR")
+        f.dateFormat = "d MMM · HH:mm"
+        return f
+    }()
 }

@@ -19,13 +19,14 @@ struct TaskCollectionView: NSViewRepresentable {
     ///   • 80pt — original pre-tighten value
     ///   • 68pt — 80 × 0.85, set when the user wanted 15% shorter
     ///   • 78pt — 68 × 1.15, restored 15% taller
-    ///   • 70pt — 78 × 0.9, current (10% shorter).
+    ///   • 70pt — 78 × 0.9, then user-trim (10% shorter).
+    ///   • 49pt — 70 × 0.7, current (-30% per redesign request).
     /// Internal `TaskRowContentView` constants were adjusted
-    /// alongside this trim so the math
-    /// `10 + 20 + 8 + 22 + 10 = 70` fits exactly (verticalPad
-    /// 14 → 10). Subtask rows (depth > 0) stay at 40pt via the
-    /// per-row override in `sizeForItemAt` below.
-    var rowHeight: CGFloat = 70
+    /// alongside this trim: verticalPad 10 → 1, titleMetaGap
+    /// 8 → 4.8 (-40%). Math: `1 + 20 + 4.8 + 22 + 1 = 48.8 ≤ 49`.
+    /// Subtask rows (depth > 0) stay at 40pt via the per-row
+    /// override in `sizeForItemAt` below.
+    var rowHeight: CGFloat = 44
     var topContentInset: CGFloat = 0
     /// Fires when the user clicks the row's content area
     /// (anywhere except the status pill). The closure receives
@@ -124,11 +125,8 @@ struct TaskCollectionView: NSViewRepresentable {
         private var appState: AppState
         private var onTapTask: (CUTask, CGRect) -> Void
 
-        /// The currently-presented status-picker popover. Stored
-        /// so we can dismiss it before showing a new one (NSPopover
-        /// only allows one to be visible at a time anchored to a
-        /// view).
-        private var statusPickerPopover: NSPopover?
+        /// Shared single-layer Liquid Glass status bubble.
+        private let statusPickerBubble = StatusPickerBubblePresenter()
 
         /// Bumped on every `update(items:)` call. Pending
         /// staggered subtask inserts capture this token and
@@ -557,8 +555,7 @@ struct TaskCollectionView: NSViewRepresentable {
                       isExpanded: row.isExpanded)
             cell.onRowClick = { [weak self] task, frame in
                 guard let self else { return }
-                if let popover = self.statusPickerPopover,
-                   popover.isShown { return }
+                if self.statusPickerBubble.isPresented { return }
                 // No click haptic — the trackpad's own click pulse
                 // is the natural feedback for opening the popup.
                 self.onTapTask(task, frame)
@@ -580,54 +577,18 @@ struct TaskCollectionView: NSViewRepresentable {
             }
         }
 
-        /// Open an NSPopover hosting the existing SwiftUI
-        /// `StatusPickerPopover` view, anchored to the pill the
-        /// user clicked. Reuses the same picker the SwiftUI
-        /// `TaskRowView` shows, so the dropdown UI stays
-        /// pixel-identical to the legacy path.
+        /// Open the canonical one-layer materializing status bubble.
         private func showStatusPicker(for task: CUTask, anchorView: NSView) {
-            statusPickerPopover?.close()
-
             let appState = self.appState
-            let popover = NSPopover()
-            popover.behavior  = .transient
-            popover.animates  = true
-            let picker = StatusPickerPopover(
-                statuses:          appState.availableStatuses,
-                currentStatusName: task.status
-            ) { [weak popover] selected in
+            statusPickerBubble.show(
+                statuses: appState.availableStatuses,
+                currentStatusName: task.status,
+                anchoredTo: anchorView
+            ) { selected in
                 // No click haptic — the menu tap is its own
                 // feedback via the trackpad click pulse.
                 Task { await appState.updateTaskStatus(task, to: selected) }
-                popover?.close()
             }
-            let host = NSHostingController(rootView: picker)
-            // Tell the hosting controller to track the SwiftUI
-            // view's preferred size so the popover sizes itself
-            // to fit the picker's content. Without this NSPopover
-            // defaults to ~ 200x200 and the picker's rows get
-            // squished or clipped.
-            if #available(macOS 13.0, *) {
-                host.sizingOptions = [.preferredContentSize]
-            }
-            popover.contentViewController = host
-
-            // Anchor reasoning: the pill's NSView is flipped
-            // (isFlipped = true). NSPopover internally converts to
-            // screen coords using the view's `isFlipped` state.
-            // Empirically (matching what other macOS apps do for
-            // dropdown-style pickers), `.maxY` puts the popover
-            // BELOW the anchor — matching the SwiftUI sibling's
-            // `arrowEdge: .top` setting (arrow at TOP of the
-            // popover bubble, popover under the source). The
-            // system still auto-flips to ABOVE when the row is so
-            // close to the window bottom that the dropdown
-            // wouldn't fit downward, which is the desired macOS
-            // behavior.
-            popover.show(relativeTo: anchorView.bounds,
-                         of: anchorView,
-                         preferredEdge: .maxY)
-            statusPickerPopover = popover
         }
 
         // MARK: NSCollectionViewDataSource

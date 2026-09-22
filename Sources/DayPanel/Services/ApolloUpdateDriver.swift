@@ -49,6 +49,14 @@ final class ApolloUpdateDriver: NSObject, ObservableObject, SPUUserDriver {
     // Download byte accounting → a 0…1 fraction for the progress bar.
     private var expectedLength: UInt64 = 0
     private var receivedLength: UInt64 = 0
+    private var discoveredVersion = ""
+
+    /// True after the user explicitly chooses background download. While set,
+    /// Sparkle continues its verified pipeline but the updater window stays
+    /// hidden; global Apollo surfaces expose progress and completion.
+    private var runsInBackground = false
+
+    weak var updateService: UpdateService?
 
     private var window: NSWindow?
 
@@ -58,6 +66,17 @@ final class ApolloUpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         let reply = choiceReply
         choiceReply = nil
         reply?(choice)
+    }
+
+    /// Start Sparkle's install choice without keeping the updater card open.
+    /// The card can be restored at any time from Apollo's update banner or
+    /// Notification Center without starting a duplicate download.
+    func downloadInBackground() {
+        guard choiceReply != nil else { return }
+        runsInBackground = true
+        updateService?.receiveUpdatePhase(.downloading(fraction: nil))
+        window?.orderOut(nil)
+        choose(.install)
     }
 
     func cancel() {
@@ -77,7 +96,10 @@ final class ApolloUpdateDriver: NSObject, ObservableObject, SPUUserDriver {
     /// Bring the update card to the front (the user re-checked while
     /// something was already on screen).
     func showUpdateInFocus() {
-        window?.makeKeyAndOrderFront(nil)
+        if window == nil { buildWindow() }
+        guard let window else { return }
+        sizeAndCenter(window)
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -109,6 +131,7 @@ final class ApolloUpdateDriver: NSObject, ObservableObject, SPUUserDriver {
             return
         }
         choiceReply = reply
+        discoveredVersion = appcastItem.displayVersionString
         let notes = (appcastItem.itemDescription ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         present(.found(version: appcastItem.displayVersionString, notes: notes))
@@ -170,12 +193,7 @@ final class ApolloUpdateDriver: NSObject, ObservableObject, SPUUserDriver {
 
     func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
         choiceReply = reply
-        let version: String = {
-            if case let .found(v, _) = phase { return v }
-            if case let .readyToRelaunch(v) = phase { return v }
-            return ""
-        }()
-        present(.readyToRelaunch(version: version))
+        present(.readyToRelaunch(version: discoveredVersion))
     }
 
     func showInstallingUpdate(withApplicationTerminated applicationTerminated: Bool,
@@ -203,13 +221,27 @@ final class ApolloUpdateDriver: NSObject, ObservableObject, SPUUserDriver {
 
     private func present(_ newPhase: Phase) {
         phase = newPhase
+        updateService?.receiveUpdatePhase(newPhase)
+
+        // Background mode is a deliberate user choice. Do not steal focus at
+        // each Sparkle callback; the banner and Notification Center remain the
+        // live visual confirmation until the user asks to reopen this card.
+        if runsInBackground, newPhase.staysInBackground {
+            window?.orderOut(nil)
+            return
+        }
         if window == nil { buildWindow() }
         guard let window else { return }
-        // Size the window to the card's fitting size BEFORE centring.
-        // The card height changes per phase; if we centre while the
-        // window still holds a stale size, the content then grows
-        // downward and lands off-centre. Forcing the final size first
-        // keeps every phase centred on the app window.
+        sizeAndCenter(window)
+        if !window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            window.orderFront(nil)
+        }
+    }
+
+    private func sizeAndCenter(_ window: NSWindow) {
         if let hostView = window.contentViewController?.view {
             hostView.layoutSubtreeIfNeeded()
             let fitting = hostView.fittingSize
@@ -218,12 +250,6 @@ final class ApolloUpdateDriver: NSObject, ObservableObject, SPUUserDriver {
             }
         }
         centerOverAppWindow(window)
-        if !window.isVisible {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-        } else {
-            window.orderFront(nil)
-        }
     }
 
     /// Centre the update card over Apollo's main window (not the whole
@@ -247,9 +273,12 @@ final class ApolloUpdateDriver: NSObject, ObservableObject, SPUUserDriver {
 
     private func finish() {
         phase = .idle
+        updateService?.receiveUpdatePhase(.idle)
         choiceReply = nil
         cancelHandler = nil
         ackContinuation = nil
+        runsInBackground = false
+        discoveredVersion = ""
         window?.orderOut(nil)
     }
 
@@ -272,5 +301,16 @@ final class ApolloUpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         w.level = .floating
         w.isReleasedWhenClosed = false
         window = w
+    }
+}
+
+private extension ApolloUpdateDriver.Phase {
+    var staysInBackground: Bool {
+        switch self {
+        case .downloading, .extracting, .installing, .readyToRelaunch, .failed:
+            return true
+        case .idle, .checking, .found, .upToDate:
+            return false
+        }
     }
 }

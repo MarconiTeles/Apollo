@@ -48,3 +48,7 @@ config.local.json
 
 # Logs
 *.log
+
+# Backup da chave privada do Sparkle — NUNCA versionar
+*SPARKLE-PRIVATE-KEY*
+chave-sparkle*

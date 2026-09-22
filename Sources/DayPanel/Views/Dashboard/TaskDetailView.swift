@@ -106,6 +106,15 @@ struct TaskDetailView: View, Equatable {
     @State private var assigneeSearchOpen: Bool = false
     @FocusState private var assigneeSearchFocused: Bool
 
+    /// LISTAS picker (multi-list / "Tasks in Multiple Lists").
+    /// Same UX as the assignee picker just above: chips for current
+    /// memberships, an "Adicionar/Editar" button that reveals an
+    /// inline search + filtered candidate list. Tapping a row
+    /// toggles the task's membership in that list.
+    @State private var listsQuery: String = ""
+    @State private var listsSearchOpen: Bool = false
+    @FocusState private var listsSearchFocused: Bool
+
     /// Base-name keys of attachment version groups the user has
     /// expanded to see older revisions. Collapsed by default —
     /// only the newest version of each `…v01/v02/v03` set shows
@@ -640,9 +649,10 @@ struct TaskDetailView: View, Equatable {
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
                 .disabled(appState.availableStatuses.isEmpty)
-                .popover(isPresented: $showStatusMenu, arrowEdge: .bottom) {
-                    StatusPickerPopover(
-                        statuses:          appState.availableStatuses,
+                .background {
+                    StatusPickerBubbleAnchor(
+                        isPresented: $showStatusMenu,
+                        statuses: appState.availableStatuses,
                         currentStatusName: task.status
                     ) { status in
                         Task { await appState.updateTaskStatus(task, to: status) }
@@ -769,24 +779,14 @@ struct TaskDetailView: View, Equatable {
             }
 
             kvCell("Anexos") {
-                Text(task.attachments.isEmpty
-                     ? "—" : "\(task.attachments.count) arquivos")
+                Text(displayedAttachments.isEmpty
+                     ? "—" : "\(displayedAttachments.count) arquivos")
                     .font(Editorial.sans(12))
-                    .foregroundStyle(task.attachments.isEmpty
+                    .foregroundStyle(displayedAttachments.isEmpty
                                      ? Editorial.inkMute : Editorial.ink)
             }
 
-            kvCell("Subtarefas") {
-                let kids = appState.subtasks(of: task.id)
-                if kids.isEmpty {
-                    Text("—").font(Editorial.sans(12))
-                        .foregroundStyle(Editorial.inkMute)
-                } else {
-                    Text("\(kids.filter(\.isCompleted).count) de \(kids.count) concluídas")
-                        .font(Editorial.sans(12))
-                        .foregroundStyle(Editorial.ink)
-                }
-            }
+            kvCell("Listas") { listsCellContent }
 
             kvCell("Criado por") {
                 if let who = task.creator?.username
@@ -859,9 +859,10 @@ struct TaskDetailView: View, Equatable {
                     Button { showStatusMenu.toggle() } label: { pill }
                         .buttonStyle(.plain)
                         .focusEffectDisabled()
-                        .popover(isPresented: $showStatusMenu, arrowEdge: .top) {
-                            StatusPickerPopover(
-                                statuses:          appState.availableStatuses,
+                        .background {
+                            StatusPickerBubbleAnchor(
+                                isPresented: $showStatusMenu,
+                                statuses: appState.availableStatuses,
                                 currentStatusName: task.status
                             ) { status in
                                 Task { await appState.updateTaskStatus(task, to: status) }
@@ -1130,7 +1131,7 @@ struct TaskDetailView: View, Equatable {
                     .font(Editorial.sans(10.5, .semibold))
                     .tracking(1.2)
                     .foregroundStyle(Editorial.inkMute)
-                Text("\(task.attachments.count)")
+                Text("\(displayedAttachments.count)")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
                 Spacer(minLength: 0)
@@ -1150,7 +1151,7 @@ struct TaskDetailView: View, Equatable {
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
-                case .loaded(let n) where n == 0 && task.attachments.isEmpty:
+                case .loaded(let n) where n == 0 && displayedAttachments.isEmpty:
                     Text("Nenhum anexo")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -1161,7 +1162,7 @@ struct TaskDetailView: View, Equatable {
                         .lineLimit(2)
                         .truncationMode(.tail)
                         .help(msg)
-                case .none where task.attachments.isEmpty:
+                case .none where displayedAttachments.isEmpty:
                     Text("Aguardando…")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -1200,20 +1201,111 @@ struct TaskDetailView: View, Equatable {
             // disclosure. Non-versioned files render exactly as
             // before, in their original position.
             LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(Self.versionGroupedAttachments(task.attachments)) { group in
-                    if group.versions.count <= 1 {
-                        AttachmentChip(attachment: group.newest,
-                                       taskURL: task.url,
-                                       taskId: task.id, listId: task.listId,
-                                       actorId: reviewActorId, actorName: reviewActorName)
-                            .equatable()
+                if isAttachmentsLoading && displayedAttachments.isEmpty {
+                    // Breathing placeholders instead of an empty list while the
+                    // per-task GET hydrates the attachments.
+                    ForEach(0..<4, id: \.self) { _ in AttachmentSkeletonRow() }
+                } else {
+                    let catalog = appState.taskMediaTransfers.catalog(for: task.id)
+                    let groups = Self.versionGroupedAttachments(displayedAttachments)
+                    if catalog.outputs.isEmpty {
+                        // Non-media task: plain list, no categorization.
+                        ForEach(groups) { group in attachmentGroupRow(group) }
                     } else {
-                        attachmentVersionGroup(group)
+                        // Apollo media task: split combinations vs direct videos,
+                        // mirroring the ANEXAR popup's grouping (classified by the
+                        // catalog lineage, so legacy direct videos with " + " in
+                        // their name still land under DIRETOS).
+                        let combos = groups.filter { attachmentIsCombo($0.newest, catalog: catalog) }
+                        let directs = groups.filter { !attachmentIsCombo($0.newest, catalog: catalog) }
+                        if !combos.isEmpty {
+                            attachmentCategoryLabel("COMBINAÇÕES", count: combos.count,
+                                                    systemImage: "square.stack.3d.up.fill")
+                            ForEach(combos) { group in attachmentGroupRow(group) }
+                        }
+                        if !directs.isEmpty {
+                            attachmentCategoryLabel("DIRETOS", count: directs.count,
+                                                    systemImage: "play.rectangle.fill")
+                                .padding(.top, combos.isEmpty ? 0 : 8)
+                            ForEach(directs) { group in attachmentGroupRow(group) }
+                        }
                     }
                 }
             }
         }
     }
+
+    private var isAttachmentsLoading: Bool {
+        if case .loading? = appState.attachmentHydration[task.id] { return true }
+        return false
+    }
+
+    /// Attachments to show: the task's visible files minus any a newer
+    /// media-flow version has superseded. Pure read (UserDefaults) — no state
+    /// mutation, so it can't feed a render loop. The superseded set is filled
+    /// out of the render path (media flow publish / catalog load).
+    private var displayedAttachments: [CUTask.Attachment] {
+        let superseded = AttachmentSupersession.supersededIds(taskId: task.id)
+        guard !superseded.isEmpty else { return task.visibleAttachments }
+        return task.visibleAttachments.filter {
+            !AttachmentSupersession.isSuperseded($0.id, in: superseded)
+        }
+    }
+
+    private func replaceAttachment(_ att: CUTask.Attachment) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Escolha o arquivo que substitui \(att.title)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await appState.replaceTaskAttachment(taskId: task.id, old: att, newFileURL: url) }
+    }
+
+    /// One render unit for an attachment group — a lone chip or a versioned set.
+    @ViewBuilder
+    private func attachmentGroupRow(_ group: AttachmentGroup) -> some View {
+        if group.versions.count <= 1 {
+            AttachmentChip(attachment: group.newest,
+                           taskURL: task.url,
+                           taskId: task.id, listId: task.listId,
+                           actorId: reviewActorId, actorName: reviewActorName,
+                           onReplace: { replaceAttachment(group.newest) })
+                .equatable()
+        } else {
+            attachmentVersionGroup(group)
+        }
+    }
+
+    /// True when an attachment is a HOOK×BODY combination. Classified via the
+    /// media catalog lineage (authoritative); falls back to the "A + B" naming
+    /// only for files the catalog doesn't know about.
+    private func attachmentIsCombo(_ att: CUTask.Attachment, catalog: TaskMediaCatalog) -> Bool {
+        if let output = catalog.outputs.first(where: {
+            AppState.mediaAttachmentIdMatches($0.attachmentId ?? "", att.id)
+        }), let lineage = catalog.lineages.first(where: { $0.id == output.lineageId }) {
+            return lineage.isComposition
+        }
+        return att.title.contains(" + ")
+    }
+
+    private func attachmentCategoryLabel(_ text: String, count: Int,
+                                         systemImage: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Editorial.accent)
+            Text(text)
+                .font(Editorial.sans(10, .semibold))
+                .tracking(1.0)
+                .foregroundStyle(Editorial.inkMute)
+            Text("\(count)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
+        }
+        .padding(.bottom, 1)
+    }
+
 
     // MARK: - Attachment version grouping
 
@@ -1303,7 +1395,8 @@ struct TaskDetailView: View, Equatable {
                 AttachmentChip(attachment: group.newest,
                                taskURL: task.url,
                                taskId: task.id, listId: task.listId,
-                               actorId: reviewActorId, actorName: reviewActorName)
+                               actorId: reviewActorId, actorName: reviewActorName,
+                               onReplace: { replaceAttachment(group.newest) })
                     .equatable()
             }
             Button {
@@ -1337,7 +1430,8 @@ struct TaskDetailView: View, Equatable {
                         AttachmentChip(attachment: old,
                                        taskURL: task.url,
                                        taskId: task.id, listId: task.listId,
-                                       actorId: reviewActorId, actorName: reviewActorName)
+                                       actorId: reviewActorId, actorName: reviewActorName,
+                                       onReplace: { replaceAttachment(old) })
                             .equatable()
                             .opacity(0.72)
                     }
@@ -1755,13 +1849,15 @@ struct TaskDetailView: View, Equatable {
         let resolved = appState.depTaskCache[id]
         Button {
             guard let t = resolved else { return }
-            appState.detailTaskOrigin = .zero
-            withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
-                if appState.detailTask != nil {
+            if appState.detailTask != nil {
+                withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
                     appState.pushDetailSubtask(t)
-                } else {
-                    appState.detailTask = t
                 }
+            } else {
+                appState.openTaskDetail(t,
+                                        origin: .zero,
+                                        navigationTasks: appState.tasks,
+                                        style: .bottomSlide)
             }
         } label: {
             HStack(spacing: 8) {
@@ -1798,13 +1894,11 @@ struct TaskDetailView: View, Equatable {
     // MARK: - Reminders (Apollo-native, local)
 
     private func reminderLabel(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "pt_BR")
-        f.dateFormat = Calendar.current.isDateInToday(d)
-            ? "'hoje' HH:mm"
+        let f = Calendar.current.isDateInToday(d)
+            ? SharedDateFormatters.reminderTodayPTBR
             : (Calendar.current.isDateInTomorrow(d)
-               ? "'amanhã' HH:mm"
-               : "d MMM · HH:mm")
+               ? SharedDateFormatters.reminderTomorrowPTBR
+               : SharedDateFormatters.reminderFullPTBR)
         return f.string(from: d)
     }
 
@@ -1959,7 +2053,8 @@ struct TaskDetailView: View, Equatable {
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 5)
-                                .background(Capsule().fill(Editorial.accent))
+                                .accentGlassButton(in: Capsule(style: .continuous),
+                                                   glow: newReminderDate > Date())
                         }
                         .buttonStyle(.plain)
                         .focusEffectDisabled()
@@ -2190,6 +2285,223 @@ struct TaskDetailView: View, Equatable {
         .frame(width: 18, height: 18)
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // MARK: LISTAS picker (multi-list)
+    // ────────────────────────────────────────────────────────────────
+
+    /// Filtered list of pickable lists. Already-membered lists rise
+    /// to the top so tapping the same row toggles add ↔ remove —
+    /// same pattern as `filteredAssigneeCandidates`.
+    private var filteredListCandidates: [CUList] {
+        let q = listsQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        let memberIds = Set(task.allListMemberships.map(\.id))
+        let pool = appState.availableLists
+        let filtered = q.isEmpty
+            ? pool
+            : pool.filter { $0.name.lowercased().contains(q) }
+        return filtered.sorted { lhs, rhs in
+            let l = memberIds.contains(lhs.id) ? 0 : 1
+            let r = memberIds.contains(rhs.id) ? 0 : 1
+            if l != r { return l < r }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    /// Contents of the LISTAS kvCell — chips for current
+    /// memberships + an "Adicionar/Editar" trigger that reveals
+    /// the inline picker. Wired to AppState.updateTaskLists when
+    /// the user toggles a row.
+    private var listsCellContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            let memberships = task.allListMemberships
+            HStack(spacing: 6) {
+                if !memberships.isEmpty {
+                    listChip(memberships[0], isHome: true)
+                    ForEach(memberships.dropFirst(), id: \.id) { loc in
+                        listChip(loc, isHome: false)
+                    }
+                } else {
+                    Text("—").font(Editorial.sans(12))
+                        .foregroundStyle(Editorial.inkMute)
+                }
+                if !listsSearchOpen {
+                    Button {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                            listsSearchOpen = true
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            listsSearchFocused = true
+                        }
+                    } label: {
+                        Text(memberships.isEmpty ? "Adicionar" : "Editar")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                }
+            }
+            if listsSearchOpen {
+                listsSearchBar
+            }
+        }
+    }
+
+    /// One LISTAS chip. The HOME list (the task's `listId`) wears
+    /// a `★` so the user knows that one can't be removed via this
+    /// picker — only via a true "move" operation. Other lists are
+    /// removable on tap from the dropdown.
+    private func listChip(_ loc: CUTask.TaskLocation, isHome: Bool) -> some View {
+        HStack(spacing: 4) {
+            if isHome {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Editorial.accent)
+            } else {
+                Circle()
+                    .fill(Editorial.inkFaint)
+                    .frame(width: 5, height: 5)
+            }
+            Text(loc.name)
+                .font(Editorial.sans(11, .medium))
+                .foregroundStyle(isHome ? Editorial.ink : Editorial.inkSoft)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(isHome ? Editorial.accent.opacity(0.08) : Editorial.ink.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(isHome ? Editorial.accent.opacity(0.30) : Editorial.rule.opacity(0.6),
+                              lineWidth: 1)
+        )
+    }
+
+    /// Inline search bar + suggestions list. Mirrors
+    /// `assigneeSearchBar`'s chrome so the two pickers feel like
+    /// one family.
+    @ViewBuilder
+    private var listsSearchBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                TextField("Buscar lista…", text: $listsQuery)
+                    .textFieldStyle(.plain)
+                    .font(.caption)
+                    .focused($listsSearchFocused)
+                if !listsQuery.isEmpty {
+                    Button {
+                        listsQuery = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                }
+                Button {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                        listsSearchOpen = false
+                        listsQuery = ""
+                    }
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help("Fechar busca")
+            }
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .background(Color.primary.opacity(0.06),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+            )
+
+            if appState.availableLists.isEmpty {
+                Text("Nenhuma lista disponível — fixe listas na sidebar primeiro.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 4).padding(.vertical, 4)
+            } else {
+                let candidates = filteredListCandidates
+                if candidates.isEmpty {
+                    Text("Nenhuma lista encontrada")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 4).padding(.vertical, 4)
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(candidates.prefix(8), id: \.id) { l in
+                            listsCandidateRow(l)
+                            if l.id != candidates.prefix(8).last?.id {
+                                Rectangle()
+                                    .fill(.separator.opacity(0.3))
+                                    .frame(height: 0.5)
+                            }
+                        }
+                    }
+                    .background(Color.primary.opacity(0.04),
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+                    )
+                }
+            }
+        }
+    }
+
+    /// One row in the lists picker dropdown — tapping toggles the
+    /// list's membership on the task. The HOME list is shown but
+    /// not togglable (you'd need to MOVE the task to swap homes).
+    private func listsCandidateRow(_ l: CUList) -> some View {
+        let isMember = task.allListMemberships.contains(where: { $0.id == l.id })
+        let isHome   = (l.id == task.listId)
+        return Button {
+            guard !isHome else { return }
+            var ids = Set(task.allListMemberships.map(\.id))
+            if isMember { ids.remove(l.id) } else { ids.insert(l.id) }
+            Task { await appState.updateTaskLists(task, to: ids) }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isMember
+                      ? (isHome ? "star.fill" : "checkmark.circle.fill")
+                      : "circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(
+                        isHome ? AnyShapeStyle(Editorial.accent) :
+                        isMember ? AnyShapeStyle(Color.blue) :
+                                   AnyShapeStyle(HierarchicalShapeStyle.tertiary)
+                    )
+                Text(l.name)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if isHome {
+                    Text("home")
+                        .font(.system(size: 9, weight: .semibold))
+                        .tracking(0.6)
+                        .foregroundStyle(Editorial.inkMute)
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .help(isHome ? "Lista atual da tarefa (use MOVER para mudar)" :
+              isMember ? "Remover desta lista" : "Adicionar a esta lista")
+    }
+
     private func tagPill(_ tag: CUTask.Tag) -> some View {
         // Editorial chip: the tag keeps its own ClickUp hue but
         // densified/desaturated (`editorialMuted`) so it sits
@@ -2372,21 +2684,22 @@ struct SubtaskRow: View, Equatable {
             //    main list), open it as a regular task popup
             //    in `detailTask`. There's no parent on screen
             //    to preserve.
-            appState.detailTaskOrigin = .zero
-            withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
-                if appState.detailTask != nil {
+            if appState.detailTask != nil {
+                withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
                     appState.pushDetailSubtask(task)
-                } else {
-                    appState.detailTask = task
                 }
+            } else {
+                appState.openTaskDetail(task,
+                                        origin: .zero,
+                                        navigationTasks: appState.tasks,
+                                        style: .bottomSlide)
             }
         } label: {
             HStack(alignment: .center, spacing: 10) {
                 checkboxButton
 
                 Text(task.title)
-                    .font(Editorial.serif(15))
-                    .tracking(-0.1)
+                    .font(Editorial.sans(13, .medium))
                     .strikethrough(task.isCompleted, color: Editorial.inkMute)
                     .foregroundStyle(task.isCompleted ? Editorial.inkSoft : Editorial.ink)
                     .lineLimit(1)
@@ -2421,12 +2734,12 @@ struct SubtaskRow: View, Equatable {
             // right gutter to match the parent rows' inner inset.
             .padding(.leading, leadingIndent)
             .padding(.trailing, 14)
-            // 3% accent wash — matches the parent task list so
-            // subtasks share the same colour-by-category language.
-            // Applies in BOTH contexts where SubtaskRow renders:
-            // the dashboard's expanded inline list and the task
-            // detail popup's subtask list.
-            .background(Color(statusHex: task.statusDisplayHex).opacity(0.03))
+            // Subtask row background — flat (no per-category
+            // accent wash). The colour-by-status cue lives in the
+            // status dot/pill itself; the row stays paper-clean
+            // for parity with parent rows (which had their tint
+            // layer disabled earlier per the same request).
+            .background(Color.clear)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -2636,6 +2949,32 @@ struct SubtaskRow: View, Equatable {
 /// "this opens externally". Hovering brightens the chip's
 /// border and lifts it a hair; clicking opens the file URL
 /// in the user's default browser.
+/// Breathing placeholder that mirrors an AttachmentChip row while the
+/// per-task attachment GET is in flight.
+private struct AttachmentSkeletonRow: View {
+    @State private var dim = false
+    private var bar: Color { Editorial.ink.opacity(0.08) }
+    var body: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 3).fill(bar).frame(width: 38, height: 20)
+            VStack(alignment: .leading, spacing: 6) {
+                RoundedRectangle(cornerRadius: 4).fill(bar).frame(width: 230, height: 11)
+                RoundedRectangle(cornerRadius: 4).fill(bar).frame(width: 58, height: 9)
+            }
+            Spacer(minLength: 0)
+            RoundedRectangle(cornerRadius: 5).fill(bar).frame(width: 84, height: 24)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
+        }
+        .opacity(dim ? 0.5 : 1)
+        .animation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: dim)
+        .onAppear { dim = true }
+    }
+}
+
 private struct AttachmentChip: View, Equatable {
     let attachment: CUTask.Attachment
     /// Parent task's ClickUp URL (e.g.
@@ -2656,6 +2995,9 @@ private struct AttachmentChip: View, Equatable {
     var listId: String? = nil
     var actorId: Int? = nil
     var actorName: String = "Revisor"
+    /// Replace action (uploads a new revision). Excluded from `==` (closures
+    /// aren't comparable and only capture the stable attachment + task id).
+    var onReplace: (() -> Void)? = nil
 
     static func == (lhs: AttachmentChip, rhs: AttachmentChip) -> Bool {
         lhs.attachment == rhs.attachment && lhs.taskURL == rhs.taskURL
@@ -2763,28 +3105,11 @@ private struct AttachmentChip: View, Equatable {
                 // (video/image/PDF). Opens the native review app via the
                 // apolloreview:// scheme; bypasses the chip's download path.
                 if ReviewLink.isReviewable(attachment.ext), let taskId, let actorId {
-                    Button {
-                        ReviewPresenter.shared.present(
-                            ReviewLink.params(attachment: attachment, taskId: taskId, listId: listId,
-                                              uploaderId: attachment.uploaderId,
-                                              actorId: actorId, actorName: actorName))
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "play.rectangle.fill")
-                                .font(.system(size: 9, weight: .semibold))
-                            Text("REVIEW")
-                                .font(Editorial.sans(9.5, .bold))
-                                .tracking(0.4)
-                        }
-                        .foregroundStyle(Editorial.page)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(Editorial.accent))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .focusEffectDisabled()
-                    .help("Abrir no Apollo Review")
+                    // Shared component → carries the "unseen update" badge and
+                    // registers the review with the watcher on open.
+                    ReviewButton(attachment: attachment, taskId: taskId, listId: listId,
+                                 uploaderId: attachment.uploaderId, actorId: actorId,
+                                 actorName: actorName)
                 }
 
                 // When the attachment has unresolved annotations
@@ -2819,6 +3144,22 @@ private struct AttachmentChip: View, Equatable {
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
                     .help("Abrir a interface de revisão deste anexo no ClickUp web (timestamps + anotações de vídeo).")
+                }
+
+                // Substituir — envia uma nova revisão. Nested plain button
+                // takes its own tap before the chip's open-file tap. (Não há
+                // "Excluir": a API pública do ClickUp não deleta anexo.)
+                if let onReplace {
+                    Button(action: onReplace) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Editorial.inkMute)
+                            .frame(width: 26, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Substituir anexo (envia uma nova versão)")
                 }
 
                 Image(systemName: "arrow.up.right")

@@ -29,6 +29,17 @@ import Sparkle
 /// `MainActor.run` / `Task { @MainActor in }` below.
 final class UpdateService: NSObject, ObservableObject {
 
+    /// Progress that remains visible outside the updater window. The download
+    /// itself is still owned and verified by Sparkle; this is only Apollo's
+    /// durable presentation state for the banner and Notification Center.
+    enum BackgroundActivity: Equatable {
+        case downloading(Double?)
+        case extracting(Double)
+        case installing
+        case ready(version: String)
+        case failed(message: String)
+    }
+
     // MARK: - Published state
 
     /// Currently-pending update, or `nil` when the app is up to
@@ -42,12 +53,22 @@ final class UpdateService: NSObject, ObservableObject {
     /// glance that the auto-check is actually running.
     @Published private(set) var lastCheckedAt: Date?
 
+    /// Non-nil while a download/install is progressing in the background or
+    /// waiting for the user to relaunch. Unlike the updater card, this state
+    /// survives closing/hiding that card.
+    @Published private(set) var backgroundActivity: BackgroundActivity?
+
     // MARK: - Wiring
 
     /// Held weakly because the updater retains *us* (we're its
     /// `delegate`) — making this strong would cause a retain cycle.
     /// Set immediately after init in AppDelegate.
     weak var updater: SPUUpdater?
+
+    /// Custom user driver currently executing the Sparkle flow. Used only to
+    /// bring the existing stage back into focus; it never starts a second
+    /// check/download while one is already active.
+    weak var updateDriver: ApolloUpdateDriver?
 
     /// Used to push an entry into the in-app notification log.
     /// Weak — AppState owns the rest of the dependency graph
@@ -81,7 +102,48 @@ final class UpdateService: NSObject, ObservableObject {
     /// before committing.
     @MainActor
     func presentUpdateUI() {
-        updater?.checkForUpdates()
+        if backgroundActivity != nil {
+            updateDriver?.showUpdateInFocus()
+        } else {
+            updater?.checkForUpdates()
+        }
+    }
+
+    var hasVisibleUpdateStatus: Bool {
+        availableUpdate != nil || backgroundActivity != nil
+    }
+
+    /// Receives live Sparkle phases from ApolloUpdateDriver. Kept as one
+    /// mapping point so every external surface reports the exact same state.
+    @MainActor
+    func receiveUpdatePhase(_ phase: ApolloUpdateDriver.Phase) {
+        switch phase {
+        case let .downloading(fraction):
+            backgroundActivity = .downloading(fraction)
+        case let .extracting(fraction):
+            backgroundActivity = .extracting(fraction)
+        case .installing:
+            backgroundActivity = .installing
+        case let .readyToRelaunch(version):
+            backgroundActivity = .ready(version: version)
+            appState?.notify(
+                .success,
+                title: version.isEmpty
+                    ? "Atualização pronta"
+                    : "Apollo \(version) pronto para instalar",
+                subtitle: "Download concluído em segundo plano",
+                message: "Abra a atualização para instalar e reiniciar."
+            )
+        case let .failed(message):
+            backgroundActivity = .failed(message: message)
+            appState?.notify(
+                .error,
+                title: "Falha ao baixar a atualização",
+                subtitle: message
+            )
+        case .idle, .checking, .found, .upToDate:
+            if case .idle = phase { backgroundActivity = nil }
+        }
     }
 
     /// Manual dismiss from the banner X. Hides the banner for

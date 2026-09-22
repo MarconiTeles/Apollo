@@ -173,10 +173,9 @@ struct GlassFormFooter: View {
                     .foregroundStyle(Editorial.ink)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Editorial.page)
-                    )
+                    .liquidGlass(in: RoundedRectangle(cornerRadius: 4,
+                                                      style: .continuous),
+                                 tint: Editorial.page, tintOpacity: 0.6)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .strokeBorder(Editorial.rule, lineWidth: 1)
@@ -194,10 +193,9 @@ struct GlassFormFooter: View {
                     .foregroundStyle(Editorial.page)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Editorial.ink)
-                    )
+                    .liquidGlass(in: RoundedRectangle(cornerRadius: 4,
+                                                      style: .continuous),
+                                 tint: Editorial.ink, tintOpacity: 0.85)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .strokeBorder(Editorial.ink, lineWidth: 1)

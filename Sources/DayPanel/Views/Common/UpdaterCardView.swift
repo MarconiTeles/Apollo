@@ -8,6 +8,10 @@ import AppKit
 struct UpdaterCardView: View {
     @ObservedObject var driver: ApolloUpdateDriver
 
+    private var popupShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(14), style: .continuous)
+    }
+
     private var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
     }
@@ -18,15 +22,7 @@ struct UpdaterCardView: View {
         }
         .frame(width: 460)
         .padding(28)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Editorial.paper)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Editorial.ink.opacity(0.08), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.26), radius: 26, y: 10)
+        .popupGlass(in: popupShape)
         .padding(40)               // room so the soft shadow isn't clipped by the window edge
         .fixedSize()
     }
@@ -52,7 +48,9 @@ struct UpdaterCardView: View {
                 secondaryButton("Ignorar esta versão") { driver.choose(.skip) }
                 Spacer(minLength: 8)
                 secondaryButton("Depois") { driver.choose(.dismiss) }
-                primaryButton("Instalar") { driver.choose(.install) }
+                primaryButton("Baixar em segundo plano") {
+                    driver.downloadInBackground()
+                }
             }
 
         case let .downloading(fraction):

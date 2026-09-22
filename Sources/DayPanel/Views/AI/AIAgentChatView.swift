@@ -112,6 +112,10 @@ struct AIAgentChatView: View {
             // hidden state (otherwise the cascade is skipped).
             DispatchQueue.main.async { homeRevealed = true }
         }
+        .apolloStudioNode("ai.content",
+                          title: "Conteúdo do Apollo IA",
+                          kind: .section,
+                          parent: "ai.panel")
     }
 
     /// Whether the runtime manager is currently streaming a
@@ -179,6 +183,15 @@ struct AIAgentChatView: View {
                     .frame(height: 1)
             }
         }
+        .apolloStudioNode("ai.dashboard-header",
+                          title: "Cabeçalho do diário",
+                          kind: .header,
+                          parent: "ai.content",
+                          properties: [
+                            .init(kind: .height, title: "Altura", value: 64),
+                            .init(kind: .horizontalPadding,
+                                  title: "Padding inicial", value: 36),
+                          ])
     }
 
     /// Abbreviated pt-BR date for the masthead, e.g.
@@ -254,6 +267,13 @@ struct AIAgentChatView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Editorial.rule).frame(height: 1)
         }
+        .apolloStudioNode("ai.chat-header",
+                          title: "Cabeçalho da conversa",
+                          kind: .header,
+                          parent: "ai.content",
+                          properties: [
+                            .init(kind: .height, title: "Altura", value: 64),
+                        ])
     }
 
     /// Sub-line under "Apollo IA" showing the active provider.
@@ -509,6 +529,10 @@ struct AIAgentChatView: View {
             }
           }
         }
+        .apolloStudioNode("ai.transcript",
+                          title: "Histórico da conversa",
+                          kind: .list,
+                          parent: "ai.content")
     }
 
     /// Stable id for the bottom-of-scroll sentinel. Lifted out
@@ -1189,10 +1213,9 @@ struct AIAgentChatView: View {
                             .foregroundStyle(canSend ? Editorial.page
                                                      : Editorial.inkMute)
                             .frame(width: 32, height: 32)
-                            .background(
-                                (canSend ? Editorial.accent : Editorial.rule),
-                                in: Circle()
-                            )
+                            .background(canSend ? Color.clear : Editorial.rule,
+                                        in: Circle())
+                            .accentGlassButton(in: Circle(), isOn: canSend)
                     }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
@@ -1219,6 +1242,13 @@ struct AIAgentChatView: View {
                 handleDroppedProviders($0)
             }
         }
+        .apolloStudioNode("ai.composer",
+                          title: "Campo de mensagem",
+                          kind: .field,
+                          parent: "ai.content",
+                          properties: [
+                            .init(kind: .spacing, title: "Espaçamento", value: 6),
+                          ])
         // Pure white background to clearly delineate the composer
         // as a text input surface, separating it visually from the
         // cream paper canvas of the rest of the chat.
@@ -2425,10 +2455,10 @@ private struct TaskChatPill: View {
             // dismissing it, so closing the detail returns
             // the user to the same chat context.
             let origin = MouseOriginCapture.currentClickRectInMainWindow()
-            appState.detailTaskOrigin = origin
-            withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
-                appState.detailTask = task
-            }
+            appState.openTaskDetail(task,
+                                    origin: origin,
+                                    navigationTasks: appState.tasks,
+                                    style: .bottomSlide)
         } label: {
             HStack(alignment: .center, spacing: 12) {
                 // Hover-to-DONE checkbox — 1:1 with the dashboard
@@ -2725,10 +2755,10 @@ private struct TaskChatPillGhost: View {
         // Keep the AI chat open behind the detail — see the
         // matching note in `TaskChatPill`'s tap handler.
         let origin = MouseOriginCapture.currentClickRectInMainWindow()
-        appState.detailTaskOrigin = origin
-        withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
-            appState.detailTask = task
-        }
+        appState.openTaskDetail(task,
+                                origin: origin,
+                                navigationTasks: appState.tasks,
+                                style: .bottomSlide)
     }
 }
 
@@ -2935,7 +2965,7 @@ private struct EmptyStateView: View {
                 )
                 .rotationEffect(.degrees(sparkleRotate))
                 .scaleEffect(halo1Pulse ? 1.06 : 0.96)
-                .shadow(color: Editorial.accent.opacity(0.55),
+                .shadow(color: .black.opacity(0.24),
                         radius: 12, x: 0, y: 0)
         }
         .compositingGroup()
@@ -3868,9 +3898,9 @@ private struct SuggestionTile: View {
         .frame(height: tileHeight)
         .background(tileSurface)
         .overlay(tileBorder)
-        .shadow(color: suggestion.accent.opacity(0.45),
+        .shadow(color: .black.opacity(0.18),
                 radius: 14, x: 0, y: 6)
-        .shadow(color: suggestion.accent.opacity(0.25),
+        .shadow(color: .black.opacity(0.08),
                 radius: 4, x: 0, y: 1)
     }
 
@@ -4020,9 +4050,9 @@ private struct SuggestionTile: View {
         .frame(minHeight: tileHeight)
         .background(tileSurface)
         .overlay(tileBorder)
-        .shadow(color: suggestion.accent.opacity(0.45),
+        .shadow(color: .black.opacity(0.18),
                 radius: 14, x: 0, y: 6)
-        .shadow(color: suggestion.accent.opacity(0.25),
+        .shadow(color: .black.opacity(0.08),
                 radius: 4, x: 0, y: 1)
     }
 
@@ -4092,9 +4122,9 @@ private struct SuggestionTile: View {
             .overlay(alignment: .topLeading) { inner }
             .background(tileSurface)
             .overlay(tileBorder)
-        .shadow(color: suggestion.accent.opacity(0.45),
+        .shadow(color: .black.opacity(0.18),
                 radius: 14, x: 0, y: 6)
-        .shadow(color: suggestion.accent.opacity(0.25),
+        .shadow(color: .black.opacity(0.08),
                 radius: 4, x: 0, y: 1)
     }
 
@@ -4148,9 +4178,9 @@ private struct SuggestionTile: View {
             .overlay(alignment: .topLeading) { inner }
             .background(tileSurface)
             .overlay(tileBorder)
-            .shadow(color: suggestion.accent.opacity(0.45),
+            .shadow(color: .black.opacity(0.18),
                     radius: 14, x: 0, y: 6)
-            .shadow(color: suggestion.accent.opacity(0.25),
+            .shadow(color: .black.opacity(0.08),
                     radius: 4, x: 0, y: 1)
     }
 
@@ -4262,7 +4292,7 @@ private struct SuggestionTile: View {
                     )
                 )
                 .frame(width: 30, height: 30)
-                .shadow(color: suggestion.accent.opacity(0.4),
+                .shadow(color: .black.opacity(0.18),
                         radius: 6, x: 0, y: 2)
 
             Image(systemName: suggestion.icon)
@@ -4576,7 +4606,7 @@ private struct ScrollAwareHoverModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onHover { hovering in
-                if ScrollStateObserver.isScrollingNow {
+                if ScrollStateObserver.isScrollingNow || ScrollGate.shared.active {
                     // Force-reset rather than ignoring: covers the
                     // case where the cursor was already inside a
                     // view when scroll started.
@@ -4586,6 +4616,9 @@ private struct ScrollAwareHoverModifier: ViewModifier {
                 perform(hovering)
             }
             .onReceive(ScrollStateObserver.shared.$isScrolling) { scrolling in
+                if scrolling { perform(false) }
+            }
+            .onReceive(ScrollGate.shared.$active) { scrolling in
                 if scrolling { perform(false) }
             }
     }
@@ -4681,7 +4714,7 @@ struct InteractivePillFeedback: ViewModifier {
                            value: isPressed)
                 .animation(.spring(response: 0.4, dampingFraction: 0.75),
                            value: isHovered)
-                .onHover { hovering in
+                .scrollAwareOnHover { hovering in
                     // Scrolling a long list sweeps the cursor
                     // across many pills in quick succession.
                     // Re-rendering each one (scale + halo +
@@ -4691,21 +4724,7 @@ struct InteractivePillFeedback: ViewModifier {
                     // the observer here (not via @ObservedObject)
                     // means the value access doesn't register
                     // as a body dependency.
-                    if ScrollStateObserver.shared.isScrolling {
-                        if isHovered { isHovered = false }
-                        return
-                    }
                     isHovered = hovering
-                }
-                // `.onReceive` watches the publisher without
-                // creating a body-level dependency the way
-                // `@ObservedObject` would. The closure only
-                // touches @State (via `isHovered`) when scroll
-                // actually starts AND we have an active hover —
-                // which happens at most a few times per session,
-                // not per scroll frame.
-                .onReceive(ScrollStateObserver.shared.$isScrolling) { scrolling in
-                    if scrolling, isHovered { isHovered = false }
                 }
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0)

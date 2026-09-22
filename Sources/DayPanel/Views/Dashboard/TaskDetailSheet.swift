@@ -97,6 +97,7 @@ struct TaskDetailSheet: View, Equatable {
     /// Confirm before turning the task into a calendar event
     /// (the ClickUp task is removed afterwards).
     @State private var showConvertConfirm = false
+    @State private var showStatusMenu = false
 
     /// Editorial layout: a single-column popup with the activity
     /// timeline and attachments behind tabs (matching the
@@ -118,9 +119,20 @@ struct TaskDetailSheet: View, Equatable {
     }
 
     private var shape: RoundedRectangle {
-        // Popup corner radius bumped +50% (3 → 4.5).
-        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+        // Mesmo arredondamento da janela de Anexar (TaskMediaFlowSheet).
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(9), style: .continuous)
     }
+
+    private var headerShape: UnevenRoundedRectangle {
+        let radius = Editorial.popupRadius(9)
+        return UnevenRoundedRectangle(topLeadingRadius: radius,
+                                      bottomLeadingRadius: 0,
+                                      bottomTrailingRadius: 0,
+                                      topTrailingRadius: radius,
+                                      style: .continuous)
+    }
+
+    private let mastheadHeight: CGFloat = 68
 
     /// Compute a popup size from the host window. Used once on
     /// first appear; afterwards the cached `lockedSize` value
@@ -167,10 +179,7 @@ struct TaskDetailSheet: View, Equatable {
     var body: some View {
         // EditorialDetailV2 — "task as a magazine spread":
         // masthead, then a 7fr/3fr grid (main column · marginalia).
-        VStack(spacing: 0) {
-            masthead
-            Rectangle().fill(Editorial.rule).frame(height: 1)
-
+        ZStack(alignment: .top) {
             Group {
                 switch detailTab {
                 case .overview:    overviewSpread
@@ -180,18 +189,18 @@ struct TaskDetailSheet: View, Equatable {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+            masthead
+                .frame(minHeight: mastheadHeight)
+                // Material OFICIAL do header (mesma receita de Tarefas).
+                .officialHeaderMaterial(in: headerShape)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Editorial.rule).frame(height: 1)
+                }
+                .zIndex(20)
         }
         .frame(width: popoverSize.width, height: popoverSize.height)
-        // Editorial page: near-neutral popup surface, near-square
-        // corners, one soft ambient shadow (prototype `EditorialDetailV2`).
-        .background(Editorial.popup, in: shape)
-        .clipShape(shape)
-        .overlay {
-            shape.strokeBorder(Editorial.rule, lineWidth: 1)
-                .allowsHitTesting(false)
-        }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .solidPopupSurface(in: shape)
         // Lock the size on first appear so subsequent host-
         // window resizes don't reflow the popup.
         //
@@ -257,16 +266,23 @@ struct TaskDetailSheet: View, Equatable {
     // MARK: - EditorialDetailV2 — masthead
 
     private func dayMonth(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "pt_BR")
-        f.dateFormat = "d MMM"
-        return f.string(from: d)
+        SharedDateFormatters.shortDayMonthPTBR.string(from: d)
     }
 
     private var statusLabel: String { liveTask.status.capitalized }
 
     private var masthead: some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
+            if !liveTask.isSubtask && !appState.detailNavigationTaskIds.isEmpty {
+                HStack(spacing: 4) {
+                    detailNavigationButton(.previous, systemName: "chevron.up",
+                                           help: "Tarefa anterior")
+                    detailNavigationButton(.next, systemName: "chevron.down",
+                                           help: "Próxima tarefa")
+                }
+                .padding(.trailing, 2)
+            }
+
             // Back (subtask navigation) — kept from the old header.
             if liveTask.isSubtask {
                 let isOverlay = (appState.detailSubtaskOverlay?.id == liveTask.id)
@@ -300,7 +316,31 @@ struct TaskDetailSheet: View, Equatable {
                 .font(Editorial.serif(11).italic())
                 .foregroundStyle(Editorial.inkMute)
             Circle().fill(Editorial.inkFaint).frame(width: 3, height: 3)
-            Folio(statusLabel, accent: true)
+            let statusColor = Color(statusHex: liveTask.statusDisplayHex)
+            Button { showStatusMenu.toggle() } label: {
+                HStack(spacing: 6) {
+                    Text(statusLabel.uppercased())
+                        .font(Editorial.sans(10.5, .semibold))
+                        .tracking(1.25)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 7.5, weight: .bold))
+                }
+                .foregroundStyle(statusColor)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .disabled(appState.availableStatuses.isEmpty)
+            .background {
+                StatusPickerBubbleAnchor(
+                    isPresented: $showStatusMenu,
+                    statuses: appState.availableStatuses,
+                    currentStatusName: liveTask.status
+                ) { status in
+                    Task { await appState.updateTaskStatus(liveTask, to: status) }
+                    showStatusMenu = false
+                }
+            }
 
             Spacer(minLength: 12)
 
@@ -308,7 +348,7 @@ struct TaskDetailSheet: View, Equatable {
             mastheadTab(.subtasks,    "Subtarefas",
                         visibleSubtasks.isEmpty ? nil : visibleSubtasks.count)
             mastheadTab(.attachments, "Anexos",
-                        liveTask.attachments.isEmpty ? nil : liveTask.attachments.count)
+                        liveTask.visibleAttachments.isEmpty ? nil : liveTask.visibleAttachments.count)
             mastheadTab(.activity,    "Atividade", nil)
 
             Rectangle().fill(Editorial.rule)
@@ -336,6 +376,43 @@ struct TaskDetailSheet: View, Equatable {
         }
         .padding(.horizontal, 40)
         .padding(.vertical, 14)
+        .apolloStudioNode("task-detail.header",
+                          title: "Cabeçalho da tarefa",
+                          kind: .header,
+                          parent: "task-detail.panel",
+                          properties: [
+                            .init(kind: .horizontalPadding,
+                                  title: "Padding horizontal", value: 40),
+                            .init(kind: .verticalPadding,
+                                  title: "Padding vertical", value: 14),
+                            .init(kind: .material,
+                                  title: "Material", token: "Materials.titlebar"),
+                          ])
+    }
+
+    private func detailNavigationButton(
+        _ direction: AppState.DetailNavigationDirection,
+        systemName: String,
+        help: String
+    ) -> some View {
+        let enabled = direction == .previous
+            ? appState.canNavigateToPreviousDetailTask
+            : appState.canNavigateToNextDetailTask
+        return Button {
+            appState.navigateDetailTask(direction)
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 10.5, weight: .semibold))
+                .frame(width: 24, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .foregroundStyle(enabled ? Editorial.inkSoft : Editorial.inkFaint)
+        .disabled(!enabled)
+        .keyboardShortcut(direction == .previous ? .upArrow : .downArrow,
+                          modifiers: .command)
+        .help(help)
     }
 
     private func mastheadTab(_ t: DetailTab,
@@ -385,6 +462,7 @@ struct TaskDetailSheet: View, Equatable {
                 .padding(.bottom, 8)
 
             Text(liveTask.title)
+                .textSelection(.enabled)
                 .font(Editorial.serif(38))
                 .foregroundStyle(Editorial.ink)
                 .tracking(-1.2)
@@ -406,11 +484,20 @@ struct TaskDetailSheet: View, Equatable {
             .padding(.top, 12)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .apolloStudioNode("task-detail.title",
+                          title: "Título da tarefa",
+                          kind: .section,
+                          parent: "task-detail.overview",
+                          properties: [
+                            .init(kind: .fontSize, title: "Título", value: 38),
+                            .init(kind: .spacing, title: "Espaçamento", value: 12),
+                          ])
     }
 
     private var overviewMain: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: mastheadHeight)
                 titleBlock
 
                 Spacer().frame(height: 24)
@@ -445,6 +532,10 @@ struct TaskDetailSheet: View, Equatable {
             .padding(.bottom, 32)
         }
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .apolloStudioNode("task-detail.overview",
+                          title: "Visão geral da tarefa",
+                          kind: .section,
+                          parent: "task-detail.panel")
     }
 
     // MARK: - Other tabs
@@ -455,6 +546,7 @@ struct TaskDetailSheet: View, Equatable {
     private var subtasksTab: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: mastheadHeight)
                 titleBlock
 
                 Spacer().frame(height: 24)
@@ -480,31 +572,48 @@ struct TaskDetailSheet: View, Equatable {
             .padding(.bottom, 32)
         }
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .apolloStudioNode("task-detail.subtasks",
+                          title: "Subtarefas",
+                          kind: .section,
+                          parent: "task-detail.panel")
     }
 
     private var attachmentsTab: some View {
         ScrollView(.vertical, showsIndicators: true) {
-            TaskDetailView(
-                task: liveTask,
-                appState: appState,
-                includesComments: false,
-                attachmentsOnly:  true,
-                visibleSubtasks:  visibleSubtasks
-            )
-            .equatable()
+            VStack(spacing: 0) {
+                Color.clear.frame(height: mastheadHeight)
+                TaskDetailView(
+                    task: liveTask,
+                    appState: appState,
+                    includesComments: false,
+                    attachmentsOnly:  true,
+                    visibleSubtasks:  visibleSubtasks
+                )
+                .equatable()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.horizontal, 56)
         .padding(.vertical, 32)
+        .apolloStudioNode("task-detail.attachments",
+                          title: "Anexos",
+                          kind: .section,
+                          parent: "task-detail.panel")
     }
 
     private var activityTab: some View {
-        TaskCommentsSection(task: liveTask, appState: appState,
-                            composerAtBottom: true)
+        TaskCommentsSection(task: liveTask,
+                            appState: appState,
+                            composerAtBottom: true,
+                            topContentInset: mastheadHeight + 8)
             .equatable()
             .padding(.horizontal, 56)
-            .padding(.vertical, 28)
+            .padding(.bottom, 28)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .apolloStudioNode("task-detail.activity",
+                              title: "Atividade e comentários",
+                              kind: .section,
+                              parent: "task-detail.panel")
     }
 
 }

@@ -51,6 +51,9 @@ struct CommandPaletteView: View {
     private var enterSpring: Animation {
         .spring(response: 0.34, dampingFraction: 0.80)
     }
+    private var popupShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(6), style: .continuous)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,17 +64,7 @@ struct CommandPaletteView: View {
             footer
         }
         .frame(width: 680, height: 540)
-        // Editorial card (prototype `PPalette` / `PPopup`):
-        // near-neutral popup surface, hairline border, soft
-        // ambient shadow — no glass.
-        .background(Editorial.popup)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Editorial.rule, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .popupGlass(in: popupShape)
         // Entrance: a confident "command bar lands" — scales up
         // from 0.96 anchored at the top, lifts 10pt, and a brief
         // 6→0 blur sharpens it into focus. Reduce Motion → fade
@@ -156,7 +149,7 @@ struct CommandPaletteView: View {
                                 .id(item.id)
                                 .contentShape(Rectangle())
                                 .onTapGesture { onPick(idx) }
-                                .onHover { hovering in
+                                .scrollAwareOnHover { hovering in
                                     // Hover updates ONLY the
                                     // visual hover state —
                                     // never `model.select(_:)`.
@@ -218,6 +211,11 @@ struct CommandPaletteView: View {
                 // changes that fire `.active` with the same
                 // location don't trip it.
                 .onContinuousHover { phase in
+                    guard !ScrollStateObserver.isScrollingNow,
+                          !ScrollGate.shared.active else {
+                        hoveredId = nil
+                        return
+                    }
                     if case .active(let loc) = phase {
                         if loc != lastHoverLocation {
                             lastHoverLocation = loc

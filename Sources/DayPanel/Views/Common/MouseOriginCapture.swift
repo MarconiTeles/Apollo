@@ -22,6 +22,29 @@ import AppKit
 ///     scroll-time work.
 enum MouseOriginCapture {
 
+    /// Converts an AppKit view's full bounds into the main SwiftUI window's
+    /// top-left coordinate space. Task rows use this instead of a 2×2 cursor
+    /// point so the detail transition can preserve the source capsule's real
+    /// width and height.
+    static func rectInMainWindow(for view: NSView) -> CGRect {
+        guard let sourceWindow = view.window,
+              let mainWindow = bestMainWindow(),
+              let mainContent = mainWindow.contentView else { return .zero }
+
+        let sourceWindowRect = view.convert(view.bounds, to: nil)
+        let screenRect = sourceWindow.convertToScreen(sourceWindowRect)
+        let mainWindowRect = mainWindow.convertFromScreen(screenRect)
+        let contentRect = mainContent.convert(mainWindowRect, from: nil)
+        let topLeftY = mainContent.isFlipped
+            ? contentRect.minY
+            : mainContent.bounds.height - contentRect.maxY
+
+        return CGRect(x: contentRect.minX,
+                      y: topLeftY,
+                      width: contentRect.width,
+                      height: contentRect.height)
+    }
+
     /// Returns a tiny rect (2×2) centred on the current cursor
     /// position, expressed in the dashboard window's SwiftUI
     /// coordinate space (top-left origin). `FloatingModal` and

@@ -36,6 +36,10 @@ struct CUTask: Identifiable, Codable, Equatable {
     var listName: String
     var isCompleted: Bool
     var description: String?
+    /// Comment count supplied by ClickUp's task payload. `nil` means an older
+    /// cache/endpoint did not provide it; callers must then use the safe
+    /// fallback instead of assuming the task has no comments.
+    var commentCount: Int? = nil
     var assignees: [Assignee] = []
     var tags: [Tag]           = []
     var url: String?
@@ -44,6 +48,10 @@ struct CUTask: Identifiable, Codable, Equatable {
     var archived:    Bool      = false
     var creator:     Assignee? = nil
     var dateCreated: Date?     = nil
+    /// Last-activity timestamp from ClickUp's `date_updated`. A new comment
+    /// bumps it, so the Assigned Comments indexer sorts by this to scan the
+    /// tasks most likely to hold recent assigned comments first.
+    var dateUpdated: Date?     = nil
     var dateClosed:  Date?     = nil
     /// Numeric id of the last user to edit the task. Populated when
     /// the API returns it (some endpoints / payloads include it as
@@ -75,6 +83,14 @@ struct CUTask: Identifiable, Codable, Equatable {
     /// description editor.
     var attachments: [Attachment] = []
 
+    /// Internal source revisions and catalog manifests keep the quick-media
+    /// workflow synchronized through ClickUp, but they are implementation
+    /// records rather than files the user should browse in Apollo's normal
+    /// attachment surfaces.
+    var visibleAttachments: [Attachment] {
+        attachments.filter { !$0.isApolloMediaTechnical }
+    }
+
     /// ClickUp checklists on the task. ClickUp returns these in
     /// the single-task GET payload as a top-level `checklists`
     /// array, each with its own `items`. Only the full task
@@ -83,6 +99,39 @@ struct CUTask: Identifiable, Codable, Equatable {
     /// popup hydrates the task. Default keeps older cached
     /// payloads decodable.
     var checklists: [Checklist] = []
+
+    /// Lists the task belongs to ("Tasks in Multiple Lists"). The
+    /// task's HOME list is `listId` / `listName`; this array carries
+    /// every additional list the task was added to via ClickUp's
+    /// `POST /list/{lid}/task/{tid}` endpoint. Populated from the
+    /// `locations` field in the API payload when present — older
+    /// cached payloads decode with an empty array, matching the
+    /// "no extra lists" case. Always sorted alphabetically by name
+    /// for predictable display.
+    var locations: [TaskLocation] = []
+
+    /// Convenience union of the home list + every entry in
+    /// `locations`, deduped by id. Drives the LISTAS chips in the
+    /// task detail view.
+    var allListMemberships: [TaskLocation] {
+        var seen: Set<String> = []
+        var out: [TaskLocation] = []
+        let home = TaskLocation(id: listId, name: listName)
+        if !home.id.isEmpty {
+            seen.insert(home.id)
+            out.append(home)
+        }
+        for loc in locations where !seen.contains(loc.id) {
+            seen.insert(loc.id)
+            out.append(loc)
+        }
+        return out
+    }
+
+    struct TaskLocation: Codable, Hashable, Identifiable {
+        let id: String
+        let name: String
+    }
 
     /// ClickUp custom fields on the task. Like checklists, only
     /// the single-task GET payload carries usable `value`s — the
@@ -238,6 +287,11 @@ struct CUTask: Identifiable, Codable, Equatable {
         /// Optional because some attachment shapes (description-
         /// derived links) don't carry an uploader.
         let uploaderId: Int?
+
+        var isApolloMediaTechnical: Bool {
+            title.hasPrefix(TaskMediaTechnicalName.sourcePrefix)
+                || title.hasPrefix(TaskMediaTechnicalName.manifestPrefix)
+        }
 
         /// SF Symbol that best represents this file type.
         var icon: String {

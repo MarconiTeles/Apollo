@@ -23,6 +23,8 @@ enum ReviewLink {
                        uploaderId: Int?,
                        actorId: Int,
                        actorName: String,
+                       reviewId: String? = nil,
+                       versionId: String? = nil,
                        commentId: String? = nil) -> OpenReviewParams {
         OpenReviewParams(
             taskId: taskId,
@@ -34,8 +36,36 @@ enum ReviewLink {
             uploaderId: uploaderId,
             actorId: actorId,
             actorName: actorName,
+            reviewId: reviewId,
+            versionId: resolvedVersionId(metadataVersionId: versionId,
+                                         mediaTitle: attachment.title),
             commentId: commentId
         )
+    }
+
+    /// Older malformed review metadata can claim `v1` while the physical file
+    /// is explicitly named `... V4.mov`. The final version marker in the media
+    /// title is the authoritative revision in that case; a valid newer server
+    /// value remains the fallback for titles without a marker.
+    static func resolvedVersionId(metadataVersionId: String?,
+                                  mediaTitle: String) -> String? {
+        let title = mediaTitle as NSString
+        let range = NSRange(location: 0, length: title.length)
+        let pattern = #"(?i)(?:^|[\s._·-])v(\d+)(?=\s*(?:[._·-]|$))"#
+        if let regex = try? NSRegularExpression(pattern: pattern),
+           let match = regex.matches(in: mediaTitle, range: range).last,
+           match.numberOfRanges > 1 {
+            let digits = title.substring(with: match.range(at: 1))
+            if let number = Int(digits), number > 0 { return "v\(number)" }
+        }
+
+        let normalized = metadataVersionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let normalized, normalized.range(of: #"^v\d+$"#,
+                                                options: .regularExpression) != nil
+        else { return nil }
+        return normalized
     }
 
     static func deepLink(attachment: CUTask.Attachment,

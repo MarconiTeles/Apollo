@@ -226,10 +226,10 @@ enum CommandPaletteEngine {
             tint: Color(statusHex: task.statusDisplayHex),
             kind: .task,
             perform: {
-                appState.detailTaskOrigin = .zero
-                withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
-                    appState.detailTask = task
-                }
+                appState.openTaskDetail(task,
+                                        origin: .zero,
+                                        navigationTasks: appState.tasks,
+                                        style: .bottomSlide)
             }
         )
     }

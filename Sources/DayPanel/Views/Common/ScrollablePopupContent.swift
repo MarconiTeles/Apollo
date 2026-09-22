@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ScrollablePopupContent<Content: View>: View {
     let maxHeight: CGFloat
+    var clipDisabled: Bool = false
     @ViewBuilder let content: () -> Content
 
     @State private var measured: CGFloat = 0
@@ -26,6 +27,7 @@ struct ScrollablePopupContent<Content: View>: View {
                 )
         }
         .frame(height: min(max(measured, 1), maxHeight))
+        .scrollClipDisabled(clipDisabled)
         // Without this the ScrollView's initial position can land
         // anywhere on macOS — the frame is recomputed after the
         // content height is measured, and SwiftUI sometimes preserves

@@ -42,10 +42,28 @@ final class SpotlightIndexer {
     /// service's lifetime.
     private var cancellables = Set<AnyCancellable>()
 
-    /// Last set of task IDs we indexed. Used to detect deletions —
-    /// the next index pass diffs against this and removes any IDs
-    /// that have disappeared from the live snapshot.
-    private var lastIndexedIDs = Set<String>()
+    /// All composition + diffing happens here, off the main
+    /// thread. Building ~900 `CSSearchableItem`s (attribute sets,
+    /// date formatting, keyword arrays) on the main queue caused
+    /// a visible hitch after every sync burst.
+    private let workQueue = DispatchQueue(label: "com.painellunar.spotlight",
+                                          qos: .utility)
+
+    /// Last indexed snapshot, keyed by task id — queue-confined.
+    /// Lets the next pass index ONLY tasks that actually changed
+    /// (typically 0-2 after a sync) instead of re-submitting the
+    /// whole set, and detect deletions by key diff.
+    private var lastIndexedTasks: [String: CUTask] = [:]
+
+    /// Shared formatter — `DateFormatter()` allocation +
+    /// configuration per task was pure churn. Read-only use,
+    /// confined to `workQueue`.
+    private static let dueFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "pt_BR")
+        fmt.dateStyle = .medium
+        return fmt
+    }()
 
     /// Wire the subscription. Call once from `AppDelegate` after
     /// AppState is alive. Idempotent — calling twice replaces the
@@ -57,7 +75,9 @@ final class SpotlightIndexer {
             // sync into a single index rebuild.
             .debounce(for: .milliseconds(600), scheduler: DispatchQueue.main)
             .sink { [weak self] dict in
-                self?.reindex(tasks: Array(dict.values))
+                guard let self else { return }
+                let snapshot = Array(dict.values)
+                self.workQueue.async { self.reindex(tasks: snapshot) }
             }
             .store(in: &cancellables)
     }
@@ -71,41 +91,47 @@ final class SpotlightIndexer {
                 NSLog("[Apollo] Spotlight clearAll failed: %@", error.localizedDescription)
             }
         }
-        lastIndexedIDs.removeAll()
+        workQueue.async { self.lastIndexedTasks.removeAll() }
     }
 
-    // MARK: - Private
+    // MARK: - Private (workQueue-confined)
 
     private func reindex(tasks: [CUTask]) {
         let active = tasks.filter { !$0.archived && !$0.isCompleted }
-        let activeIDs = Set(active.map(\.id))
+        let activeById = Dictionary(
+            active.map { ($0.id, $0) },
+            uniquingKeysWith: { _, new in new }
+        )
 
-        // Build searchable items.
-        let items: [CSSearchableItem] = active.map { task in
-            let attrs = CSSearchableItemAttributeSet(contentType: UTType.text)
-            attrs.title              = task.title
-            attrs.contentDescription = composeDescription(for: task)
-            attrs.keywords           = composeKeywords(for: task)
-            // Friendly subtitle visible in Spotlight's preview pane —
-            // the status + due date is the most actionable info.
-            attrs.displayName        = task.title
-            return CSSearchableItem(
-                uniqueIdentifier: task.id,
-                domainIdentifier: domainIdentifier,
-                attributeSet:     attrs
-            )
-        }
-
-        index.indexSearchableItems(items) { error in
-            if let error {
-                NSLog("[Apollo] Spotlight indexSearchableItems failed: %@",
-                      error.localizedDescription)
+        // Incremental: only submit tasks that are new or whose
+        // content actually changed since the last pass.
+        let changed = active.filter { lastIndexedTasks[$0.id] != $0 }
+        if !changed.isEmpty {
+            let items: [CSSearchableItem] = changed.map { task in
+                let attrs = CSSearchableItemAttributeSet(contentType: UTType.text)
+                attrs.title              = task.title
+                attrs.contentDescription = composeDescription(for: task)
+                attrs.keywords           = composeKeywords(for: task)
+                // Friendly subtitle visible in Spotlight's preview pane —
+                // the status + due date is the most actionable info.
+                attrs.displayName        = task.title
+                return CSSearchableItem(
+                    uniqueIdentifier: task.id,
+                    domainIdentifier: domainIdentifier,
+                    attributeSet:     attrs
+                )
+            }
+            index.indexSearchableItems(items) { error in
+                if let error {
+                    NSLog("[Apollo] Spotlight indexSearchableItems failed: %@",
+                          error.localizedDescription)
+                }
             }
         }
 
         // Detect deletions: anything previously indexed that is no
         // longer in the active snapshot.
-        let toDelete = lastIndexedIDs.subtracting(activeIDs)
+        let toDelete = Set(lastIndexedTasks.keys).subtracting(activeById.keys)
         if !toDelete.isEmpty {
             index.deleteSearchableItems(withIdentifiers: Array(toDelete)) { error in
                 if let error {
@@ -115,7 +141,7 @@ final class SpotlightIndexer {
             }
         }
 
-        lastIndexedIDs = activeIDs
+        lastIndexedTasks = activeById
     }
 
     private func composeDescription(for task: CUTask) -> String {
@@ -124,10 +150,7 @@ final class SpotlightIndexer {
             pieces.append("Status: \(task.status.uppercased())")
         }
         if let due = task.dueDate {
-            let fmt = DateFormatter()
-            fmt.locale = Locale(identifier: "pt_BR")
-            fmt.dateStyle = .medium
-            pieces.append("Vence: \(fmt.string(from: due))")
+            pieces.append("Vence: \(Self.dueFormatter.string(from: due))")
         }
         if let desc = task.description, !desc.isEmpty {
             // Trim very long descriptions — Spotlight gives more

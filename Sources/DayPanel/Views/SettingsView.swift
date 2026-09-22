@@ -19,7 +19,8 @@ struct SettingsView: View {
     @State private var section: SettingsSection = .integracoes
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        // Mesmo arredondamento da janela de Anexar (TaskMediaFlowSheet).
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(9), style: .continuous)
     }
 
     /// Full-bleed: fills the window minus the prototype's
@@ -39,11 +40,17 @@ struct SettingsView: View {
             content
         }
         .frame(width: popupSize.width, height: popupSize.height)
-        .background(Editorial.popup, in: shape)
+        // Do not place an opaque sheet behind both panes: it made the left
+        // Liquid Glass sample a white backstop and therefore look solid. The
+        // working pane paints its own Editorial.page background; the sidebar
+        // is intentionally left to refract the live app canvas behind it.
         .clipShape(shape)
-        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .overlay {
+            shape.strokeBorder(Editorial.rule, lineWidth: 0.7)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.20), radius: 36, y: 18)
+        .shadow(color: .black.opacity(0.07), radius: 12, y: 4)
         .sheet(isPresented: $showListPicker) {
             CUListPickerSheet().environmentObject(appState)
         }
@@ -95,7 +102,17 @@ struct SettingsView: View {
             .padding(.horizontal, 16).padding(.vertical, 12)
         }
         .frame(width: 260)
-        .background(Editorial.card)
+        // Material OFICIAL do header (mesma receita de Tarefas).
+        .officialHeaderMaterial(in: Rectangle())
+        .apolloStudioNode("settings.sidebar",
+                          title: "Navegação de configurações",
+                          kind: .sidebar,
+                          parent: "settings.panel",
+                          properties: [
+                            .init(kind: .width, title: "Largura", value: 260),
+                            .init(kind: .material,
+                                  title: "Material", token: "OfficialHeaderMaterial"),
+                          ])
     }
 
     // MARK: Content
@@ -145,9 +162,14 @@ struct SettingsView: View {
                 .padding(.horizontal, 40)
                 .padding(.top, 32).padding(.bottom, 40)
             }
-            .background(Editorial.popup)
+            .background(Color.clear)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Editorial.page)
+        .apolloStudioNode("settings.content",
+                          title: "Conteúdo de configurações",
+                          kind: .section,
+                          parent: "settings.panel")
     }
 
     // MARK: Account identity (real)
@@ -414,7 +436,7 @@ struct SettingsView: View {
                     .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .strokeBorder(Editorial.rule, lineWidth: 1))
                 Text("a")
-                    .font(.system(size: 64, weight: .regular, design: .serif))
+                    .font(.system(size: 64, weight: .regular))
                     .italic()
                     .foregroundStyle(Editorial.accent)
             }
@@ -560,8 +582,20 @@ private struct SetNavItem: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .onHover { hover = $0 }
+        .scrollAwareOnHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: hover)
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "settings.nav.\(item.rawValue)"),
+            title: item.label,
+            kind: .button,
+            parent: "settings.sidebar",
+            properties: [
+                .init(kind: .verticalPadding,
+                      title: "Padding vertical", value: 10),
+                .init(kind: .animationDuration,
+                      title: "Hover", value: 0.12),
+            ]
+        )
     }
 }
 
@@ -585,6 +619,16 @@ private struct SetSection<Content: View>: View {
                 .padding(.top, 4)
         }
         .padding(.bottom, 36)
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "settings.section.\(title.lowercased())"),
+            title: title,
+            kind: .section,
+            parent: "settings.content",
+            properties: [
+                .init(kind: .verticalPadding,
+                      title: "Distância entre seções", value: 36),
+            ]
+        )
     }
 }
 
@@ -622,6 +666,17 @@ private struct SetRow<Control: View>: View {
                 Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
             }
         }
+        .apolloStudioNode(
+            StudioNodeID(rawValue: "settings.row.\(label.lowercased())"),
+            title: label,
+            kind: .row,
+            parent: "settings.content",
+            properties: [
+                .init(kind: .verticalPadding,
+                      title: "Padding vertical", value: 16),
+                .init(kind: .spacing, title: "Espaçamento", value: 24),
+            ]
+        )
     }
 }
 
@@ -1849,20 +1904,14 @@ struct CUListPickerSheet: View {
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+        RoundedRectangle(cornerRadius: Editorial.popupRadius(4.5), style: .continuous)
     }
 
     var body: some View {
         Group {
             if compact { compactBody } else { wideBody }
         }
-        // Editorial card chrome — near-neutral popup surface,
-        // hairline border, one soft ambient shadow.
-        .background(Editorial.popup, in: shape)
-        .clipShape(shape)
-        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .popupGlass(in: shape)
         .task { await loadWorkspaces() }
     }
 
@@ -2072,8 +2121,9 @@ struct CUListPickerSheet: View {
                     .font(Editorial.sans(12.5, .medium))
                     .foregroundStyle(Editorial.ink)
                     .padding(.horizontal, 14).padding(.vertical, 7)
-                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(Editorial.page))
+                    .liquidGlass(in: RoundedRectangle(cornerRadius: 4,
+                                                      style: .continuous),
+                                 tint: Editorial.page, tintOpacity: 0.6)
                     .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .strokeBorder(Editorial.rule, lineWidth: 1))
             }
@@ -2294,13 +2344,7 @@ struct CUListPickerSheet: View {
     /// cached id+name, not a full CUList / its parent space).
     private func pickById(id: String, name: String) {
         selectedListId = id
-        KeychainHelper.save(id,   for: KeychainHelper.Keys.clickupListId)
-        KeychainHelper.save(name, for: KeychainHelper.Keys.clickupListName)
-        // Flipping to a specific list implies leaving the
-        // cross-list "Meu trabalho" mode — otherwise picking a
-        // list would appear to do nothing.
-        appState.taskViewMode = .activeList
-        Task { await appState.sync() }
+        appState.activateList(id: id, name: name)
         close()
     }
 
@@ -2338,11 +2382,11 @@ struct CUListPickerSheet: View {
                                 .foregroundStyle(sel ? Editorial.accent : Editorial.ink)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 5)
-                                .background(
-                                    Capsule().fill(sel
-                                        ? Editorial.accent.opacity(0.10)
-                                        : Editorial.page)
-                                )
+                                // Liquid Glass pill — accent-tinted when
+                                // selected, neutral page glass at rest.
+                                .liquidGlassCapsule(
+                                    tint: sel ? Editorial.accent : Editorial.page,
+                                    tintOpacity: sel ? 0.16 : 0.55)
                                 .overlay(
                                     Capsule().strokeBorder(
                                         sel ? Editorial.accent : Editorial.rule,
@@ -2352,6 +2396,7 @@ struct CUListPickerSheet: View {
                             }
                             .buttonStyle(.plain)
                             .focusEffectDisabled()
+                            .glassHover()
                         }
                     }
                     .padding(.horizontal, 20)
@@ -2531,7 +2576,7 @@ private struct ListPickerRow: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
         }
-        .onHover { hover = $0 }
+        .scrollAwareOnHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: hover)
     }
 }

@@ -1,6 +1,12 @@
 import ReviewKit
 import SwiftUI
 
+private struct ConfirmedReviewCompletion {
+    let acknowledgement: ReviewCompletionAcknowledgement
+    let activeAtt: String
+    let meta: ReviewBackend.Meta
+}
+
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var updateService: UpdateService
@@ -13,6 +19,12 @@ struct ContentView: View {
     @State private var showNotifs      = false
     @State private var showFilters     = false
     @State private var showAIChat      = false
+    /// Set only by ReviewKit's explicit completion-confirmation close. The
+    /// task row acknowledgement starts from the sheet's `onDismiss`, so its
+    /// two-second success animation is fully visible instead of running behind
+    /// the sheet-removal animation.
+    @State private var confirmedReviewCompletion: ConfirmedReviewCompletion?
+    @State private var completionCloseRequested = false
     /// True when the in-toolbar ClickUp list picker is open. Same
     /// `CUListPickerSheet` reused from Settings/Onboarding so the
     /// user has one canonical picker across the app.
@@ -34,10 +46,17 @@ struct ContentView: View {
     /// notification arrives. Auto-collapses after a few seconds.
     @State private var bellPillNotif:  AppNotification?
     @State private var bellPillTask:   Task<Void, Never>?
+    /// Upload pills can be dismissed independently without cancelling the
+    /// transfer. The id only lives for this ContentView session.
+    @State private var dismissedUploadPillIDs: Set<UUID> = []
     /// Once the user closes the onboarding manually we don't reopen it
     /// during the same session — but a fresh launch re-evaluates the
     /// connections from scratch.
     @State private var onboardingDismissedThisSession = false
+
+    // ── Editorial+ sidebar (Stage 1, isolated to the left)
+    @State private var sidebarRoute:   SidebarRoute = .launchDefault
+    @State private var sidebarListFilter: String? = nil
 
     /// Welcome splash. Plays the full cinematic sequence on
     /// EVERY app open — the splash is a deliberate part of the
@@ -71,6 +90,24 @@ struct ContentView: View {
     /// if zero (first paint, programmatic toggle).
     @State private var aiChatOpenPoint: CGPoint = .zero
 
+    /// Xcode Canvas uses the production view hierarchy but must never enter
+    /// launch-only flows such as the welcome animation or account onboarding.
+    /// The release app still reaches this view exclusively through `init()`.
+    private let previewMode: Bool
+
+    init() {
+        previewMode = false
+    }
+
+#if DEBUG
+    init(previewRoute: SidebarRoute) {
+        previewMode = true
+        _sidebarRoute = State(initialValue: previewRoute)
+        _showWelcome = State(initialValue: false)
+        _isFirstWelcome = State(initialValue: false)
+    }
+#endif
+
     private var isToday: Bool {
         Calendar.current.isDateInToday(appState.selectedDate)
     }
@@ -84,21 +121,63 @@ struct ContentView: View {
         appState.detailTask != nil
             || appState.detailEvent != nil
             || !appState.detailSubtaskStack.isEmpty
+            || appState.commandPaletteOpen
             || showNewEvent
             || showNewTask
             || showSettings
             || showListPicker
             || showOnboarding
             || showWelcome
+            || showNotifs
+            || showFilters
+            || showAIChat
+            || reviewPresenter.request != nil
     }
 
     var body: some View {
         GeometryReader { windowGeo in
             ZStack(alignment: .topTrailing) {
-                // Editorial canvas — warm cream paper behind
-                // everything, replacing the system window
-                // background. The whole redesign sits on this.
-                Editorial.paper.ignoresSafeArea()
+                // Editorial canvas was painted full-window here
+                // before — with the Editorial+ sidebar's Liquid
+                // Glass pane we want the window genuinely
+                // translucent under the sidebar column, so the
+                // paper fill is moved down into the chrome side
+                // (see the ZStack wrapping `Group` below) and
+                // the sidebar gets `Color.clear` as its surface.
+                Color.clear.ignoresSafeArea()
+
+                // ── Paper backstop ──────────────────────────────
+                // OUTERMOST paper layer, painted full-window edge-
+                // to-edge (right of the 220pt sidebar column) so
+                // it covers the macOS title-bar zone too. Lives
+                // here — NOT nested inside the chrome ZStack —
+                // because nested `.ignoresSafeArea` doesn't always
+                // overflow when the parent ZStack's bounds are
+                // already pinned by its own siblings. As a direct
+                // child of the outermost ZStack with its own
+                // `.ignoresSafeArea()`, the rectangle paints from
+                // window y=0 down (covering the transparent title
+                // bar) and prevents the desktop wallpaper from
+                // bleeding through as a coloured aurora.
+                // Keep the app canvas behind the sidebar. Native Liquid Glass
+                // must refract Apollo's own content, not the desktop wallpaper:
+                // exposing the window here pulled cyan/yellow scenery into the
+                // pane and destroyed the neutral 1:1 sidebar design.
+                Rectangle()
+                    .fill(Editorial.paper)
+                    .ignoresSafeArea()
+
+                // Editorial+ redesign: the sidebar floats on TOP of
+                // the chrome (ZStack overlay) instead of sharing an
+                // HStack column with it. This lets the dashboard /
+                // board content extend EDGE-TO-EDGE and pass behind
+                // the Liquid Glass pane — through the translucent
+                // material the user sees the page's actual content
+                // (cards, paper, toolbar) instead of just the
+                // desktop. The toolbar's pill cluster carries a
+                // leading inset equal to the sidebar's column width
+                // so the trailing buttons aren't hidden under it.
+                ZStack(alignment: .topLeading) {
 
                 // Layers 1–4 below are the "dashboard" — everything
                 // sitting under the popup z-stack. We wrap them in
@@ -111,6 +190,12 @@ struct ContentView: View {
                 // this gate, scrolling/hovering rows behind an open
                 // popup re-fires every row's hover halo and shadow
                 // boost — visible noise + wasted GPU.
+                ZStack(alignment: .top) {
+                    // (Paper canvas now lives as a sibling of the
+                    //  outer `Color.clear.ignoresSafeArea()` so it
+                    //  covers the title-bar zone — see "Paper
+                    //  backstop" comment above. Nothing painted
+                    //  here on purpose.)
                 Group {
                     // 1. Main content — extends to TRUE top of
                     // window (y=0). The previous `safeAreaInset`
@@ -134,44 +219,64 @@ struct ContentView: View {
                     //    toolbar pills. Provides the soft
                     //    blur over the dashboard scrolling
                     //    behind, while the pills stay sharp
-                    //    on top.
-                    // Top fade over the events list halved
-                    // (120 → 60) per request — the soft shadow
-                    // reaches half as far down the timeline.
-                    FrostedStrip(barHeight: 52, fadeExtent: 60)
+                    //    on top. Hidden on .board AND .tasks
+                    //    (those surfaces carry their own
+                    //    headers and don't want a blur band
+                    //    cutting across their top).
+                    if sidebarRoute != .board && sidebarRoute != .tasks
+                        && sidebarRoute != .today && sidebarRoute != .assignedComments {
+                        FrostedStrip(barHeight: 52, fadeExtent: 60)
+                            .padding(.leading, 220)
+                    }
 
                     // 3. Task filter bar — above the strip so
                     //    the filter pills don't get blurred.
                     //    Anchored to the SAME split `mainContent`
                     //    uses so the category bar is confined to
                     //    the task column and never bleeds over
-                    //    the timeline.
-                    GeometryReader { geo in
-                        let total     = max(1, geo.size.width)
-                        let timelineW = (total - 1) * (1.0 / 2.05)
-                        // `.top` alignment is critical: the
-                        // flexible Color.clear spacer makes the
-                        // HStack full-height, so without it the
-                        // bar would be vertically centred (mid-
-                        // list) instead of pinned under the
-                        // toolbar at the top of the task column.
-                        HStack(alignment: .top, spacing: 0) {
-                            // Spacer over the timeline column + the
-                            // 1pt centre rule — keeps the filter
-                            // bar off the events side.
-                            Color.clear
-                                .frame(width: timelineW + 1)
-                                .allowsHitTesting(false)
-                            VStack(spacing: 0) {
+                    //    the timeline. Suppressed on:
+                    //      .board → the board has its own column
+                    //               headers (clash with legacy
+                    //               status pills)
+                    //      .tasks → MyTasksView groups by status
+                    //               itself + carries its own
+                    //               crumb header
+                    if sidebarRoute != .board && sidebarRoute != .tasks
+                        && sidebarRoute != .today && sidebarRoute != .assignedComments {
+                        GeometryReader { geo in
+                            let total     = max(1, geo.size.width)
+                            let timelineW = (total - 1) * (1.0 / 2.05)
+                            // `.top` alignment is critical: the
+                            // flexible Color.clear spacer makes the
+                            // HStack full-height, so without it the
+                            // bar would be vertically centred (mid-
+                            // list) instead of pinned under the
+                            // toolbar at the top of the task column.
+                            HStack(alignment: .top, spacing: 0) {
+                                // Spacer over the timeline column + the
+                                // 1pt centre rule — keeps the filter
+                                // bar off the events side.
                                 Color.clear
-                                    .frame(height: 52)
+                                    .frame(width: timelineW + 1)
                                     .allowsHitTesting(false)
-                                TaskFilterBar()
-                                Spacer(minLength: 0)
+                                VStack(spacing: 0) {
+                                    Color.clear
+                                        .frame(height: 52)
+                                        .allowsHitTesting(false)
+                                    TaskFilterBar()
+                                    Spacer(minLength: 0)
+                                }
+                                .frame(maxWidth: .infinity)
                             }
-                            .frame(maxWidth: .infinity)
+                            .frame(maxHeight: .infinity, alignment: .top)
                         }
-                        .frame(maxHeight: .infinity, alignment: .top)
+                        // Match `dashboardSplit`'s 220pt leading
+                        // inset so the GeometryReader sees the same
+                        // rect the timeline+task split occupies —
+                        // otherwise the filter bar's timelineW math
+                        // (based on the full window) drifts and the
+                        // pills land over the timeline column.
+                        .padding(.leading, 220)
                     }
 
                     // 4. Toolbar — TOPMOST layer; pills stay
@@ -183,6 +288,16 @@ struct ContentView: View {
                     //    centres the traffic-light buttons
                     //    on the same Y as our pills.
                     toolbar
+                        // Inset the toolbar's pill cluster by the
+                        // sidebar's column width so "+ Evento" /
+                        // "Hoje" / list picker etc. aren't hidden
+                        // under the floating Liquid Glass pane.
+                        // The WindowDragArea below spans the FULL
+                        // toolbar width so the title-bar region
+                        // over the sidebar still drags the window
+                        // (and the macOS traffic lights stay
+                        // clickable via the sidebar's 44pt inset).
+                        .padding(.leading, 220)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .frame(height: 52, alignment: .center)
                         // Make the toolbar band drag the window.
@@ -203,6 +318,42 @@ struct ContentView: View {
                         .background(WindowDragArea())
                 }
                 .allowsHitTesting(!anyPopupOpen)
+
+                    // 5. Global sync indicator — a 2pt accent
+                    //    stripe at the very top edge that lights
+                    //    up whenever ANY async sync is in flight
+                    //    (driven by `appState.activeSyncCount`).
+                    //    Universal: any call wrapped in
+                    //    `appState.tracked { … }` or that bumps
+                    //    the counter directly surfaces here for
+                    //    free. Sits ABOVE everything else, so
+                    //    it's visible even over the toolbar.
+                    VStack(spacing: 0) {
+                        EditorialSyncBar()
+                            .environmentObject(appState)
+                        Spacer(minLength: 0)
+                    }
+                    .allowsHitTesting(false)
+                }  // close inner ZStack(alignment: .top) — chrome
+
+                    // Sidebar overlay — fixed 220pt column at the
+                    // leading edge of the ZStack. Underneath the
+                    // Liquid Glass material it pulls vibrancy from
+                    // whatever paints behind in the chrome ZStack
+                    // (Editorial.paper + toolbar + the active main
+                    // view), so content visibly flows under it.
+                    EditorialSidebar(
+                        active: $sidebarRoute,
+                        listFilter: $sidebarListFilter,
+                        onOpenPalette: {
+                            NSApp.sendAction(Selector(("toggleCommandPalette:")),
+                                             to: nil, from: nil)
+                        },
+                        onOpenSettings: { showSettings = true }
+                    )
+                    .environmentObject(appState)
+                    .allowsHitTesting(!anyPopupOpen)
+                }  // close outer ZStack — chrome | sidebar overlay
 
                 // 5. Event detail overlay — scales up from the tapped pill
                 //    with a spring-bounce. Explicit `.zIndex(1000)` so
@@ -260,6 +411,25 @@ struct ContentView: View {
                     SettingsView(onClose: { showSettings = false })
                         .environmentObject(appState)
                 }
+                // List picker — full modal (same chrome as
+                // Settings/Onboarding). Replaces the compact
+                // anchored dropdown that lived under the
+                // "Listas / Video ⌄" pill. `listPickerToken`
+                // bumps when the sheet flips closed so the
+                // toolbar pill re-reads the new list name from
+                // Keychain (not observable on its own).
+                FloatingModal(
+                    isPresented: $showListPicker,
+                    origin:      listPickerOrigin,
+                    windowSize:  windowGeo.size,
+                    fromBottom:  true
+                ) {
+                    CUListPickerSheet(onClose: {
+                        listPickerToken &+= 1
+                        showListPicker = false
+                    })
+                        .environmentObject(appState)
+                }
                 // Global "transform event into task" overlay. Driven
                 // by `appState.pendingConversion` so any surface
                 // (event detail header, timeline right-click) can
@@ -288,22 +458,17 @@ struct ContentView: View {
                 // Sits ABOVE the EventDetail (which uses zIndex 1000)
                 // so the convert sheet always wins focus.
                 .zIndex(2000)
-                // ClickUp list picker — same sheet Settings/Onboarding
-                // use, surfaced from the toolbar pill so the user
-                // can switch lists in one click without opening
-                // Settings. The wrapper binding bumps
-                // `listPickerToken` whenever the sheet flips
-                // closed, forcing the toolbar pill to re-read the
-                // new list name from Keychain (which isn't
-                // observable on its own).
-                // List picker — anchored DROPDOWN under the
-                // "Listas" toolbar pill (was a centered modal).
-                Group {
-                    if showListPicker {
-                        listAnchoredOverlay(windowSize: windowGeo.size)
-                    }
-                }
-                .zIndex(1100)
+                // ClickUp list picker — restored to the FULL modal
+                // sheet the Settings/Onboarding flows use (was an
+                // anchored dropdown). Per user request: clicking
+                // the toolbar's "Listas / Video ⌄" should bring
+                // back the legacy selector, not a compact pop.
+                // The wrapper bumps `listPickerToken` when the
+                // sheet flips closed so the toolbar pill re-reads
+                // the new list name from Keychain (not observable
+                // on its own).
+                EmptyView()
+                    .zIndex(1100)
                 FloatingModal(
                     isPresented: $showOnboarding,
                     windowSize:  windowGeo.size,
@@ -328,56 +493,12 @@ struct ContentView: View {
                 // the detail above the AI chat overlay so opening a
                 // task from inside the chat doesn't tuck the popup
                 // out of sight.
-                FloatingModal(
-                    isPresented: Binding(
-                        get: { appState.detailTask != nil },
-                        set: { if !$0 { appState.detailTask = nil } }
-                    ),
-                    origin:      appState.detailTaskOrigin,
-                    windowSize:  windowGeo.size
-                ) {
-                    if let t = appState.detailTask {
-                        // Read the live snapshot here — ContentView
-                        // still observes AppState via @EnvironmentObject,
-                        // so it re-evaluates whenever tasksById mutates.
-                        // The popup itself holds `let appState` (no
-                        // subscription) and reacts to edits via this
-                        // `task` prop change instead of an implicit
-                        // observer cascade.
-                        let live = appState.tasksById[t.id] ?? t
-                        TaskDetailSheet(task: live,
-                                        appState: appState,
-                                        visibleSubtasks: appState.subtasks(of: live.id),
-                                        onClose: { appState.detailTask = nil })
-                            .equatable()
-                            // CRITICAL: keying the sheet on the task
-                            // id forces SwiftUI to discard and rebuild
-                            // the view tree (and every nested @State,
-                            // @FocusState, NSViewRepresentable cache,
-                            // RichTextEditor NSTextView etc.) when
-                            // the user navigates parent → subtask.
-                            //
-                            // Without this, opening a subtask from
-                            // inside an already-open parent popup
-                            // reuses the same TaskDetailSheet
-                            // instance: the parent's stored
-                            // `lockedSize`, description draft, focus
-                            // state, and the RichTextEditor's
-                            // NSTextView (still sized for the parent's
-                            // description content) all bleed into the
-                            // subtask render, producing the visible
-                            // layout breakage where the description
-                            // text was clipped both vertically and
-                            // horizontally. Opening a subtask from an
-                            // expanded inline row didn't have the bug
-                            // because no popup was on screen yet —
-                            // SwiftUI would create a fresh
-                            // TaskDetailSheet anyway. The `.id()`
-                            // makes both flows behave identically.
-                            .id(t.id)
-                    }
-                }
+                // Same concrete presentation path as EventDetailOverlay:
+                // observer-backed conditional, identical full-window travel,
+                // opening spring and explicit ease-in removal.
+                TaskDetailOverlay(windowSize: windowGeo.size)
                 .zIndex(1000)
+
                 // Subtask overlay popup — mounts ON TOP of the
                 // parent task popup when the user drills into a
                 // subtask from inside the parent. The parent
@@ -398,7 +519,8 @@ struct ContentView: View {
                     ),
                     origin:      .zero,
                     windowSize:  windowGeo.size,
-                    backdrop:    .none
+                    backdrop:    .none,
+                    fromBottom:  true
                 ) {
                     // Render the topmost subtask in the stack —
                     // i.e. whichever depth the user has drilled
@@ -469,11 +591,50 @@ struct ContentView: View {
                     // the rest of the Liquid Glass language.
                     Color.black.opacity(0.10)
                         .ignoresSafeArea()
+                        // Backdrop fades — sliding the dim
+                        // with the chat made the layer drag
+                        // visibly during dismiss; a clean
+                        // fade-to-clear reads much better.
                         .transition(.opacity)
-                        .allowsHitTesting(false)
+                        // This is a real modal shield, not decoration. It must
+                        // own the background hit region so the dashboard cannot
+                        // receive clicks, scroll or hover while Apollo IA is up.
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.easeIn(duration: 0.30)) {
+                                showAIChat = false
+                            }
+                        }
+                        .onHover { _ in }
                         .zIndex(800)
 
+                    // Transition attached HERE (not on a child
+                    // inside aiChatCenteredOverlay) because the
+                    // `if showAIChat` branch is what SwiftUI
+                    // adds/removes — placing it on AIAgentChatView
+                    // never fired since the chat view itself
+                    // wasn't conditionally toggled inside its
+                    // parent ZStack, and SwiftUI fell back to
+                    // its default `.opacity` for the whole
+                    // overlay.
+                    //
+                    // Explicit Y-offset (not `.move(edge:)`)
+                    // because `.move` translates by the view's
+                    // own height — for a window-tall chat
+                    // column that left the top edge still on
+                    // screen mid-spring. Window-height travel
+                    // guarantees a clean slide-off.
                     aiChatCenteredOverlay(windowSize: windowGeo.size)
+                        .transition(.asymmetric(
+                            insertion: .modifier(
+                                active:   OffsetYModifier(y: max(windowGeo.size.height, 900)),
+                                identity: OffsetYModifier(y: 0)
+                            ),
+                            removal: .modifier(
+                                active:   OffsetYModifier(y: max(windowGeo.size.height, 900)),
+                                identity: OffsetYModifier(y: 0)
+                            )
+                        ))
                         .zIndex(900)
                 }
 
@@ -497,7 +658,12 @@ struct ContentView: View {
                 // fires through "Verificar Atualizações…"; this is a
                 // persistent passive announcement that survives a
                 // "Remind Me Later" click.
-                if !showWelcome && !showOnboarding {
+                // Do not mount an empty, full-window aligned banner. Even
+                // with no visible child, that wrapper kept a bottom band in
+                // the hit-test tree and made the last rows of long task lists
+                // impossible to click.
+                if !showWelcome && !showOnboarding
+                    && updateService.hasVisibleUpdateStatus {
                     UpdateAvailableBanner(updateService: updateService)
                         .padding(.trailing, 18)
                         .padding(.bottom, 18)
@@ -506,7 +672,6 @@ struct ContentView: View {
                             maxHeight: .infinity,
                             alignment: .bottomTrailing
                         )
-                        .allowsHitTesting(updateService.availableUpdate != nil)
                         .zIndex(1200)
                 }
 
@@ -514,7 +679,25 @@ struct ContentView: View {
                 // top-right, as its own surface (no longer painted
                 // over the bell). Suppressed during welcome /
                 // onboarding so the intro stays clean.
-                if !showWelcome && !showOnboarding, let pill = bellPillNotif {
+                if !showWelcome && !showOnboarding,
+                   let upload = appState.uploadActivities.first(where: {
+                       $0.state == .uploading && !dismissedUploadPillIDs.contains($0.id)
+                   }) {
+                    BellUploadPill(upload: upload,
+                                   onTap: { showNotifs = true },
+                                   onDismiss: {
+                                       withAnimation(.spring(duration: 0.34, bounce: 0.14)) {
+                                           _ = dismissedUploadPillIDs.insert(upload.id)
+                                       }
+                                   })
+                        .padding(.top, 52 + 12)
+                        .padding(.trailing, 18)
+                        .transition(.asymmetric(
+                            insertion: .offset(y: -8).combined(with: .opacity),
+                            removal: .opacity
+                        ))
+                        .zIndex(1251)
+                } else if !showWelcome && !showOnboarding, let pill = bellPillNotif {
                     BellPill(notification: pill,
                              onTap: {
                                  collapseBellPill()
@@ -523,11 +706,9 @@ struct ContentView: View {
                              onDismiss: { collapseBellPill() })
                         .padding(.top, 52 + 12)
                         .padding(.trailing, 18)
-                        .frame(
-                            maxWidth: .infinity,
-                            maxHeight: .infinity,
-                            alignment: .topTrailing
-                        )
+                        // The outer ZStack is already top-trailing. Do not
+                        // inflate this toast to a full-window hit-test layer.
+                        // Only the visible capsule is interactive.
                         .transition(.asymmetric(
                             insertion: .offset(y: -8).combined(with: .opacity),
                             removal:   .opacity
@@ -543,6 +724,22 @@ struct ContentView: View {
             }
             .coordinateSpace(name: "appWindow")
             .environment(\.windowSize, windowGeo.size)
+            // When the popup closes, defer-reset the openStyle
+            // back to default so the next surface that opens a
+            // task without setting its own style gets the
+            // settings-style bottom slide. Deferred so a dismiss
+            // animation in flight doesn't mid-frame swap to a
+            // different transition.
+            .onChange(of: appState.detailTask) { _, newValue in
+                if newValue == nil {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.40) {
+                        if appState.detailTask == nil {
+                            appState.detailTaskOpenStyle = .bottomSlide
+                            appState.detailTaskOrigin    = .zero
+                        }
+                    }
+                }
+            }
             // Cmd+Z handler — pops the most recent reversible
             // action off `AppState.undoStack` and runs its undo
             // closure. The button is invisible (zero frame +
@@ -591,29 +788,22 @@ struct ContentView: View {
         // helps the design — without paying the system-wide tax
         // of a window-wide blur.
         .background(
-            // The Editorial canvas. `Editorial.paper` is a dynamic
-            // token (cream in light, warm-black in dark) that
-            // resolves off the app's pinned appearance — NOT the
-            // raw system `.windowBackgroundColor`, so the backdrop
-            // always matches the chosen Editorial theme rather than
-            // jumping to the system grey/black behind the timeline
-            // fade.
-            Editorial.paper
+            // Editorial.paper used to paint the whole window here
+            // — but the Editorial+ sidebar wants its column truly
+            // transparent so the floating Liquid Glass pane can
+            // pull from the desktop. The chrome side now owns its
+            // own paper fill (ContentView body, inside the HStack);
+            // this root background is just Color.clear so the
+            // sidebar column stays see-through.
+            Color.clear
                 .ignoresSafeArea()
         )
         // Push the toolbar up into the macOS title bar (alongside traffic lights)
         .ignoresSafeArea(.container, edges: .top)
-        // Specular highlight: subtle white sheen at top (light hitting glass edge)
-        .overlay(alignment: .top) {
-            LinearGradient(
-                colors: [.white.opacity(0.12), .clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 80)
-            .allowsHitTesting(false)
-            .ignoresSafeArea()
-        }
+        // (Specular branco no topo REMOVIDO — era resquício do
+        // Liquid Glass antigo e lia como uma "sombra branca" sobre
+        // o canvas escuro do Studio Glass. Profundidade agora vem
+        // de material e sombra, não de sheen pintado.)
         // Onboarding: every time the app is opened (launch or window
         // reopen), check if any required connection is missing. If yes,
         // surface the wizard. The check also reruns whenever a connection
@@ -665,33 +855,114 @@ struct ContentView: View {
         }
         // Embedded review workflow: REVIEW on an attachment opens the shared
         // ReviewKit engine in-app; on submit Apollo posts the summary to ClickUp.
-        .sheet(item: $reviewPresenter.request) { req in
-            ReviewView(
-                params: req.params,
-                savedJSON: req.savedJSON,
-                // "Ver review" (saved JSON) opens view-only — the
-                // review was already submitted from this or another
-                // device; this is just for re-reading the markup.
-                readOnly: req.savedJSON != nil,
-                onClose: { reviewPresenter.request = nil },
-                onSubmit: { result in
-                    if let tid = result.taskId {
-                        let mentions = [result.uploaderId].compactMap { $0 }
-                        Task {
-                            await appState.postReviewComment(
-                                taskId: tid,
-                                commentId: result.commentId,
-                                attachmentId: result.attachmentId,
-                                text: result.summaryText,
-                                mentionMemberIds: mentions,
-                                reviewJSON: result.json)
-                        }
-                    }
-                    reviewPresenter.request = nil
-                }
-            )
-            .frame(minWidth: 1040, minHeight: 660)
+        // Extracted to a method so its closures don't bloat the `body`
+        // type-checker (keeps SwiftUI's inference within budget).
+        .sheet(item: $reviewPresenter.request,
+               onDismiss: reviewSheetDidDismiss) { req in
+            reviewSheet(req)
         }
+    }
+
+    /// The embedded review sheet content. A fresh native review (opened from the
+    /// REVIEW button → params) reads & writes the SAME Cloudflare KV blob as the
+    /// web (the single live `?att=` link): `liveLoad` pulls existing comments on
+    /// open; `liveSave` autosaves on change; `onSubmit` does a final flush and
+    /// posts the ClickUp comment.
+    private func reviewSheet(_ req: ReviewRequest) -> some View {
+        // Identidade FIXADA por apresentação: o contexto nasce no
+        // ReviewPresenter.present() e vive no ReviewRequest. Ele NUNCA pode
+        // ser criado aqui — este builder re-executa em qualquer mudança de
+        // estado (um toast basta) e um contexto novo perde o `activeAtt`
+        // entre o load e o Concluir, empurrando a conclusão para uma chave
+        // órfã derivada do payload e reprovando a confirmação.
+        let ctx: ReviewSessionContext? = req.sessionContext
+        let liveLoad: (() async -> Data?)? = ctx.map { c in { await c.load() } }
+        let liveSave: ((Data) async -> Bool)? = ctx.map { c in
+            { data in await c.save(payloadData: data) }
+        }
+        let liveSubmit: ((Data) async -> Bool)? = ctx.map { c in
+            { data in
+                // Do not let ReviewKit display its completion state merely
+                // because the POST returned 2xx. The same selected version must
+                // be read back with the submitted status and `concludedAt`.
+                guard let meta = await c.concludeAndConfirm(payloadData: data)
+                else { return false }
+                if let acknowledgement = req.completionAcknowledgement,
+                   let activeAtt = c.activeAtt,
+                   meta.isApprovedAndConcluded {
+                    await MainActor.run {
+                        confirmedReviewCompletion = ConfirmedReviewCompletion(
+                            acknowledgement: acknowledgement,
+                            activeAtt: activeAtt,
+                            meta: meta
+                        )
+                    }
+                }
+                return true
+            }
+        }
+        let onSubmit: (ReviewResult) -> Void = { result in
+            if let tid = result.taskId {
+                let mentions = [result.uploaderId].compactMap { $0 }
+                Task {
+                    await appState.postReviewComment(
+                        taskId: tid,
+                        commentId: result.commentId,
+                        attachmentId: result.attachmentId,
+                        text: result.summaryText,
+                        mentionMemberIds: mentions,
+                        reviewJSON: result.json)
+                }
+            }
+        }
+        return ReviewView(
+            params: req.params,
+            savedJSON: req.savedJSON,
+            // "Ver review" (saved JSON) opens view-only — the review was
+            // already submitted; this is just for re-reading the markup.
+            readOnly: req.savedJSON != nil,
+            liveLoad: liveLoad,
+            liveSave: liveSave,
+            liveSubmit: liveSubmit,
+            onClose: {
+                // Uma conclusão CONFIRMADA pelo servidor é final — consumir o
+                // VER REVIEW não pode depender de qual botão fechou o sheet.
+                // Descartar a confirmação aqui adiava o consumo para a sonda
+                // (minutos) quando o usuário fechava pelo X.
+                consumeConfirmedReviewIfReady()
+                confirmedReviewCompletion = nil
+                completionCloseRequested = false
+                reviewPresenter.request = nil
+            },
+            onCompletionClose: {
+                completionCloseRequested = true
+                consumeConfirmedReviewIfReady()
+                reviewPresenter.request = nil
+            },
+            onSubmit: onSubmit
+        )
+        .frame(minWidth: 1040, minHeight: 660)
+    }
+
+    private func reviewSheetDidDismiss() {
+        consumeConfirmedReviewIfReady()
+    }
+
+    private func consumeConfirmedReviewIfReady() {
+        // `confirmedReviewCompletion` só existe após o servidor confirmar
+        // approved + concludedAt na versão exata — a partir daí QUALQUER
+        // fechamento consome. Abrir/fechar sem conclusão confirmada continua
+        // jamais consumindo (a confirmação simplesmente não existe).
+        guard let completion = confirmedReviewCompletion else { return }
+        let consumed = TaskReviewUpdateStore.shared.acknowledgeConfirmedCompletion(
+            taskId: completion.acknowledgement.taskId,
+            pendingActiveAtt: completion.acknowledgement.activeAtt,
+            confirmedActiveAtt: completion.activeAtt,
+            meta: completion.meta
+        )
+        guard consumed else { return }
+        confirmedReviewCompletion = nil
+        completionCloseRequested = false
     }
 
     /// Renders the Notifications Center as a top-trailing-anchored popup
@@ -710,18 +981,6 @@ struct ContentView: View {
     /// hunting for the close button.
     @ViewBuilder
     private func aiChatCenteredOverlay(windowSize: CGSize) -> some View {
-        // Translate the captured click point into a UnitPoint
-        // (0…1 across the window) so the chat scales out of the
-        // exact orb pixel the user pressed. Falls back to the
-        // top-centre on the very first paint when windowSize is
-        // still zero.
-        let cursorAnchor = UnitPoint(
-            x: windowSize.width  > 0 && aiChatOpenPoint != .zero
-                ? aiChatOpenPoint.x / windowSize.width  : 0.5,
-            y: windowSize.height > 0 && aiChatOpenPoint != .zero
-                ? aiChatOpenPoint.y / windowSize.height : 0.05
-        )
-
         ZStack {
             // PERF: window-wide dim backdrop removed. A full-
             // window `Color.black.opacity(0.18)` cost an alpha
@@ -734,16 +993,17 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    withAnimation(.spring(response: 0.52,
-                                          dampingFraction: 0.82)) {
+                    // Plain ease-in fall — sprung dismisses
+                    // asymptote at the bottom and the panel
+                    // never visibly clears the window edge.
+                    withAnimation(.easeIn(duration: 0.30)) {
                         showAIChat = false
                     }
                 }
                 .transition(.opacity)
 
             AIAgentChatView(onClose: {
-                withAnimation(.spring(response: 0.52,
-                                      dampingFraction: 0.82)) {
+                withAnimation(.easeIn(duration: 0.30)) {
                     showAIChat = false
                 }
             })
@@ -763,31 +1023,31 @@ struct ContentView: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .strokeBorder(Editorial.rule, lineWidth: 1)
                 )
+                // AGENT GLOW (Studio Glass): a borda multicolor
+                // girando estilo Apple Intelligence enquanto o
+                // agente pensa/trabalha — identidade de "IA viva".
+                // Gate automático dentro do AgentGlow (Reduce
+                // Motion / Tier C / Low Power → borda accent
+                // estática). Fora do isThinking, nada é montado.
+                .overlay {
+                    if appState.aiAgent.isThinking {
+                        AgentGlow(cornerRadius: 6)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(Motion.standard, value: appState.aiAgent.isThinking)
                 .shadow(color: .black.opacity(0.22), radius: 50, y: 40)
                 .shadow(color: .black.opacity(0.08), radius: 24, y: 8)
                 .padding(.top,        max(28, windowSize.height * 0.05))
                 .padding(.bottom,     max(28, windowSize.height * 0.05))
                 .padding(.horizontal, max(48, windowSize.width  * 0.07))
-                // Window entrance/exit: the panel grows out of
-                // the Apollo button (cursor anchor) but from a
-                // readable 0.90 — not a speck — drifting up into
-                // place with a soft blur clearing, and settles
-                // out the same way. Reads as an elegant
-                // "publication opening" rather than a UI pop.
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.90, anchor: cursorAnchor)
-                        .combined(with: .opacity)
-                        .combined(with: .offset(y: 14))
-                        .combined(with: .modifier(
-                            active:   BlurModifier(radius: 14),
-                            identity: BlurModifier(radius: 0))),
-                    removal: .scale(scale: 0.95, anchor: cursorAnchor)
-                        .combined(with: .opacity)
-                        .combined(with: .offset(y: 10))
-                        .combined(with: .modifier(
-                            active:   BlurModifier(radius: 10),
-                            identity: BlurModifier(radius: 0)))
-                ))
+                // (Transition lives on the outer
+                // aiChatCenteredOverlay() call site — placing
+                // it here is a no-op because AIAgentChatView is
+                // not conditionally toggled inside this ZStack;
+                // the parent `if showAIChat` is what SwiftUI
+                // adds/removes.)
         }
     }
 
@@ -804,46 +1064,39 @@ struct ContentView: View {
                 // `if showNotifs` parent removes the view
                 // synchronously before the transition runs,
                 // making the popup vanish without animation.
-                withAnimation(.spring(duration: 0.45, bounce: 0.32)) {
+                withAnimation(.spring(duration: 0.55, bounce: 0.13)) {
                     showNotifs = false
                 }
             }
             .transition(.opacity)
 
-        // Translate the captured click point into a UnitPoint
-        // (0…1 across the window). With windowSize zero on the very
-        // first layout pass, fall back to the bell's centre so the
-        // popup never animates out of (0,0).
-        let cursorAnchor = UnitPoint(
-            x: windowSize.width  > 0 ? notifsOpenPoint.x / windowSize.width  : 1.0,
-            y: windowSize.height > 0 ? notifsOpenPoint.y / windowSize.height : 0.05
-        )
-
-        // The popup itself, anchored under the bell. Padding has to be
-        // applied *before* the infinity-alignment frame: when it goes
-        // after, SwiftUI grows the already-infinite frame instead of
-        // offsetting the content within it, which leaves the popup
-        // floating in the middle of the window instead of under the
-        // bell. With the padding inside, the popup's natural size gets
-        // padded first and then the frame stretches the padded view
-        // to the window's bounds with top-trailing alignment, so the
-        // popup's right edge lands exactly at `notifsOrigin.maxX`.
+        // Side-panel layout — hangs from below the toolbar to
+        // near the window bottom, pinned to the trailing edge
+        // with a small visual gutter. The wrapper provides the
+        // top reserve (toolbar band) + outer margins; the
+        // panel itself fills the remaining vertical space.
         NotificationsCenterView(onClose: {
-            withAnimation(.spring(duration: 0.45, bounce: 0.32)) {
+            withAnimation(.spring(duration: 0.55, bounce: 0.13)) {
                 showNotifs = false
             }
         })
             .environmentObject(appState)
-            .padding(.top,      max(notifsOrigin.maxY + 8, 60))
-            .padding(.trailing, max(windowSize.width - notifsOrigin.maxX, 8))
+            .padding(.top,      62)   // clear toolbar
+            .padding(.trailing, 16)
+            .padding(.bottom,   24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            // Slide IN from the right with a spring bounce at
+            // the end (per design intent — replaces the
+            // cursor-anchored scale that read as "popping out"
+            // from the bell). Out animation mirrors the slide
+            // back to the trailing edge.
             .transition(.asymmetric(
-                insertion: .scale(scale: 0.05, anchor: cursorAnchor)
+                insertion: .move(edge: .trailing)
                     .combined(with: .opacity),
-                removal:   .scale(scale: 0.05, anchor: cursorAnchor)
+                removal:   .move(edge: .trailing)
                     .combined(with: .opacity)
             ))
-            .animation(.spring(duration: 0.45, bounce: 0.32), value: showNotifs)
+            .animation(.spring(duration: 0.55, bounce: 0.13), value: showNotifs)
     }
 
     private func collapseBellPill() {
@@ -1069,6 +1322,7 @@ struct ContentView: View {
 
 
     private func maybeShowOnboarding() {
+        guard !previewMode else { return }
         guard !onboardingDismissedThisSession else { return }
         // Note on the welcome interaction: we deliberately do
         // NOT bail out while `showWelcome` is true. The body's
@@ -1108,13 +1362,14 @@ struct ContentView: View {
     // MARK: - Glass Toolbar
 
     private var toolbar: some View {
-        // Reproduces the prototype's `PToolbar` exactly: a type-led
-        // band of `TBBtn` text buttons separated by a 26pt gap, the
-        // active-list picker, a flexible gap, then the trailing
-        // cluster (Filtros · Buscar ⌘K · + Tarefa · ✦ Apollo · 🔔 ·
-        // ⚙). No glass, no capsules, no diagnostic chrome — the
-        // hairline rule along the bottom IS the only divider.
+        // Type-led toolbar with no independent surface or divider. It
+        // remains visually continuous with the page underneath instead
+        // of reading as a detached header band.
         HStack(spacing: 26) {
+
+            // (Apollo brand mark removed — leading slot is now
+            //  empty so "+ Evento" sits right at the toolbar's
+            //  leading edge.)
 
             // + Evento
             Button { showNewEvent = true } label: {
@@ -1124,6 +1379,7 @@ struct ContentView: View {
             .focusEffectDisabled()
             .help("Novo evento")
             .captureFrame($newEventOrigin)
+            .padding(.leading, 10)
 
             // Hoje — jump to today + resync
             Button {
@@ -1146,70 +1402,28 @@ struct ContentView: View {
 
             Spacer(minLength: 0)
 
-            // Filtros — accent-tinted while ≥1 dimension is active
-            if appState.clickUpAuthService.isConnected {
-                filtersButton
-            }
+            // (Filtros button removed from the toolbar — filters
+            //  now live in the sidebar's FILTROS section,
+            //  collapsibles per category. No need to surface a
+            //  second entry point in the top bar.)
 
-            // Buscar ⌘K — opens the existing Spotlight-style palette
-            // (same responder action ⌘K triggers from the menu).
+            // Buscar — opens the command palette. Stripped to a
+            // plain text link to match the prototype (no glyph,
+            // no ⌘K kbd badge). The ⌘K shortcut still works via
+            // the responder chain.
             Button {
                 NSApp.sendAction(Selector(("toggleCommandPalette:")), to: nil, from: nil)
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 14, weight: .regular))
-                    Text("Buscar")
-                    KbdTB(text: "⌘K")
-                }
+                Text("Buscar")
             }
             .buttonStyle(TBButtonStyle())
             .focusEffectDisabled()
             .help("Buscar (⌘K)")
 
-            // + Tarefa
-            Button { showNewTask = true } label: {
-                Text("+ Tarefa")
-            }
-            .buttonStyle(TBButtonStyle())
-            .focusEffectDisabled()
-            .help("Nova tarefa")
-            .captureFrame($newTaskOrigin)
-
-            // ✦ Apollo — cinnabar mark + word (prototype AIMark)
-            Button {
-                let rect = MouseOriginCapture.currentClickRectInMainWindow()
-                if rect != .zero {
-                    aiChatOpenPoint = CGPoint(x: rect.midX, y: rect.midY)
-                }
-                withAnimation(.spring(response: 0.52,
-                                      dampingFraction: 0.82)) {
-                    showAIChat.toggle()
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    AIMark(size: 14)
-                    Text("Apollo")
-                }
-            }
-            .buttonStyle(TBButtonStyle(accent: true))
-            .focusEffectDisabled()
-            .help("Apollo IA")
-            .onChange(of: appState.aiAgent.dismissChatRequest) { _, _ in
-                withAnimation(.spring(response: 0.45,
-                                      dampingFraction: 0.85)) {
-                    showAIChat = false
-                }
-            }
-            // RAM relief — unload the embedded model the moment the
-            // chat closes instead of holding ~5 GB for 5 min.
-            .onChange(of: showAIChat) { _, isOpen in
-                if !isOpen {
-                    Task.detached(priority: .background) {
-                        await appState.aiAgent.unloadEmbeddedModel()
-                    }
-                }
-            }
+            // Apollo IA — REMOVIDO desta build (entry point da toolbar
+            // retirado a pedido). O overlay/serviço continuam no código, mas
+            // sem gatilho de UI `showAIChat` nunca vira true. Reverter =
+            // restaurar este botão.
 
             // 🔔 — notifications; cinnabar count badge (prototype)
             Button {
@@ -1217,7 +1431,7 @@ struct ContentView: View {
                 notifsOpenPoint = rect == .zero
                     ? CGPoint(x: notifsOrigin.midX, y: notifsOrigin.midY)
                     : CGPoint(x: rect.midX, y: rect.midY)
-                withAnimation(.spring(duration: 0.45, bounce: 0.32)) {
+                withAnimation(.spring(duration: 0.55, bounce: 0.13)) {
                     showNotifs.toggle()
                 }
             } label: {
@@ -1257,12 +1471,51 @@ struct ContentView: View {
             .buttonStyle(TBIconButtonStyle())
             .focusEffectDisabled()
             .captureFrame($settingsOrigin)
+
+            // Vertical separator — divides the icon cluster (bell
+            // + gear) from the primary CTA on the right, matching
+            // the prototype's visual rhythm.
+            Rectangle()
+                .fill(Editorial.rule)
+                .frame(width: 1, height: 22)
+                .padding(.horizontal, -8)
+
+            // + Nova tarefa — primary CTA. Cinnabar pill instead
+            // of the text-link "+ Tarefa" the leading cluster
+            // used to carry (now removed); this is the prototype's
+            // emphasised "new task" affordance.
+            Button { showNewTask = true } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .bold))
+                    Text("Nova tarefa")
+                        .font(Editorial.sans(13.5, .semibold))
+                }
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                // Liquid Glass material tinted with the cinnabar accent —
+                // interactive glass carries its own hover/press feedback.
+                .liquidGlassCapsule(tint: Editorial.accent, tintOpacity: 0.9)
+                .accentGlow()
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .help("Nova tarefa")
+            // Pull the CTA ~11pt closer to the separator: the gap was
+            // 18pt (HStack spacing 26 − the separator's −8 inset); −11
+            // brings it to ~7pt, a 60% reduction.
+            .padding(.leading, -11)
+            .captureFrame($newTaskOrigin)
         }
-        // Leading clears the native macOS traffic lights with
-        // 10px breathing room after them (was 93 → 103).
-        // Trailing kept tight (12) so the gear sits near the
-        // window edge.
-        .padding(.leading, 103)
+        // Leading kept tight (14pt) so the Apollo brand mark sits
+        // right next to the sidebar's trailing edge. The 220pt
+        // sidebar-clear inset is applied OUTSIDE this HStack
+        // (see `.padding(.leading, 220)` on the toolbar instance
+        // in `body`), so we don't need the legacy 103pt traffic-
+        // light gap here — the sidebar already covers that zone
+        // with its own 44pt traffic-light inset.
+        .padding(.leading, 14)
         .padding(.trailing, 12)
         // Invisible ⌘R sync trigger. Lives in a zero-impact
         // BACKGROUND (not as an HStack child) — as a sibling it
@@ -1276,35 +1529,159 @@ struct ContentView: View {
                 .keyboardShortcut("r", modifiers: .command)
         )
         .frame(maxHeight: .infinity, alignment: .center)
-        // The chrome IS the rule — a single hairline along the
-        // band's bottom edge, no frosted material.
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Editorial.rule).frame(height: 1)
-        }
     }
 
     // MARK: - Main content
 
     private var mainContent: some View {
-        // EditorialMainV2: a clean proportional split —
-        // `gridTemplateColumns: '1fr 1.05fr'` (timeline | tasks)
-        // with a single hairline rule between. No resizable
-        // handle, no edge-fade masks (those were Liquid-Glass
-        // affordances); the redesign is a fixed two-column
-        // spread that scales with the window.
+        // EditorialMainV2 dashboard / Editorial+ board router. The
+        // sidebar's `sidebarRoute` selects which surface fills the
+        // chrome's main rect:
+        //   .board → kanban (EditorialBoardView)
+        //   anything else → the legacy split (timeline | tasks)
+        //
+        // Both surfaces start with a 220pt leading inset so their
+        // FIRST column / card lines up where it did in the
+        // pre-overlay HStack era (right of the sidebar). Content
+        // that scrolls past that inset slides UNDER the glass and
+        // shows through the translucent material — i.e. the
+        // sidebar reveals content as you scroll past it, but
+        // nothing renders behind-the-glass at rest.
+        Group {
+            switch sidebarRoute {
+            case .board:
+                EditorialBoardView()
+                    .environmentObject(appState)
+                    // SEM leading inset: o board agora é full-width
+                    // e o ScrollView horizontal desenha até x=0 —
+                    // os cards arrastados/rolados pra esquerda
+                    // passam POR TRÁS do pane flutuante de vidro
+                    // da sidebar. O recuo visual do conteúdo em
+                    // repouso vem do `contentMargins` interno do
+                    // EditorialBoardView. The 52pt toolbar reserve now lives
+                    // inside the board header so one continuous `.titlebar`
+                    // material backs both regions without changing geometry.
+            case .tasks:
+                EditorialMyTasksView()
+                    .environmentObject(appState)
+                    .padding(.leading, 220)
+            case .today:
+                editorialHomeView
+            case .assignedComments:
+                AssignedCommentsView()
+                    .environmentObject(appState)
+                    .padding(.leading, 220)
+            default:
+                dashboardSplit
+            }
+        }
+    }
+
+    /// Editorial+ Home — port of the prototype's top band
+    /// (folio + serif "Home" title + date+stats row + next-event
+    /// card + AGENDA/TAREFAS section labels) stacked above the
+    /// legacy timeline | tasks split. The header lives in its
+    /// own scroll-free band so the dashboard below keeps its
+    /// independent scrolling.
+    private var editorialHomeView: some View {
+        // The chrome is an overlay, not a safe-area inset. A safe-area inset
+        // shrinks the scroll viewport and makes it physically impossible for
+        // agenda/inbox rows to travel behind the material. Their own scroll
+        // content carries the resting reserve instead, so the first items keep
+        // the same 30pt breathing room and then naturally pass under the band.
+        let chromeHeight: CGFloat = 99
+        // The SwiftUI Agenda list begins at the window's top and therefore
+        // needs the full chrome reserve plus a comfortable resting gap.
+        // A primeira linha da List já reserva 28pt fixos; o -18 aqui fecha o
+        // respiro visível entre o chrome e o evento em destaque em 10pt
+        // (medida pedida em 20/jul).
+        let agendaRestingReserve = chromeHeight - 18
+        // InboxAppKitList is already laid out in the post-toolbar content
+        // region. Giving it the complete chrome height again doubled the
+        // reserve and left a giant empty slab above the first notification.
+        let inboxRestingReserve: CGFloat = 60
+        return ZStack(alignment: .top) {
+            homeDashboardSplit(agendaTopInset: agendaRestingReserve,
+                               inboxTopInset: inboxRestingReserve)
+
+            EditorialHomeHeader()
+                .environmentObject(appState)
+                .padding(.top, 52)        // clear the toolbar pills
+                .padding(.leading, 220)   // clear the glass sidebar
+                .finderHeaderMaterial(leadingExtension: 220)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func homeDashboardSplit(agendaTopInset: CGFloat,
+                                    inboxTopInset: CGFloat) -> some View {
         GeometryReader { geo in
             let total     = max(1, geo.size.width)
             let timelineW = (total - 1) * (1.0 / 2.05)
             HStack(spacing: 0) {
-                TimelineView()
+                TimelineView(forwardOnly: true,
+                             topContentInset: agendaTopInset)
                     .frame(width: timelineW)
                 Rectangle()
-                    .fill(Editorial.rule)
+                    .fill(Editorial.rule.opacity(0.65))
                     .frame(width: 1)
-                TaskListView()
+                    .edgeFadedVertical()
+                EditorialHomeInboxColumn(topInset: inboxTopInset)
+                    .environmentObject(appState)
                     .frame(maxWidth: .infinity)
             }
         }
+        .padding(.leading, 220)
+    }
+
+    /// The original two-column dashboard (timeline + task list).
+    /// Extracted so `mainContent` can switch between this and the
+    /// kanban without indenting the split layout under another
+    /// branch. Carries a `220pt` leading inset because the sidebar
+    /// now overlays the chrome — without the inset the timeline's
+    /// event titles would slide BEHIND the Liquid Glass pane and
+    /// the leading half of each title would be occluded.
+    private var dashboardSplit: some View {
+        dashboardSplitBody(skipsLegacyHeaderInsets: false)
+    }
+
+    /// Same split, but the embedded scroll views drop their
+    /// legacy 52pt toolbar reserve + filter-bar reserve. Used
+    /// by the `.today` route where `EditorialHomeHeader` already
+    /// occupies that band above — without this the task column
+    /// shows a huge empty gap between the inline status pills
+    /// and the first row.
+    private var dashboardSplitInsetless: some View {
+        dashboardSplitBody(skipsLegacyHeaderInsets: true)
+    }
+
+    /// EditorialMainV2: a clean proportional split —
+    /// `gridTemplateColumns: '1fr 1.05fr'` (timeline | tasks)
+    /// with a single hairline rule between.
+    @ViewBuilder
+    private func dashboardSplitBody(skipsLegacyHeaderInsets: Bool) -> some View {
+        GeometryReader { geo in
+            let total     = max(1, geo.size.width)
+            let timelineW = (total - 1) * (1.0 / 2.05)
+            HStack(spacing: 0) {
+                // Home/Hoje route drops past days from the
+                // agenda — the user only cares about today
+                // forward; the legacy ±30 window stays for
+                // other surfaces.
+                TimelineView(forwardOnly: skipsLegacyHeaderInsets)
+                    .frame(width: timelineW)
+                Rectangle()
+                    .fill(Editorial.rule.opacity(0.65))
+                    .frame(width: 1)
+                    .edgeFadedVertical()
+                TaskListView(skipsLegacyHeaderInsets: skipsLegacyHeaderInsets)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.leading, 220)
     }
 
 }
@@ -1350,106 +1727,60 @@ extension View {
             .shadow(color: .black.opacity(0.04), radius: 1, x: 0, y: 1)
     }
 
-    /// "Control Center"–style glass treatment, used for floating popups.
-    /// Light blur lets ambient color bleed through, a pronounced specular
-    /// top edge gives the bevel, and layered drop shadows add depth.
+    /// Card flutuante Studio Glass — receita `floatingPanel` do
+    /// Galileo (vidro espesso por tier + UMA sombra de elevação),
+    /// substituindo o specular gradient pintado à mão + stack de 3
+    /// sombras do Control Center antigo. Mantém o nome/assinatura
+    /// pros 10 call sites.
     func popupGlass<S: InsettableShape>(_ shape: S) -> some View {
-        self
-            // 1. Light frosted blur — like Control Center, mostly transparent
-            .background(.ultraThinMaterial, in: shape)
-            .clipShape(shape)
-            // 2. Soft inner gradient — bright top → subtle darken at bottom
-            .overlay {
-                shape
-                    .fill(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .white.opacity(0.06), location: 0.00),
-                                .init(color: .clear,                location: 0.40),
-                                .init(color: .clear,                location: 0.70),
-                                .init(color: .black.opacity(0.03), location: 1.00),
-                            ],
-                            startPoint: .top,
-                            endPoint:   .bottom
-                        )
-                    )
-                    .allowsHitTesting(false)
+        Group {
+            switch Materials.tier {
+            case .solid:
+                self.background(shape.fill(Editorial.popup))
+                    .clipShape(shape)
+                    .overlay(shape.strokeBorder(Editorial.rule, lineWidth: 1)
+                        .allowsHitTesting(false))
+                    .shadow(color: .black.opacity(0.30), radius: 26, y: 12)
+            case .liquidGlass:
+                self.glassControl(shape)
+                    .clipShape(shape)
+                    .shadow(color: .black.opacity(0.35), radius: 30, y: 14)
+            case .vibrancy:
+                self.background(.regularMaterial, in: shape)
+                    .clipShape(shape)
+                    .overlay(shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                        .allowsHitTesting(false))   // fio de luz
+                    .shadow(color: .black.opacity(0.35), radius: 30, y: 14)
             }
-            // 3. Specular top highlight — bright bevel that catches light
-            .overlay {
-                shape.strokeBorder(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .white.opacity(0.90), location: 0.00),
-                            .init(color: .white.opacity(0.45), location: 0.10),
-                            .init(color: .white.opacity(0.18), location: 0.35),
-                            .init(color: .white.opacity(0.08), location: 0.65),
-                            .init(color: .white.opacity(0.18), location: 1.00),
-                        ],
-                        startPoint: .top,
-                        endPoint:   .bottom
-                    ),
-                    lineWidth: 1.0
-                )
-                .allowsHitTesting(false)
-            }
-            // 4. Layered drop shadows — close definition + deep ambient
-            .shadow(color: .black.opacity(0.30), radius: 32, x: 0, y: 18)
-            .shadow(color: .black.opacity(0.14), radius: 8,  x: 0, y: 4)
-            .shadow(color: .black.opacity(0.08), radius: 1,  x: 0, y: 1)
+        }
     }
 
     /// Same chrome as `popupGlass` but **without** the outer
     /// `clipShape`. On macOS 26 the combination of `.clipShape(_)` +
     /// a nested `NSScrollView` (used by SwiftUI `ScrollView`) crashes
     /// inside `computed_effectiveCornerRadii` the moment the scroll
-    /// view's host first joins the window — `NSViewGetTransformToDescendant`
-    /// asserts because the corner-config lookup walks across views
-    /// that aren't direct descendants in the rendering order it
-    /// expects. The `.background(_, in: shape)` already paints the
-    /// material in the rounded shape, so dropping the clip preserves
-    /// the visual look as long as the popover's content respects its
-    /// own padding (it does — header/footer/sections live inside the
-    /// rounded area thanks to the inner padding).
+    /// view's host first joins the window — the corner-config lookup
+    /// asserts. The backgrounds already paint in the rounded shape,
+    /// so dropping the clip preserves the visual as long as the
+    /// content respects its own padding (it does).
     func popupGlassUnclipped<S: InsettableShape>(_ shape: S) -> some View {
-        self
-            .background(.ultraThinMaterial, in: shape)
-            .overlay {
-                shape
-                    .fill(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .white.opacity(0.06), location: 0.00),
-                                .init(color: .clear,                location: 0.40),
-                                .init(color: .clear,                location: 0.70),
-                                .init(color: .black.opacity(0.03), location: 1.00),
-                            ],
-                            startPoint: .top,
-                            endPoint:   .bottom
-                        )
-                    )
-                    .allowsHitTesting(false)
+        Group {
+            switch Materials.tier {
+            case .solid:
+                self.background(shape.fill(Editorial.popup))
+                    .overlay(shape.strokeBorder(Editorial.rule, lineWidth: 1)
+                        .allowsHitTesting(false))
+                    .shadow(color: .black.opacity(0.30), radius: 26, y: 12)
+            case .liquidGlass:
+                self.glassControl(shape)
+                    .shadow(color: .black.opacity(0.35), radius: 30, y: 14)
+            case .vibrancy:
+                self.background(.regularMaterial, in: shape)
+                    .overlay(shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                        .allowsHitTesting(false))
+                    .shadow(color: .black.opacity(0.35), radius: 30, y: 14)
             }
-            .overlay {
-                shape.strokeBorder(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .white.opacity(0.90), location: 0.00),
-                            .init(color: .white.opacity(0.45), location: 0.10),
-                            .init(color: .white.opacity(0.18), location: 0.35),
-                            .init(color: .white.opacity(0.08), location: 0.65),
-                            .init(color: .white.opacity(0.18), location: 1.00),
-                        ],
-                        startPoint: .top,
-                        endPoint:   .bottom
-                    ),
-                    lineWidth: 1.0
-                )
-                .allowsHitTesting(false)
-            }
-            .shadow(color: .black.opacity(0.30), radius: 32, x: 0, y: 18)
-            .shadow(color: .black.opacity(0.14), radius: 8,  x: 0, y: 4)
-            .shadow(color: .black.opacity(0.08), radius: 1,  x: 0, y: 1)
+        }
     }
 }
 
@@ -1466,20 +1797,27 @@ struct FrostedStrip: View {
     /// two scrolling regions look related.
     var fadeExtent: CGFloat = 120
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
-        // 3-stop linear gradient using the window's bg
-        // colour. The TOOLBAR REGION (top ~barHeight of the
-        // strip) stays fully opaque so content scrolling
-        // up disappears completely under the pills, then
-        // the lower section softly fades to clear so the
-        // body's first row reads continuously.
-        // Single GPU rasterisation, no per-frame backdrop
-        // sampling.
-        // Editorial: the chrome is paper, not a frosted/glass
-        // blur. Solid cream over the toolbar band, then a short
-        // soft fade so content scrolling up dissolves into the
-        // paper instead of hard-clipping under a hairline.
-        let bg = Editorial.paper
+        // 3-stop linear gradient using the window's bg colour.
+        // The TOOLBAR REGION (top ~barHeight of the strip) stays
+        // fully opaque so content scrolling up disappears
+        // completely under the pills, then the lower section
+        // softly fades to clear so the body's first row reads
+        // continuously.
+        //
+        // Color choice is RESOLVED HERE per render so it stays
+        // accurate on Light↔Dark switches. `Editorial.paper` is
+        // dynamic, but the previous version baked it into a
+        // `.drawingGroup()` raster — the texture cached the
+        // cream and stayed cream in dark mode. Reading
+        // `colorScheme` directly + dropping `.drawingGroup()`
+        // costs a hair more per frame but always matches the
+        // active appearance.
+        let bg: Color = colorScheme == .dark
+            ? Color(hex: "#141415")   // matches Editorial.paper dark (Studio Glass)
+            : Color(hex: "#F8F6F3")   // matches Editorial.paper light
         let total = barHeight + fadeExtent
         let solidStop = barHeight / total
         LinearGradient(
@@ -1493,7 +1831,6 @@ struct FrostedStrip: View {
         )
         .frame(height: total)
         .allowsHitTesting(false)
-        .drawingGroup()
     }
 }
 
@@ -1626,14 +1963,14 @@ private struct IntelligenceEdgeGlow: View {
 // populated with mock data. Switch the canvas between light/dark with
 // the two previews below.
 #Preview("Dashboard — claro") {
-    ContentView()
+    ContentView(previewRoute: .today)
         .environmentObject(AppState.preview)
         .environmentObject(UpdateService())
         .frame(width: 1180, height: 760)
 }
 
 #Preview("Dashboard — escuro") {
-    ContentView()
+    ContentView(previewRoute: .today)
         .environmentObject(AppState.preview)
         .environmentObject(UpdateService())
         .frame(width: 1180, height: 760)

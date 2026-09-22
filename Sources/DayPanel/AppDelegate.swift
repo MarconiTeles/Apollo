@@ -39,7 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// it renders the SwiftUI `UpdaterCardView`. The silent-channel
     /// suppression that used to live in `SPUStandardUserDriverDelegate`
     /// now lives inside this driver's `showUpdateFound`.
-    private lazy var updateDriver = MainActor.assumeIsolated { ApolloUpdateDriver() }
+    private lazy var updateDriver = MainActor.assumeIsolated {
+        let driver = ApolloUpdateDriver()
+        driver.updateService = updateService
+        updateService.updateDriver = driver
+        return driver
+    }
 
     /// Raw `SPUUpdater` (instead of `SPUStandardUpdaterController`) so we
     /// can plug in our custom user driver. Started manually on launch so
@@ -114,7 +119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// section enough room to render without truncation while
     /// still being well below the natural launch size, so users
     /// can still pull the window in for split-screen workflows.
-    static let windowMinFrameSize = NSSize(width: 880, height: 680)
+    // Bumped by 220pt (sidebar width) when the Editorial+ sidebar
+    // landed — at the old 880 minimum the right-side toolbar pills
+    // (Apollo IA · bell · gear · Concluir) got clipped past the
+    // window's right edge. 1100pt = 880 chrome floor + 220 sidebar.
+    static let windowMinFrameSize = NSSize(width: 1100, height: 680)
 
     let appState = AppState()
 
@@ -156,10 +165,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         //    `.system` can actually take effect.
         appState.applyAppearanceMode()
 
+        // Studio Glass: gate global de scroll — suspende todo hover
+        // durante rolagem/pinça (os modifiers hoverGlass/hoverBounce/
+        // hoverRow consultam ScrollGate.shared.active).
+        ScrollGate.shared.install()
+
         // Take ownership of UNUserNotificationCenter delivery + click
         // handling so foreground banners show up and notification
         // taps deep-link into the matching task / event popup.
         UNUserNotificationCenter.current().delegate = self
+
+        // Poll watched reviews and fire a notification when someone updates one
+        // (the active counterpart to the REVIEW button's dot). Route through
+        // AppState.notify so it lands in the in-app Notifications panel AND as a
+        // native banner.
+        ReviewWatcher.shared.notify = { [weak appState] title, subtitle, att in
+            appState?.notify(.info, title: title, subtitle: subtitle,
+                             message: "Alguém atualizou este review.",
+                             targetKind: .review, targetId: att)
+        }
+        ReviewWatcher.shared.start()
 
         // Receive `daypanel://` URL opens (the standalone review app's
         // review-done callback). The scheme is declared in Info.plist.
@@ -221,6 +246,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in
                 guard let self else { return }
+                // Refocusing counts as interaction so the fast
+                // loop's activity gate opens immediately.
+                self.appState.noteUserInteraction()
                 Task { await self.appState.sync() }
                 self.appState.enableFastSync()
             }
@@ -231,6 +259,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.appState.disableFastSync()
             }
             .store(in: &cancellables)
+
+        // Activity signal for the fast-sync gate — any click,
+        // keypress or scroll marks the session as actively used;
+        // ticks while idle are skipped (see `enableFastSync`).
+        // Local monitor = events delivered to THIS app only, on
+        // the main thread; updating one timestamp is negligible.
+        NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown, .leftMouseDown, .rightMouseDown,
+                       .otherMouseDown, .scrollWheel]
+        ) { [weak self] event in
+            self?.appState.noteUserInteraction()
+            return event
+        }
 
         // Kick off the fast loop now if we launched into an active window.
         if NSApp.isActive { appState.enableFastSync() }
@@ -328,6 +369,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let r = ReviewResult.fromSavedJSON(data),
               let taskId = r.taskId
         else { return }
+
+        // The helper is a separate process, so its successful completion must
+        // cross this URL boundary with the exact server-confirmed identity.
+        // Never infer completion from the returned JSON: opening/closing a
+        // review, saving comments, or selecting Approved alone must not consume
+        // the pending VER REVIEW latch.
+        if let acknowledgementTaskId = q("ackTaskId"),
+           let pendingAttachmentId = q("ackPendingAttachmentId"),
+           let confirmedAttachmentId = q("confirmedActiveAttachmentId") {
+            let confirmation = ReviewBackend.Meta(
+                exists: true,
+                updatedAt: q("confirmedUpdatedAt"),
+                status: q("confirmedStatus"),
+                commentCount: Int(q("confirmedCommentCount") ?? "") ?? 0,
+                concludedAt: q("confirmedConcludedAt"),
+                reviewId: q("confirmedReviewId"),
+                currentVersionId: q("confirmedVersionId"),
+                mediaTitle: q("confirmedMediaTitle"),
+                evaluatedVersionId: q("confirmedVersionId")
+            )
+            Task { @MainActor in
+                _ = TaskReviewUpdateStore.shared.acknowledgeConfirmedCompletion(
+                    taskId: acknowledgementTaskId,
+                    pendingActiveAtt: pendingAttachmentId,
+                    confirmedActiveAtt: confirmedAttachmentId,
+                    meta: confirmation
+                )
+            }
+        }
 
         // Bring Apollo (and the task) forward, then post — the existing
         // reviewPostTick auto-refresh updates the open comments section.
@@ -694,10 +764,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the title bar — without this the title-bar area still
         // reads as a distinct band even with isOpaque=false.
         w.titlebarSeparatorStyle       = .none
-        // Opaque flat background — matches the cream paper
-        // canvas, no `.behindWindow` material, no transparency.
-        w.backgroundColor              = .windowBackgroundColor
-        w.isOpaque                     = true
+        // Translucent window so the Editorial+ sidebar's Liquid
+        // Glass pane can pull vibrancy from whatever sits behind
+        // the window. The chrome (toolbar + body) still paints
+        // `Editorial.paper` over its own region in ContentView —
+        // only the sidebar column actually shows through.
+        w.backgroundColor              = .clear
+        w.isOpaque                     = false
 
         // Performance hints — keep CoreAnimation in async-display mode and
         // let ProMotion screens drive the window at their full refresh

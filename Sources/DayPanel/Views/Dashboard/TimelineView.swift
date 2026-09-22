@@ -9,20 +9,41 @@ import AppKit
 struct TimelineView: View {
     @EnvironmentObject var appState: AppState
 
-    /// 30 days back, 30 days forward.
+    /// When `true`, the timeline starts AT today and only goes
+    /// forward (today + 30 days). Used by the Home/Hoje route
+    /// where past days are noise. Default (false) preserves the
+    /// legacy ±30-day window so the rest of the dashboard stays
+    /// scrollable to recent past entries.
+    var forwardOnly: Bool = false
+
+    /// Extra resting reserve used when this recycled list sits below a pinned
+    /// overlay. Because it is part of the scroll content (not the viewport),
+    /// rows can still travel underneath the overlay during a scroll.
+    var topContentInset: CGFloat = 0
+
+    /// Visible date window. Past entries are dropped on the
+    /// forward-only variant.
     private var dates: [Date] {
         let cal   = Calendar.current
         let today = cal.startOfDay(for: Date())
-        return (-30...30).compactMap { cal.date(byAdding: .day, value: $0, to: today) }
+        let range = forwardOnly ? (0...30) : (-30...30)
+        return range.compactMap { cal.date(byAdding: .day, value: $0, to: today) }
     }
 
     /// Approx. height per day section — used by scroll-position math to
     /// figure out which day is currently in view.
     private let sectionEstimate: CGFloat = 96
+    /// Resting distance from the Agenda header to the first event row.
+    private let headerToFirstCardSpacing: CGFloat = 43
 
     @State private var scrollLockUntil:    Date = .distantPast
     @State private var suppressAutoScroll: Bool = false
     @State private var didInitialScroll:   Bool = false
+    /// Rebuilds only the recycled `List` when the Home agenda must return to
+    /// its natural origin. In the forward-only variant the first row is today,
+    /// so resetting the list is more reliable than asking SwiftUI to
+    /// `scrollTo` a variable-height row (which could land on tomorrow).
+    @State private var forwardListResetToken: Int = 0
     @State private var lastScrollIndex:    Int  = -1
     /// The date that the SCROLL POSITION currently points at,
     /// derived from the live `TimelineScrollOffsetKey`
@@ -47,12 +68,12 @@ struct TimelineView: View {
     /// modifier, so it falls back to the window).
     @State private var timelineWidth:      CGFloat = 0
 
-    /// Where today lands in the visible scroll area on app
-    /// launch and when the user taps "Hoje" — vertically centred
-    /// then nudged 30% up (so y = 0.5 − 0.3 = 0.2). Past events
-    /// stay just-visible above; upcoming events fill the rest
-    /// of the screen.
-    private let todayAnchor: UnitPoint = UnitPoint(x: 0.5, y: 0.20)
+    /// The Home agenda is forward-only, so "today" is its first row.
+    /// Anchoring a tall day at 20% could put its beginning above the
+    /// viewport and make the page appear to start on tomorrow. Keep the
+    /// current day at the top; the scroll-content inset below the Finder
+    /// header supplies the visual breathing room.
+    private let todayAnchor: UnitPoint = .top
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -95,6 +116,20 @@ struct TimelineView: View {
             //     so they participate in the scroll area
             //     (rather than capping the list at the edges).
             List {
+                // A concrete first row is more reliable than
+                // `.contentMargins(.top:)` on macOS List/NSTableView. The
+                // latter is represented as a scroll-view inset and could
+                // consume the first real day while reporting the viewport at
+                // its top. This row guarantees that TODAY is physically the
+                // first agenda section below the pinned Finder header, then
+                // scrolls away with the rest of the content.
+                Color.clear
+                    .frame(height: headerToFirstCardSpacing + topContentInset)
+                    .id("apollo-agenda-top-reserve")
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+
                 ForEach(dates, id: \.self) { date in
                     let dayStart = Calendar.current.startOfDay(for: date)
                     AgendaDaySection(
@@ -114,14 +149,17 @@ struct TimelineView: View {
                 }
             }
             .listStyle(.plain)
+            .id(forwardListResetToken)
             .scrollContentBackground(.hidden)
+            // Sem barra de rolagem na agenda da Home (pedido de 20/jul) —
+            // o scroll segue funcionando por trackpad/wheel.
+            .scrollIndicators(.hidden)
             // Match the previous `.padding(.top, 24)` /
             // `.padding(.bottom, 60)`. `contentMargins` adds
             // the space INSIDE the scroll area, so it scrolls
             // with the content (the empty space above the
             // first row scrolls upward and out of view, just
             // like padding inside the LazyVStack).
-            .contentMargins(.top, 28, for: .scrollContent)
             .contentMargins(.bottom, 60, for: .scrollContent)
             // NSScrollView introspect — listens to the
             // underlying NSClipView's `boundsDidChange`
@@ -131,11 +169,23 @@ struct TimelineView: View {
             // scroll offset up through SwiftUI's preference
             // machinery on every scroll tick.
             .background(
-                ScrollOffsetIntrospect { offset in
+                ScrollOffsetIntrospect(normalizeInitialOffset: forwardOnly) { offset in
+                    // Home is a forward-only agenda whose first row is always
+                    // today. Letting passive scroll telemetry mutate the
+                    // global selected date caused the following day to trigger
+                    // a second programmatic jump immediately after launch.
+                    // The legacy ±30-day timeline still synchronises its date
+                    // selection from the scroll position.
+                    guard !forwardOnly else { return }
                     // `offset` is `clipView.documentVisibleRect.minY`,
                     // i.e. how far down the user has scrolled.
                     guard Date() > scrollLockUntil else { return }
-                    let approxIndex = Int(((offset - 24) / sectionEstimate).rounded(.down))
+                    // Keep the date mapping anchored to the first real row.
+                    // Home adds a scroll-content reserve for the translucent
+                    // header; counting that reserve as a day used to advance
+                    // the selected date before the first row reached the top.
+                    let contentStart = headerToFirstCardSpacing + topContentInset
+                    let approxIndex = Int(((offset - contentStart) / sectionEstimate).rounded(.down))
                     let clamped     = max(0, min(approxIndex, dates.count - 1))
                     guard clamped != lastScrollIndex else { return }
                     lastScrollIndex = clamped
@@ -248,9 +298,15 @@ struct TimelineView: View {
                     suppressAutoScroll = true
                     appState.selectedDate = today
                 }
-                // App opens at the same position as clicking "Hoje" —
-                // today vertically positioned slightly above centre.
-                scrollToDay(today, proxy: proxy, animate: false, anchor: todayAnchor)
+                // In the forward-only Home agenda, today is already the first
+                // row. Let the recycled List rest at its natural origin so its
+                // top content margin stays intact. Programmatically scrolling
+                // a variable-height first row could advance the viewport to
+                // tomorrow. The legacy ±30-day timeline still needs an
+                // explicit jump to today.
+                if !forwardOnly {
+                    scrollToDay(today, proxy: proxy, animate: false, anchor: todayAnchor)
+                }
                 if !appState.events.isEmpty { didInitialScroll = true }
             }
             .onChange(of: appState.events.count) { _, _ in
@@ -261,7 +317,9 @@ struct TimelineView: View {
                 // otherwise land the timeline on whatever date
                 // the picker happens to be on instead of today.
                 let today = Calendar.current.startOfDay(for: Date())
-                scrollToDay(today, proxy: proxy, animate: true, anchor: todayAnchor)
+                if !forwardOnly {
+                    scrollToDay(today, proxy: proxy, animate: true, anchor: todayAnchor)
+                }
                 didInitialScroll = true
             }
             .onChange(of: appState.selectedDate) { old, new in
@@ -275,10 +333,16 @@ struct TimelineView: View {
                     suppressAutoScroll = true
                     appState.selectedDate = today
                 }
-                // "Hoje" puts today at `todayAnchor` (vertically centred,
-                // shifted 30% up) so the user sees what's just before AND
-                // just after right now.
-                scrollToDay(today, proxy: proxy, animate: true, anchor: todayAnchor)
+                // In Home, rebuilding the recycled List restores its natural
+                // origin: today plus the exact resting reserve below the
+                // Finder header. The legacy timeline still scrolls normally.
+                if forwardOnly {
+                    forwardListResetToken &+= 1
+                    pendingSelectedDate = nil
+                    lastScrollIndex = -1
+                } else {
+                    scrollToDay(today, proxy: proxy, animate: true, anchor: todayAnchor)
+                }
             }
             // Commit `pendingSelectedDate` to AppState only
             // when the live scroll has ended. ScrollStateObserver
@@ -289,7 +353,9 @@ struct TimelineView: View {
             // during active scroll instead of one-per-day-
             // boundary-crossed.
             .onReceive(ScrollStateObserver.shared.$isScrolling) { scrolling in
-                guard !scrolling, let date = pendingSelectedDate else { return }
+                guard !forwardOnly, !scrolling,
+                      let date = pendingSelectedDate
+                else { return }
                 if !Calendar.current.isDate(date, inSameDayAs: appState.selectedDate) {
                     suppressAutoScroll = true
                     appState.selectedDate = date
@@ -327,6 +393,7 @@ struct TimelineView: View {
 /// offset through SwiftUI's preference machinery on every
 /// scroll tick.
 private struct ScrollOffsetIntrospect: NSViewRepresentable {
+    let normalizeInitialOffset: Bool
     let onChange: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> NSView {
@@ -343,7 +410,9 @@ private struct ScrollOffsetIntrospect: NSViewRepresentable {
             var current: NSView? = probe.superview
             while let v = current {
                 if let scroll = v as? NSScrollView {
-                    context.coordinator.attach(to: scroll, callback: onChange)
+                    context.coordinator.attach(to: scroll,
+                                               normalizeInitialOffset: normalizeInitialOffset,
+                                               callback: onChange)
                     return
                 }
                 current = v.superview
@@ -364,23 +433,35 @@ private struct ScrollOffsetIntrospect: NSViewRepresentable {
         weak var clipView: NSClipView?
         var callback: ((CGFloat) -> Void)?
         var observer: NSObjectProtocol?
+        var normalizeInitialOffset = false
+        var restingOffset: CGFloat?
 
         deinit {
             if let observer { NotificationCenter.default.removeObserver(observer) }
         }
 
-        func attach(to scrollView: NSScrollView, callback: @escaping (CGFloat) -> Void) {
+        func attach(to scrollView: NSScrollView,
+                    normalizeInitialOffset: Bool,
+                    callback: @escaping (CGFloat) -> Void) {
             self.callback = callback
+            self.normalizeInitialOffset = normalizeInitialOffset
             let clip = scrollView.contentView
             self.clipView = clip
+            restingOffset = normalizeInitialOffset
+                ? clip.documentVisibleRect.minY
+                : nil
             clip.postsBoundsChangedNotifications = true
             self.observer = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
                 object: clip,
                 queue: .main
             ) { [weak self] _ in
-                guard let clip = self?.clipView else { return }
-                self?.callback?(clip.documentVisibleRect.minY)
+                guard let self, let clip = self.clipView else { return }
+                let raw = clip.documentVisibleRect.minY
+                let offset = self.normalizeInitialOffset
+                    ? raw - (self.restingOffset ?? raw)
+                    : raw
+                self.callback?(offset)
             }
         }
     }
@@ -438,7 +519,11 @@ private struct AgendaDaySection: View, Equatable {
         HStack(alignment: .top, spacing: 17) {
             dateColumn
 
-            VStack(spacing: 0) {
+            // The last pre-editorial event card is a rounded capsule with its
+            // own shadow. Restore the original 6pt breathing room so adjacent
+            // capsules never visually merge, while keeping the current day
+            // hierarchy and lazy-list behavior intact.
+            VStack(spacing: 6) {
                 if events.isEmpty {
                     Text("— Sem compromissos")
                         .font(Editorial.serif(13.5).italic())
@@ -519,49 +604,29 @@ private struct AgendaDaySection: View, Equatable {
     }
 
     private var dateColumn: some View {
-        // Editorial: small-caps weekday, an outsized serif
-        // numeral, and — for today — a cinnabar underline plus
-        // an italic "↳ hoje" cue. No filled accent disc.
-        VStack(alignment: .leading, spacing: 4) {
-            Text(date.formatted(.dateTime.weekday(.abbreviated)
-                .locale(Locale(identifier: "pt_BR")))
-                .uppercased()
-                .replacingOccurrences(of: ".", with: ""))
-                .font(Editorial.sans(10.5, .semibold))
-                .tracking(1.2)
+        // Flat calendar typography. Today is identified exclusively by the
+        // HOJE label; a surrounding tile looked like a second selection
+        // control and competed with the event cards beside it.
+        VStack(spacing: 1) {
+            Text(isToday ? "HOJE" : weekdayLabel)
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .tracking(0.7)
                 .foregroundStyle(isToday ? Editorial.accent : Editorial.inkMute)
 
             Text(date.formatted(.dateTime.day()))
-                .font(Editorial.serif(38))
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
                 .foregroundStyle(Editorial.ink)
-                .tracking(-1.4)
                 .monospacedDigit()
-                // Prototype `lineHeight: 0.95` — clip the serif's
-                // natural leading so the numeral doesn't inflate
-                // the row's height.
-                .padding(.vertical, -4)
-                .overlay(alignment: .bottom) {
-                    if isToday {
-                        Rectangle()
-                            .fill(Editorial.accent)
-                            .frame(height: 2)
-                            .offset(y: 6)
-                    }
-                }
-
-            if isToday {
-                Text("↳ hoje")
-                    .font(Editorial.serif(11).italic())
-                    .foregroundStyle(Editorial.accent)
-                    .padding(.top, 2)
-            }
         }
-        // 72 → 48: just wide enough for the serif day numeral +
-        // weekday, killing the unused trailing slack in the
-        // column (kept fixed so the time column stays aligned
-        // across single- and two-digit days).
-        .frame(width: 48, alignment: .leading)
+        .frame(width: 46, height: 46, alignment: .center)
         .padding(.top, 6)
+    }
+
+    private var weekdayLabel: String {
+        date.formatted(.dateTime.weekday(.abbreviated)
+            .locale(Locale(identifier: "pt_BR")))
+            .uppercased()
+            .replacingOccurrences(of: ".", with: "")
     }
 
     /// Click handler for `AgendaEventCard`. Lives on the
@@ -602,10 +667,6 @@ struct AgendaEventCard: View, Equatable {
     var onConvert: ((CalendarEvent) -> Void)? = nil
     var onCopyLink: ((CalendarEvent) -> Void)? = nil
     var onDelete: ((CalendarEvent) -> Void)? = nil
-
-    /// Editorial hover wash (not compared by `==` — @State is
-    /// intentionally excluded from the Equatable short-circuit).
-    @State private var hover = false
 
     /// PERF: Equatable short-circuits SwiftUI body re-evaluation
     /// when the event hasn't changed. With ~15-20 cards visible
@@ -690,127 +751,88 @@ struct AgendaEventCard: View, Equatable {
     }
 
     var body: some View {
-        // EXPERIMENT (REVERTED): tried replacing this view
-        // tree with a single `Canvas { context, size in … }`
-        // that drew background, border, title, subtitle, and
-        // avatar via `GraphicsContext` primitives. Hypothesis
-        // was that a single Canvas would dodge SwiftUI's
-        // per-child view diff overhead.
-        //
-        // Result was a clear REGRESSION (Animation Hitches
-        // trace):
-        //   • drawingGroup version: 20.6ms · 70% @ 60Hz
-        //   • Canvas version:       27.0ms · 56% @ 60Hz
-        //
-        // Canvas redraws from scratch every render: its
-        // closure has to call `context.resolve(Text…)` and
-        // `text.measure(in:)` per card per frame, which
-        // turns out to be more expensive than letting SwiftUI
-        // diff a tree that's already short-circuited by
-        // `.equatable()`. `.drawingGroup()` wins by caching
-        // the Metal texture between renders — when the
-        // event's fields don't change (which is true for
-        // the entire scroll), the cached texture is just
-        // re-blitted instead of re-rasterised. Reverted.
-        // Exact prototype `PEventLine`:
-        //   grid 88 | 1fr | auto · gap 16 · baseline ·
-        //   padding 10px 8px · margin 0 -8px · borderRadius 4 ·
-        //   borderTop 1px ruleSoft · hover → bg E.card.
-        // The 88pt time column WRAPS "HH:MM → HH:MM" to two lines
-        // ("09:30 →" / "10:00"). The title is serif 16/500 and
-        // WRAPS naturally (never tail-truncated); the location
-        // rides inline as an italic Caption and wraps onto its
-        // own line. The avatar is a SOLID colour disc.
         Button {
             onTap(event)
         } label: {
-            // spacing 0 + explicit leading paddings so the
-            // time→title gap (2) and title→avatar gap (16) are
-            // tuned independently — the prototype's uniform 16
-            // left too much air between the time and the title.
-            HStack(alignment: .firstTextBaseline, spacing: 0) {
-                // Times are ALWAYS stacked one above the other,
-                // matching the prototype's `PEventLine`. The old
-                // single `Text("HH:MM → HH:MM")` relied on the
-                // 88pt column being narrow enough to force a
-                // natural wrap — but 13 chars at sans 12 fit on a
-                // single line, so the wrap silently never fired.
-                // An explicit VStack guarantees the layout
-                // regardless of column width.
-                Group {
-                    if event.isAllDay {
-                        Text("Dia inteiro")
-                    } else {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text("\(timeStart) →")
-                            Text(timeEnd)
-                        }
-                    }
+            // Restored from the final pre-Editorial-Calm implementation
+            // (`474cdcb^`). It deliberately keeps the current data/state
+            // plumbing while bringing back the compact, colour-tinted event
+            // capsule that visually belongs with the current Apollo UI.
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(event.title)
+                        .font(.system(size: 13.8, weight: .semibold))
+                        .foregroundStyle(isAccepted ? Color.white : .primary)
+                        .strikethrough(isDeclined, color: .secondary)
+                        .lineLimit(1)
+
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(isAccepted
+                            ? Color.white.opacity(0.85)
+                            : .secondary)
+                        .lineLimit(1)
                 }
-                .font(Editorial.sans(12, .medium))
-                .monospacedDigit()
-                .tracking(0.3)
-                .foregroundStyle(isDeclined ? Editorial.inkMute
-                                            : Editorial.inkSoft)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                // Trimmed 10pt — was 88, now 78. Pulls the event
-                // title closer to the time column so the meta
-                // ("09:30 →") and the title read as a single
-                // unit instead of being separated by a wide gutter.
-                .frame(width: 78, alignment: .leading)
+                .opacity(isDeclined ? 0.6 : 1)
 
-                titleParagraph
-                    .multilineTextAlignment(.leading)
-                    // An event is at most 2 lines: the title wraps
-                    // once, then tail-truncates (the inline italic
-                    // location rides along and truncates with it).
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .padding(.leading, 2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
 
-                avatarDisc
-                    .padding(.leading, 16)
-                    .alignmentGuide(.firstTextBaseline) {
-                        $0[VerticalAlignment.center] + 5
-                    }
+                if let first = event.attendees.first {
+                    avatar(for: first)
+                }
             }
-            .opacity(isDeclined ? 0.45 : 1)
-            .padding(.vertical, 10)
-            // Fill the events column so the title (1fr) uses ALL
-            // remaining width — no dead gap before the avatar.
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Prototype `padding:10px 8px; margin:0 -8px` — the
-            // hover wash + top rule bleed 8pt into the gutter on
-            // each side while the content stays at the column
-            // edge (background/overlay extended, not the content).
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(hover ? Editorial.card : Color.clear)
-                    .padding(.horizontal, -8)
-            )
-            .overlay(alignment: .top) {
-                Rectangle().fill(Editorial.ruleSoft).frame(height: 1)
-                    .padding(.horizontal, -8)
+            .background {
+                if isAccepted {
+                    shape.fill(color)
+                } else {
+                    shape.fill(color.opacity(0.14))
+                }
             }
-            .contentShape(Rectangle())
+            .overlay {
+                if borderWidth > 0 {
+                    shape.strokeBorder(borderColour, lineWidth: borderWidth)
+                }
+            }
+            .drawingGroup()
+            .shadow(
+                color: isAccepted ? .black.opacity(0.18) : color.opacity(0.45),
+                radius: 4,
+                x: 0,
+                y: 1
+            )
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) { hover = hovering }
-        }
+        .interactivePillFeedback(
+            accent: color,
+            cornerRadius: 13,
+            glow: true,
+            hoverScale: 1.015,
+            pulseFromClick: true
+        )
         // Right-click context menu rendered via a native NSMenu
         // overlay rather than SwiftUI `.contextMenu`. The host
         // List would otherwise show its row-selection highlight
         // (blue rectangle around the WHOLE day section) on
-        // right-click; the AppKit overlay intercepts the right-
+        // right-click; the AppKit catcher intercepts the right-
         // click before the List sees it, so no row selection
         // is triggered. Left-clicks pass through untouched (the
-        // overlay's `hitTest` returns nil unless a right button
+        // catcher's `hitTest` returns nil unless a right button
         // is currently pressed).
-        .background(
+        //
+        // Mounted as an `.overlay` (in FRONT of the event Button),
+        // not `.background`: as a background it sat BEHIND the
+        // Button's hosting view, which won the hit-test for the
+        // right-click so `rightMouseDown` never reached the catcher
+        // and the menu silently never opened. In front, the catcher
+        // wins right-clicks (its hitTest returns self only while the
+        // secondary button is down) while still passing every
+        // left-click through to the Button below.
+        .overlay(
             EventRightClickCatcher { buildContextMenu() }
                 .allowsHitTesting(true)
         )
@@ -823,116 +845,62 @@ struct AgendaEventCard: View, Equatable {
         let m = NSMenu()
         m.autoenablesItems = false
 
-        let openItem = NSMenuItem(title: "Abrir evento",
-                                  action: nil, keyEquivalent: "")
-        openItem.image = NSImage(systemSymbolName: "doc.text.magnifyingglass",
-                                 accessibilityDescription: nil)
-        openItem.target = MenuActionTarget.shared
-        openItem.action = #selector(MenuActionTarget.perform(_:))
-        openItem.representedObject = { [event] in onTap(event) } as MenuAction
-        m.addItem(openItem)
+        func item(_ title: String, _ symbol: String,
+                  _ action: @escaping () -> Void) -> NSMenuItem {
+            let it = NSMenuItem(title: title, action: #selector(MenuActionBox.invoke),
+                                keyEquivalent: "")
+            it.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            let box = MenuActionBox(action)
+            it.target = box               // weak — retained by representedObject below
+            it.representedObject = box
+            return it
+        }
+
+        m.addItem(item("Abrir evento", "doc.text.magnifyingglass") { [event] in onTap(event) })
 
         let hasLink = event.meetingURL != nil
             || !(event.location ?? "").isEmpty
         if let onCopyLink, hasLink {
-            let copy = NSMenuItem(title: "Copiar link",
-                                  action: nil, keyEquivalent: "")
-            copy.image = NSImage(systemSymbolName: "link",
-                                 accessibilityDescription: nil)
-            copy.target = MenuActionTarget.shared
-            copy.action = #selector(MenuActionTarget.perform(_:))
-            copy.representedObject = { [event] in onCopyLink(event) } as MenuAction
-            m.addItem(copy)
+            m.addItem(item("Copiar link", "link") { [event] in onCopyLink(event) })
         }
 
         m.addItem(.separator())
 
         if let onConvert {
-            let conv = NSMenuItem(title: "Transformar em tarefa",
-                                  action: nil, keyEquivalent: "")
-            conv.image = NSImage(systemSymbolName: "arrow.2.squarepath",
-                                 accessibilityDescription: nil)
-            conv.target = MenuActionTarget.shared
-            conv.action = #selector(MenuActionTarget.perform(_:))
-            conv.representedObject = { [event] in onConvert(event) } as MenuAction
-            m.addItem(conv)
+            m.addItem(item("Transformar em tarefa", "arrow.2.squarepath") { [event] in onConvert(event) })
         }
 
         if let onDelete {
             m.addItem(.separator())
-            let del = NSMenuItem(title: "Excluir evento",
-                                 action: nil, keyEquivalent: "")
-            del.image = NSImage(systemSymbolName: "trash",
-                                accessibilityDescription: nil)
-            del.target = MenuActionTarget.shared
-            del.action = #selector(MenuActionTarget.perform(_:))
-            del.representedObject = { [event] in onDelete(event) } as MenuAction
-            m.addItem(del)
+            m.addItem(item("Excluir evento", "trash") { [event] in onDelete(event) })
         }
         return m
     }
 
-    /// Time pieces (the column wraps the two on its own).
-    private var timeStart: String {
-        event.isAllDay ? "Dia inteiro"
-            : SharedDateFormatters.shortTime24h.string(from: event.startDate)
-    }
-    private var timeEnd: String {
-        event.isAllDay ? ""
-            : SharedDateFormatters.shortTime24h.string(from: event.endDate)
-    }
+    @ViewBuilder
+    private func avatar(for attendee: CalendarEvent.Attendee) -> some View {
+        let initials = attendee.name
+            .split(separator: " ")
+            .prefix(2)
+            .compactMap { $0.first.map(String.init) }
+            .joined()
+            .uppercased()
 
-    /// Serif title + inline italic "· local", as one wrapping
-    /// paragraph (matches the prototype's `<span> + <Caption>`).
-    private var titleParagraph: Text {
-        var t = Text(event.title)
-            .font(Editorial.serif(16))
-            .foregroundColor(Editorial.ink)
-            .tracking(-0.15)
-        if isDeclined {
-            t = t.strikethrough(true, color: Editorial.inkMute)
-        }
-        if let loc = event.location, !loc.isEmpty {
-            t = t + Text("  ·  \(loc)")
-                .font(Editorial.serif(12.5).italic())
-                .foregroundColor(Editorial.inkSoft)
-        }
-        return t
-    }
+        ZStack {
+            Circle()
+                .fill(Color.accentColor.opacity(isAccepted ? 0.35 : 0.20))
 
-    /// Colour disc with a letter. Confirmed (RSVP accepted, or
-    /// no attendees so nothing to confirm) → SOLID fill, white
-    /// letter. Not yet confirmed → HOLLOW: paper fill, a 1.5pt
-    /// ring in the colour, the letter in the colour.
-    private var avatarDisc: some View {
-        let letter: String = {
-            if let n = event.attendees.first?.name,
-               let c = n.split(separator: " ").first?.first {
-                return String(c).uppercased()
-            }
-            return String(event.title.first ?? "•").uppercased()
-        }()
-        return Group {
-            if isAccepted {
-                Circle()
-                    .fill(color)
-                    .overlay(
-                        Text(letter)
-                            .font(Editorial.sans(9.5, .semibold))
-                            .foregroundStyle(.white)
-                    )
-            } else {
-                Circle()
-                    .fill(Editorial.paper)
-                    .overlay(Circle().strokeBorder(color, lineWidth: 1.5))
-                    .overlay(
-                        Text(letter)
-                            .font(Editorial.sans(9.5, .semibold))
-                            .foregroundStyle(color)
-                    )
-            }
+            Text(initials.isEmpty ? "?" : initials)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(isAccepted ? Color.white : Color.accentColor)
         }
-        .frame(width: 20, height: 20)
+        .frame(width: 22, height: 22)
+        .overlay(
+            Circle().strokeBorder(
+                isAccepted ? Color.white.opacity(0.5) : Color.clear,
+                lineWidth: 0.5
+            )
+        )
     }
 }
 
@@ -990,18 +958,26 @@ private struct CompactLabelStyle: LabelStyle {
 // pressed), so the SwiftUI Button below still receives normal
 // taps untouched.
 
-/// A closure stored in an NSMenuItem's `representedObject`.
-/// Retained boxed by reference inside the target's `perform`.
-typealias MenuAction = () -> Void
-
-/// Single shared @objc target used as the action receiver for
-/// every dynamically-built NSMenuItem. Reads the item's
-/// `representedObject` (the closure) and invokes it.
-final class MenuActionTarget: NSObject {
-    static let shared = MenuActionTarget()
-    @objc func perform(_ sender: NSMenuItem) {
-        (sender.representedObject as? MenuAction)?()
-    }
+/// Reference box for a closure stored in an NSMenuItem's
+/// `representedObject`.
+///
+/// BUGFIX: previously the closure was stored as a bare `() -> Void`
+/// (`typealias MenuAction`). `representedObject` is `Any?` bridged to
+/// the Objective-C `id` runtime, and a bare Swift function value does
+/// NOT round-trip through that bridge — reading it back with
+/// `as? () -> Void` returned `nil`, so every event context-menu item
+/// silently did nothing. Wrapping the closure in an `NSObject`
+/// subclass stores a real Objective-C object, which round-trips
+/// reliably and fires the action.
+final class MenuActionBox: NSObject {
+    let run: () -> Void
+    init(_ run: @escaping () -> Void) { self.run = run }
+    /// The menu item's `action`. Unambiguous `@objc` selector, and the
+    /// box is its OWN target — so there's no shared receiver and no
+    /// `representedObject`-bridging round-trip to fail. (The item also
+    /// keeps a STRONG ref to the box via `representedObject` because
+    /// `NSMenuItem.target` is `weak`.)
+    @objc func invoke() { run() }
 }
 
 struct EventRightClickCatcher: NSViewRepresentable {
@@ -1039,5 +1015,3 @@ struct EventRightClickCatcher: NSViewRepresentable {
         }
     }
 }
-
-

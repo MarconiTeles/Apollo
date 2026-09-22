@@ -6,6 +6,14 @@ import SwiftUI
 /// horizontal-bar UI in the dashboard — this popover handles the
 /// other four dimensions.
 struct TaskFilterPopover: View {
+    /// Where the filter UI is being rendered. Drives whether the
+    /// popover chrome (header, footer, background, shadow) is
+    /// painted — the embedded variant is for surfaces like the
+    /// sidebar's FILTROS section that already provide their own
+    /// container.
+    enum Mode { case popover, embedded }
+    var mode: Mode = .popover
+
     @EnvironmentObject var appState: AppState
     @Environment(\.windowSize) private var windowSize
     /// X position of the notch tip in the popover's local coordinate
@@ -42,7 +50,7 @@ struct TaskFilterPopover: View {
     }
 
     private static let popoverWidth: CGFloat = 340
-    private static let cornerRadius: CGFloat = 6
+    private static let cornerRadius: CGFloat = Editorial.popupRadius(6)
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
@@ -87,32 +95,24 @@ struct TaskFilterPopover: View {
     }
 
     var body: some View {
+        switch mode {
+        case .popover:  popoverBody
+        case .embedded: embeddedBody
+        }
+    }
+
+    /// The original popover layout — header + scrollable
+    /// sections + footer + popover chrome (background / border /
+    /// shadow). Used by the toolbar "Filtros" button.
+    private var popoverBody: some View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(Editorial.rule).frame(height: 1)
 
             ScrollablePopupContent(maxHeight: scrollMaxHeight) {
-                VStack(alignment: .leading, spacing: 18) {
-                    dueSection
-                    if !availablePriorities.isEmpty {
-                        prioritySection
-                    }
-                    if !appState.availableMembers.isEmpty {
-                        assigneeSection
-                    }
-                    if !availableTagNames.isEmpty {
-                        tagsSection
-                    }
-                    if !availableCreators.isEmpty {
-                        creatorSection
-                    }
-                    createdSection
-                    if hasClosedDates {
-                        closedSection
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                sectionsStack
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
             }
 
             Rectangle().fill(Editorial.rule).frame(height: 1)
@@ -120,14 +120,43 @@ struct TaskFilterPopover: View {
         }
         .frame(width: Self.popoverWidth)
         .fixedSize(horizontal: false, vertical: true)
-        // Editorial card (prototype `PFilters` / `PPopup`):
-        // near-neutral popup surface, hairline border, soft
-        // ambient shadow — no glass, no notch.
-        .background(Editorial.popup, in: shape)
-        .clipShape(shape)
-        .overlay { shape.strokeBorder(Editorial.rule, lineWidth: 1).allowsHitTesting(false) }
-        .shadow(color: .black.opacity(0.22), radius: 50, x: 0, y: 40)
-        .shadow(color: .black.opacity(0.08), radius: 24, x: 0, y: 8)
+        .popupGlass(in: shape)
+    }
+
+    /// Chrome-less variant for embedding inside another
+    /// container (e.g. the sidebar's FILTROS section). Skips
+    /// the header/footer/popover background — the host owns
+    /// the container, and any clear action is wired by the
+    /// embedding view if it wants one.
+    private var embeddedBody: some View {
+        sectionsStack
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
+    }
+
+    /// Shared filter sections — the same content rendered in
+    /// both popover and embedded modes so toggling a chip in
+    /// one surface mutates the SAME `appState.taskFilters`
+    /// (single source of truth).
+    ///
+    /// All 7 sections render UNCONDITIONALLY now — the previous
+    /// "hide if empty" gates were dropping Prioridade / Etiquetas
+    /// / Criado por / Data de encerramento from the sidebar when
+    /// the active list happened to have no priorities/tags/etc.
+    /// loaded. Each section's body already handles its own empty
+    /// state (e.g. "Digite para buscar entre N pessoas") so the
+    /// UI stays predictable.
+    private var sectionsStack: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            dueSection
+            prioritySection
+            assigneeSection
+            tagsSection
+            creatorSection
+            createdSection
+            closedSection
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Footer (prototype: Limpar · Aplicar)
@@ -431,6 +460,11 @@ struct TaskFilterPopover: View {
                 .font(Editorial.serif(14))
                 .foregroundStyle(Editorial.ink)
                 .focusEffectDisabled()
+                // TextField has a large intrinsic width while editing. Force
+                // it to consume only the remaining row width and let AppKit
+                // scroll the insertion point internally instead of widening
+                // the sidebar/popup.
+                .frame(minWidth: 0, maxWidth: .infinity)
             if hasQuery {
                 Button { query.wrappedValue = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -441,6 +475,8 @@ struct TaskFilterPopover: View {
                 .focusEffectDisabled()
             }
         }
+        .frame(maxWidth: .infinity)
+        .clipped()
         .padding(.vertical, 7)
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -487,14 +523,59 @@ struct TaskFilterPopover: View {
 
     // MARK: - Section container
 
+    /// Per-section expand state. Key = section title (the Folio
+    /// label). Default: empty set → every section starts
+    /// COLLAPSED (per user request: keep the FILTROS strip tidy
+    /// by default, expand on demand). Same `@State` for both
+    /// `.popover` and `.embedded` modes.
+    @State private var expandedSections: Set<String> = []
+
     private func sectionContainer<Content: View>(
         title: String,
-        systemImage _: String,
+        systemImage: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Folio(title)
-            content()
+        let expanded = expandedSections.contains(title)
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.spring(duration: 0.26, bounce: 0.18)) {
+                    if expanded {
+                        expandedSections.remove(title)
+                    } else {
+                        expandedSections.insert(title)
+                    }
+                }
+            } label: {
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Editorial.inkMute)
+                        .frame(width: 18, alignment: .center)
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Editorial.ink)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Editorial.inkFaint)
+                        .rotationEffect(.degrees(expanded ? 0 : -90))
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .focusEffectDisabled()
+
+            if expanded {
+                content()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .clipped()
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 6)
+            }
         }
     }
 
@@ -527,14 +608,20 @@ struct TaskFilterPopover: View {
                 Text(label)
                     .font(Editorial.sans(12, .medium))
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    // A result such as a full ClickUp display name can be
+                    // wider than the entire sidebar. Cap only the text — the
+                    // chip keeps its natural compact width for short labels.
+                    .frame(maxWidth: mode == .embedded ? 124 : 246,
+                           alignment: .leading)
             }
             .foregroundStyle(isActive ? c : Editorial.ink)
             .padding(.horizontal, 11)
             .padding(.vertical, 5)
-            .background(
-                isActive ? AnyShapeStyle(c.opacity(0.10)) : AnyShapeStyle(Editorial.page),
-                in: Capsule()
-            )
+            // Liquid Glass pill — tinted with the filter colour when
+            // active, neutral page glass at rest.
+            .liquidGlassCapsule(tint: isActive ? c : Editorial.page,
+                                tintOpacity: isActive ? 0.18 : 0.55)
             .overlay(
                 Capsule().strokeBorder(
                     isActive ? c : Editorial.rule,
@@ -544,6 +631,7 @@ struct TaskFilterPopover: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .glassHover()
     }
 
     private func chipAvatar(_ m: CUMember) -> some View {
