@@ -1,5 +1,7 @@
 # Apollo 2.0.0 (98) — integração do PR #1
 
+Ajustes posteriores solicitados pelo usuário: [tamanho de Anexar, diálogo opaco e arrasto sem expansão](UI_ADJUSTMENTS_2026-09-22.md). As auditorias abaixo são o retrato do merge anterior a esses ajustes.
+
 ## Contrato final
 
 Base exclusiva: **Apollo estável 1.9.9 (97)**, commit `dcf22830944bbe93f6787a08eff3c90077b4d2d8`. O aplicativo instalado também foi conferido como 1.9.9 (97). Nenhum código ou controle de DEV-01 foi incorporado ao resultado final.

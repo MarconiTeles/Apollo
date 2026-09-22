@@ -1783,7 +1783,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         // Responsáveis. Aqui a cápsula continua "ANEXAR" e apenas ROTEIA
         // para o lote quando há seleção — a contagem vai no tooltip e no
         // rótulo de acessibilidade, onde informa sem poluir.
-        media.title = fileDropActive ? "ARRASTE AQUI" : label
+        media.title = label
         if fileDropActive {
             // Alvo de soltura: fundo laranja translúcido e contorno
             // tracejado, o mesmo vocabulário que a folha de lote usa
@@ -1958,23 +1958,18 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
             roundedRect: CGRect(origin: .zero, size: review.frame.size),
             cornerWidth: 13, cornerHeight: 13, transform: nil)
 
-        // No estado de soltura a cápsula cresce só o necessário para
-        // caber "ARRASTE AQUI", e para a DIREITA: à esquerda fica o
-        // título, que já vive apertado e passaria a ser encoberto.
-        let dropGrowth: CGFloat = fileDropActive ? 28 : 0  // só o alvo de soltura cresce
-        let dropHeight: CGFloat = fileDropActive ? 30 : 26
-        media.frame = NSRect(x: m.mediaX,
-                             y: centerY - dropHeight / 2,
-                             width: m.mediaWidth + dropGrowth,
-                             height: dropHeight)
+        // O arrasto destaca a cápsula sem alterar seu rótulo ou invadir
+        // a coluna de prioridade: a geometria é a mesma em ambos os estados.
+        media.frame = NSRect(x: m.mediaX, y: centerY - 13,
+                             width: m.mediaWidth, height: 26)
         mediaTrackLayer.frame = media.frame
         mediaDashLayer.isHidden = !fileDropActive
         if fileDropActive {
             mediaDashLayer.frame = media.frame
             mediaDashLayer.path = CGPath(roundedRect: CGRect(origin: .zero,
                                                              size: media.frame.size),
-                                         cornerWidth: dropHeight / 2,
-                                         cornerHeight: dropHeight / 2,
+                                         cornerWidth: 13,
+                                         cornerHeight: 13,
                                          transform: nil)
             mediaDashLayer.strokeColor = NSColor.systemOrange.cgColor
         }

@@ -10,8 +10,8 @@ import SwiftUI
 /// dele fica o próprio app, e a folha só abre depois da escolha, já na
 /// etapa certa.
 ///
-/// Superfície `floatingPanelGlass` dos painéis e raio de popup do tema
-/// (o mesmo da folha de anexo que abre em seguida).
+/// Fundo opaco do tema para que o conteúdo da lista não atravesse
+/// a pergunta e suas opções; mantém o raio de popup existente.
 ///
 /// O título faz a pergunta; embaixo, as duas escolhas
 /// lado a lado, cada uma só com o ícone à esquerda do nome — a pessoa
@@ -57,6 +57,14 @@ struct TaskMediaDropDecisionOverlay: View {
         RoundedRectangle(cornerRadius: Editorial.popupRadius(9), style: .continuous)
     }
 
+    private var cardBackground: some View {
+        shape.fill(Editorial.popup)
+            .overlay {
+                shape.strokeBorder(Editorial.rule, lineWidth: 0.5)
+            }
+            .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
+    }
+
     private var loadingCard: some View {
         VStack(spacing: 12) {
             ProgressView().controlSize(.small)
@@ -66,7 +74,7 @@ struct TaskMediaDropDecisionOverlay: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 30)
-        .floatingPanelGlass(in: shape)
+        .background(cardBackground)
     }
 
     private var decisionCard: some View {
@@ -108,7 +116,7 @@ struct TaskMediaDropDecisionOverlay: View {
         .padding(.horizontal, 14)
         .padding(.top, 18)
         .padding(.bottom, 8)
-        .floatingPanelGlass(in: shape)
+        .background(cardBackground)
     }
 }
 

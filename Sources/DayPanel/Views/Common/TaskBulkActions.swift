@@ -559,7 +559,8 @@ struct TaskBulkToolbar: View {
             if let onAttach {
                 Button(action: onAttach) {
                     Label("Anexar", systemImage: "paperclip")
-                        .font(Editorial.sans(11, .medium))
+                        // Match the native Menu labels beside this plain button.
+                        .font(.system(size: NSFont.systemFontSize, weight: .medium))
                         .padding(.horizontal, 10)
                         .frame(height: 32)
                         .contentShape(Capsule(style: .continuous))

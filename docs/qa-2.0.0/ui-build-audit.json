@@ -1,0 +1,21 @@
+{
+  "base_commit": "6e4de9a1201d503d139989e71472eaf53a620b30",
+  "version": "2.0.0",
+  "build": "98",
+  "build_command": "./build.sh release --universal",
+  "build_succeeded": true,
+  "signature_verification": "codesign --verify --deep --strict passed",
+  "architectures": "x86_64 arm64",
+  "binary_sha256": "c2c4545c32f3c269d0b72cd4ce01cded9dd6b029c1e80c532c41a27f97c148dd",
+  "signing": [
+    "Timestamp=22 Sep 2026 at 18:58:52",
+    "TeamIdentifier=CU544M36UD"
+  ],
+  "source_sha256": {
+    "Sources/DayPanel/Views/Common/TaskBulkActions.swift": "4d16ea8a3bf9d861d823b348a25b12d2d2aac21644ba92275ea44e33bf4b7478",
+    "Sources/DayPanel/Views/Home/MyTasksAppKitList.swift": "3dce3929a49895570e580f928dd054d21aef9551128fa37ae1560559aa4b962e",
+    "Sources/DayPanel/Views/Home/TaskMediaDropDecisionCard.swift": "17b015da48e2aad95791b4658fad1e2930181a71bcf2aeed6fb423ff743eddc1"
+  },
+  "visual_acceptance": "pending user inspection",
+  "external_publication": false
+}
