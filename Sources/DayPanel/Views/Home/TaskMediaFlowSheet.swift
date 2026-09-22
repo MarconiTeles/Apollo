@@ -34,7 +34,7 @@ enum TaskMediaDropChoice {
 
 struct TaskMediaFlowSheet: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.dismiss) private var dismiss
+    let dismiss: () -> Void
     @ObservedObject var store: TaskMediaTransferStore
     let request: TaskMediaFlowRequest
 
@@ -150,6 +150,7 @@ struct TaskMediaFlowSheet: View {
         panelChrome
             .frame(width: 680, height: 540)
             .task { await start() }
+            .onExitCommand(perform: dismiss)
             .onAppear { appState.swiftUIPopupOpen = true }
             .onDisappear { appState.swiftUIPopupOpen = false }
     }

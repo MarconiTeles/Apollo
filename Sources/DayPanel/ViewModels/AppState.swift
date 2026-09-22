@@ -312,6 +312,23 @@ final class AppState: ObservableObject {
     @Published var detailTask:         CUTask?       = nil
     @Published var detailTaskOrigin:   CGRect        = .zero
 
+    // Media popups live in the window overlay, like task details, so their
+    // in/out motion is not replaced by macOS's top-attached sheet animation.
+    @Published var mediaFlowRequest: TaskMediaFlowRequest? {
+        didSet { recomputeAnyPopupOpen() }
+    }
+    @Published var bulkMediaRequest: TaskBulkMediaRequest? {
+        didSet { recomputeAnyPopupOpen() }
+    }
+
+    func closeMediaFlow() {
+        withAnimation(TaskMediaPopupMotion.removal) { mediaFlowRequest = nil }
+    }
+
+    func closeBulkMediaFlow() {
+        withAnimation(TaskMediaPopupMotion.removal) { bulkMediaRequest = nil }
+    }
+
     /// Stable, surface-provided order for the task-detail previous/next
     /// controls. My Tasks and Board populate this from their exact visible
     /// order (after list scope, filters and sorting), so navigation always
@@ -969,6 +986,7 @@ final class AppState: ObservableObject {
 
     private func recomputeAnyPopupOpen() {
         let next = swiftUIPopupOpen || commandPaletteOpen
+            || mediaFlowRequest != nil || bulkMediaRequest != nil
         if anyPopupOpen != next { anyPopupOpen = next }
     }
 

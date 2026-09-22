@@ -6,7 +6,7 @@ import SwiftUI
 /// A single review keeps the faster direct-open behavior in the AppKit row.
 struct TaskReviewsFlowSheet: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.dismiss) private var dismiss
+    let dismiss: () -> Void
     @ObservedObject private var store = TaskReviewUpdateStore.shared
 
     let request: TaskReviewQueueRequest
@@ -124,6 +124,7 @@ struct TaskReviewsFlowSheet: View {
             appState.swiftUIPopupOpen = true
         }
         .onDisappear { appState.swiftUIPopupOpen = false }
+        .onExitCommand(perform: dismiss)
         .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.86),
                    value: updates.map(\.activeAtt))
         .onChange(of: updates.count) { _, count in

@@ -499,6 +499,9 @@ struct ContentView: View {
                 TaskDetailOverlay(windowSize: windowGeo.size)
                 .zIndex(1000)
 
+                TaskMediaPopupOverlay(windowSize: windowGeo.size)
+                    .zIndex(2100)
+
                 // Subtask overlay popup — mounts ON TOP of the
                 // parent task popup when the user drills into a
                 // subtask from inside the parent. The parent

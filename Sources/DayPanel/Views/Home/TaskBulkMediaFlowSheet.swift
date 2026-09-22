@@ -34,6 +34,7 @@ struct TaskBulkMediaRequest: Identifiable {
     var initialURLs: [URL] = []
     /// Por onde chegam os arquivos soltos DEPOIS da abertura.
     var inbox: TaskBulkMediaInbox = TaskBulkMediaInbox()
+    var onBackgroundDrop: (([NSItemProvider]) -> Bool)?
 }
 
 /// Envio de arquivo(s) para várias tarefas de uma vez.
@@ -48,12 +49,14 @@ struct TaskBulkMediaRequest: Identifiable {
 /// legibilidade que esta tela precisa entregar.
 struct TaskBulkMediaFlowSheet: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.dismiss) private var dismiss
+    let dismiss: () -> Void
     @ObservedObject var store: TaskMediaTransferStore
     @StateObject private var coordinator: TaskBulkMediaCoordinator
     let request: TaskBulkMediaRequest
 
-    init(store: TaskMediaTransferStore, request: TaskBulkMediaRequest) {
+    init(store: TaskMediaTransferStore, request: TaskBulkMediaRequest,
+         dismiss: @escaping () -> Void) {
+        self.dismiss = dismiss
         self.store = store
         self.request = request
         _targets = State(initialValue: request.tasks)
@@ -209,7 +212,7 @@ struct TaskBulkMediaFlowSheet: View {
         // app atrás, e cai para vibrancy/sólido sozinho em máquina Intel
         // ou com Reduzir Transparência ligado.
         .floatingPanelGlass(in: outerShape)
-        .interactiveDismissDisabled(isSending)
+        .onExitCommand { if !isSending { dismiss() } }
         .task { await start() }
         // Arquivos soltos na lista depois que a folha abriu chegam por
         // aqui. Consome e limpa, para um mesmo arquivo não entrar duas

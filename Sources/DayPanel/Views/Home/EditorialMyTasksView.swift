@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
 
 struct EditorialMyTasksView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.windowSize) private var windowSize
 
     /// Status names the user has collapsed manually. Empty by
     /// default → every group renders expanded. Stored in
@@ -27,16 +28,29 @@ struct EditorialMyTasksView: View {
     /// Gives SwiftUI one responsive frame to paint a truthful skeleton
     /// before constructing the recycled task rows on route/list changes.
     @State private var listMountReady = false
-    @State private var mediaFlowRequest: TaskMediaFlowRequest?
+    private var mediaFlowRequest: TaskMediaFlowRequest? {
+        get { appState.mediaFlowRequest }
+        nonmutating set {
+            withAnimation(TaskMediaPopupMotion.insertion) {
+                appState.mediaFlowRequest = newValue
+            }
+        }
+    }
     /// Vídeo solto numa tarefa, esperando a resposta de "adicionar ou
     /// substituir?" — que aparece por cima da lista, não numa folha.
     @State private var pendingDrop: PendingMediaDrop?
-    @State private var bulkMediaRequest: TaskBulkMediaRequest?
+    private var bulkMediaRequest: TaskBulkMediaRequest? {
+        get { appState.bulkMediaRequest }
+        nonmutating set {
+            withAnimation(TaskMediaPopupMotion.insertion) {
+                appState.bulkMediaRequest = newValue
+            }
+        }
+    }
     /// Verdadeiro enquanto um arquivo do Finder paira sobre a lista.
     @State private var fileDragOverList = false
     /// Canal por onde os arquivos soltos chegam à folha já aberta.
     @StateObject private var bulkInbox = TaskBulkMediaInbox()
-    @ObservedObject private var reviewQueuePresenter = TaskReviewQueuePresenter.shared
     @ObservedObject private var columnLayout = MyTasksColumnLayout.shared
     /// The column boundary currently hovered or dragged — drives the accent guide.
     @State private var activeBoundary: MyTasksColumnLayout.Column?
@@ -99,11 +113,12 @@ struct EditorialMyTasksView: View {
                     onCancel: { pendingDrop = nil })
                 .onAppear { appState.swiftUIPopupOpen = true }
                 .onDisappear { appState.swiftUIPopupOpen = false }
-                .transition(.opacity)
+                .transition(TaskMediaPopupMotion.transition(windowSize: windowSize))
                 .zIndex(4)
             }
         }
-        .animation(.easeOut(duration: 0.16), value: pendingDrop == nil)
+        .animation(pendingDrop == nil ? TaskMediaPopupMotion.removal : TaskMediaPopupMotion.insertion,
+                   value: pendingDrop == nil)
         .background(Editorial.paper)
         .background {
             EscapeSelectionMonitor(isActive: !selectedTaskIds.isEmpty,
@@ -129,10 +144,6 @@ struct EditorialMyTasksView: View {
                 listMountReady = true
             }
         }
-        .sheet(item: $mediaFlowRequest) { request in
-            TaskMediaFlowSheet(store: appState.taskMediaTransfers, request: request)
-                .environmentObject(appState)
-        }
         // Arrasto de arquivo sobre a lista com seleção múltipla ativa:
         // a área se destaca durante o sobrevoo e o popup abre só no
         // drop, já com todos os arquivos.
@@ -147,14 +158,6 @@ struct EditorialMyTasksView: View {
         .onChange(of: fileDragOverList) { _, hovering in
             guard hovering, selectedTasks.count >= 2 else { return }
             presentBulkMedia()
-        }
-        .sheet(item: $bulkMediaRequest) { request in
-            TaskBulkMediaFlowSheet(store: appState.taskMediaTransfers, request: request)
-                .environmentObject(appState)
-        }
-        .sheet(item: $reviewQueuePresenter.request) { request in
-            TaskReviewsFlowSheet(request: request)
-                .environmentObject(appState)
         }
         .apolloStudioNode("tasks.page",
                           title: "Página de tarefas",
@@ -438,7 +441,7 @@ struct EditorialMyTasksView: View {
             dropChoice: choice,
             onBackToDropDecision: {
                 // Espera a folha sair antes de perguntar de novo.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                     var again = PendingMediaDrop(task: drop.task, urls: drop.urls)
                     again.isLoading = false
                     pendingDrop = again
@@ -458,7 +461,8 @@ struct EditorialMyTasksView: View {
             tasks: selected,
             candidates: orderedVisibleTasks.filter { !chosen.contains($0.id) },
             initialURLs: initialURLs,
-            inbox: bulkInbox
+            inbox: bulkInbox,
+            onBackgroundDrop: handleListFileDrop
         )
     }
 

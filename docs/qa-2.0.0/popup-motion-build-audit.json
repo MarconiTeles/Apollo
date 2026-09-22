@@ -1,0 +1,25 @@
+{
+  "base_commit": "d6d8b379face43e7bc95cea175fedaf0167614c6",
+  "version": "2.0.0 (98)",
+  "architectures": "x86_64 arm64",
+  "build": "./build.sh release --universal passed",
+  "signature": "codesign --verify --deep --strict passed",
+  "tests": {
+    "passed": 195,
+    "skipped_external": 4,
+    "failed": 0
+  },
+  "binary_sha256": "fcdaa7c437814cbe13abff25c12088d221920f31a421253248cb88af01e634dd",
+  "source_sha256": {
+    "Sources/DayPanel/Services/ReviewPresenter.swift": "30d5c4f7dbb0425141f32bf9c69b3e055a08b9232731e29c932ccd5ffbc9ccb0",
+    "Sources/DayPanel/ViewModels/AppState.swift": "a43ae2b22a95dcb47470b669c280d036533485f4fdd5169b596f0a49b244dace",
+    "Sources/DayPanel/Views/ContentView.swift": "fd3f10d837e56831fcdc3f5d7e5b1749c7709ef5b65b20e9e23a92939b753448",
+    "Sources/DayPanel/Views/Home/EditorialMyTasksView.swift": "57c0a480bcb72043238f8bf4672db294235d6995e88482400d4024ce382a9359",
+    "Sources/DayPanel/Views/Home/TaskBulkMediaFlowSheet.swift": "a1e8cdafd0beaa7b445fd69b3e8b99a9ddc268e42d059a8b6d8e47a762843627",
+    "Sources/DayPanel/Views/Home/TaskMediaFlowSheet.swift": "7276b4073e00490409b206489d708a9d022bde1dc4abe9580ef982b6b874d9f0",
+    "Sources/DayPanel/Views/Home/TaskReviewsFlowSheet.swift": "c1ba18de89928624b24b30c6990439a8b87943f944c756b1c5835c31f95855fe",
+    "Sources/DayPanel/Views/Home/TaskMediaPopupOverlay.swift": "3e8e20882d51a02fb0992e89c35ec6c64f683a82fef39fa5ad83b5b013983ef8"
+  },
+  "visual_acceptance": "pending user inspection; macOS accessibility automation disabled",
+  "published": false
+}

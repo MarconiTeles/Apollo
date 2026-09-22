@@ -72,7 +72,13 @@ final class TaskReviewQueuePresenter: ObservableObject {
     private init() {}
 
     func present(task: CUTask, updates: [TaskReviewUpdateStore.Update]) {
-        request = TaskReviewQueueRequest(task: task, updates: updates)
+        withAnimation(TaskMediaPopupMotion.insertion) {
+            request = TaskReviewQueueRequest(task: task, updates: updates)
+        }
+    }
+
+    func dismiss() {
+        withAnimation(TaskMediaPopupMotion.removal) { request = nil }
     }
 }
 
