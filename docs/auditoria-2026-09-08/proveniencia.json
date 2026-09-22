@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-08",
+  "source_repo": "/Users/marconi/Documents/PROJETOS/AGENTS/Apollo/apollo",
+  "branch": "redesign/editorial-plus",
+  "commit": "dcf22830944bbe93f6787a08eff3c90077b4d2d8",
+  "distribution_repo": "/Users/marconi/Documents/PROJETOS/AGENTS/Apollo/t3",
+  "distribution_commit": "698816f552210e4bc9675386559187d1f82b65cd",
+  "installed_app": "/Applications/Apollo.app",
+  "installed_version": "1.9.9",
+  "installed_build": "97",
+  "toolchain": "Apple Swift 6.3.3 / Xcode 26.6",
+  "source_hashes": {
+    "Package.swift": "1342db9c968dbcf8925bab0a098bf47549ac21a818033a160f1cc816bbcf5cb1",
+    "Sources/DayPanel/ViewModels/AppState.swift": "7e0d54dbaa35e6cee31b788a742312e63d0b9dc92434b0c4c0ccf5bc4b05cfdb",
+    "Sources/DayPanel/Views/Home/MyTasksAppKitList.swift": "90da9c31432278ef989ce84c8ee38b67d42874394912f812fa9e80ead29b9323",
+    "Sources/DayPanel/Views/Home/EditorialMyTasksView.swift": "7ca13b25681d5fdd3dd53040c0293877834932cd93d89131c9d79b45c32bec1e",
+    "Sources/DayPanel/Services/OfflineQueue.swift": "e260dc213368ced2ce5e21fea4038e5c2334c1b30deef8678bc3734a9e1ebc24",
+    "Sources/DayPanel/Services/ClickUpService.swift": "bdb76617c3db4f7e552d9121303e737cfa0a12f675685e16fb12eb4e2b6bc818",
+    "Sources/DayPanel/Services/TaskMediaTransferStore.swift": "8c454b1b8ed8ac90a10e1825366edd30ab71c68841608bfd91fc680e13bd29ae",
+    "Sources/DayPanel/Views/Common/CachedAvatar.swift": "74dacb1ad368ae057b02778b672d9fa015549a733440ce56ca52f6109dfcaa2a"
+  },
+  "method": "Static code review, 28 existing focused tests, 4 diagnostic tests in Debug using the real AppState, passive sample of running app. No real ClickUp mutations; no UI drag reproduction; no release performance baseline."
+}

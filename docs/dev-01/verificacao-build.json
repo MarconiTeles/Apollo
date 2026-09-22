@@ -1,0 +1,24 @@
+{
+  "verified_at": "2026-09-08T17:36:49.506657+00:00",
+  "installed_app": "/Applications/Apollo DEV-01.app",
+  "manifest": {
+    "base_commit": "cd52667400cfa864944f701dc7554fa8368ecc37",
+    "branch": "dev/01-optimization",
+    "build_label": "DEV-01",
+    "configuration": "release",
+    "review_source_commit": "5256f8644633131044ba9f6142f120b0b8be6475",
+    "version": "1.9.9 (9801)",
+    "compiled_main_sha256": "71c0eb5bfd1d84954ed1c7f916b2037799b9baf89caf2e6ed6e7a288078dac2d",
+    "compiled_review_sha256": "e136a96d651da5be559b97241985a54e5d84fc84d273138d54554bac6992befd",
+    "resource_source": "/Applications/Apollo.app",
+    "source_dirty": false
+  },
+  "installed_executable_sha256": "7c2f713290baf1f3dbac8371d0994efb185ffbde6a3a8de50eea261184f06100",
+  "signature_verification": "codesign --verify --deep --strict passed",
+  "debug_tests": 143,
+  "release_tests_before_final_window_adjustment": 142,
+  "compiler_warning_locations": 34,
+  "compiler_concurrency_warning_locations_textual": 12,
+  "ui_observed": "macOS 27.0, dark and light; fixture data, no real ClickUp mutation",
+  "pending": "Live ClickUp authentication and gesture acceptance; controlled Instruments measurements; remaining cold catalog I/O and request priorities."
+}
