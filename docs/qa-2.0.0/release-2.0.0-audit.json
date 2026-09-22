@@ -1,0 +1,36 @@
+{
+  "version": "2.0.0",
+  "build": 98,
+  "source_commit": "2e50a9e6d3c64e996e133b7d305014dceb731c6b",
+  "review_commit": "5256f8644633131044ba9f6142f120b0b8be6475",
+  "artifacts": {
+    "dist/Apollo-2.0.0.zip": {
+      "bytes": 50770414,
+      "sha256": "d81836042ae64dfcfa17070e740ca79212417738d752d9422552db342ca48845"
+    },
+    "dist/Apollo-2.0.0.dmg": {
+      "bytes": 58434702,
+      "sha256": "a58873ed79d7deff4f55191d098ba3863c2f47eda5a98c9762ee417d8b95d598"
+    }
+  },
+  "sparkle_signature_verified_against": "installed stable Apollo 1.9.9 public key",
+  "codesign": "passed",
+  "gatekeeper": "accepted",
+  "staple": "app and DMG validated",
+  "channel": "public",
+  "published": true,
+  "tests": {
+    "executed": 201,
+    "passed": 197,
+    "skipped_external": 4,
+    "failed": 0
+  },
+  "notary_app_id": "5672728d-86f5-460c-9208-9b1802c328be",
+  "notary_final_signed_dmg_id": "2eb32b77-9947-4e9d-bdcd-04ef4d379d9d",
+  "archive_content_verification": "Final ZIP extracted and final DMG mounted read-only: approved executable hash, nested signatures and staple verified",
+  "release_url": "https://github.com/MarconiTeles/Apollo/releases/tag/v2.0.0",
+  "published_at": "2026-09-22T23:26:48Z",
+  "remote_asset_sha256": "Both GitHub uploaded asset digests match local SHA-256",
+  "public_zip_http_status": 200,
+  "public_feed_verification": "pending propagation after this commit"
+}

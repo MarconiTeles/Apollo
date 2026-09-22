@@ -6,7 +6,9 @@ Movimento posterior dos popups: [entrada por baixo e saída para baixo](POPUP_MO
 
 Controles adicionados posteriormente por solicitação explícita: [Minhas tarefas e + Tarefa na toolbar](TOOLBAR_CONTROLS_2026-09-22.md).
 
-Ajuste visual posterior do filtro: [cápsula de ação azul e switch verde](TOGGLE_MATERIAL_2026-09-22.md).
+Ajuste visual posterior do filtro: [cápsula de ação azul e switch azul claro](TOGGLE_MATERIAL_2026-09-22.md).
+
+Publicação autorizada pelo usuário: [release 2.0.0](RELEASE_2.0.0_2026-09-22.md).
 
 ## Contrato do merge inicial
 
