@@ -12,24 +12,30 @@ REVIEW_PACKAGE_DIR="../apollo-review-swift"
 
 if [ "$UNIVERSAL" = "--universal" ]; then
     echo "Building $APP_DISPLAY_NAME ($CONFIG, universal arm64 + x86_64)..."
-    # Build each slice separately, then lipo them together. We
-    # avoid `swift build --arch arm64 --arch x86_64` because its
-    # output directory layout shifts between Swift toolchain
-    # versions; per-arch builds keep the path stable.
-    swift build -c "$CONFIG" --arch arm64
-    swift build -c "$CONFIG" --arch x86_64
-    BIN_ARM64=".build/arm64-apple-macosx/$CONFIG/DayPanel"
-    BIN_X86="\
-.build/x86_64-apple-macosx/$CONFIG/DayPanel"
+    # SwiftPM's output layout depends on the build engine. Query it rather
+    # than assuming .build/<triple>/release. Some engines reuse one product
+    # directory across architectures, so preserve each slice immediately.
     BIN_DIR="build/universal"
-    BIN="$BIN_DIR/DayPanel"
     mkdir -p "$BIN_DIR"
+    BIN="$BIN_DIR/DayPanel"
+    BIN_ARM64="$BIN_DIR/DayPanel-arm64"
+    BIN_X86="$BIN_DIR/DayPanel-x86_64"
+    for ARCH in arm64 x86_64; do
+        swift build -c "$CONFIG" --arch "$ARCH"
+        SLICE_DIR="$(swift build -c "$CONFIG" --arch "$ARCH" --show-bin-path)"
+        cp "$SLICE_DIR/DayPanel" "$BIN_DIR/DayPanel-$ARCH"
+        lipo -verify_arch "$ARCH" "$BIN_DIR/DayPanel-$ARCH"
+    done
     lipo -create "$BIN_ARM64" "$BIN_X86" -output "$BIN"
-    swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --arch arm64
-    swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --arch x86_64
-    REVIEW_BIN_ARM64="$REVIEW_PACKAGE_DIR/.build/arm64-apple-macosx/$CONFIG/ApolloReview"
-    REVIEW_BIN_X86="$REVIEW_PACKAGE_DIR/.build/x86_64-apple-macosx/$CONFIG/ApolloReview"
+    REVIEW_BIN_ARM64="$BIN_DIR/ApolloReview-arm64"
+    REVIEW_BIN_X86="$BIN_DIR/ApolloReview-x86_64"
     REVIEW_BIN="$BIN_DIR/ApolloReview"
+    for ARCH in arm64 x86_64; do
+        swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --arch "$ARCH"
+        SLICE_DIR="$(swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --arch "$ARCH" --show-bin-path)"
+        cp "$SLICE_DIR/ApolloReview" "$BIN_DIR/ApolloReview-$ARCH"
+        lipo -verify_arch "$ARCH" "$BIN_DIR/ApolloReview-$ARCH"
+    done
     lipo -create "$REVIEW_BIN_ARM64" "$REVIEW_BIN_X86" -output "$REVIEW_BIN"
     echo "  Universal slices:"
     lipo -info "$BIN" | sed 's/^/    /'

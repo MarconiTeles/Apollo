@@ -66,11 +66,12 @@ enum TaskMediaRouting {
             return destination
         }
 
-        // Menos de duas tarefas: não há para onde rotear.
+        // A single task needs no automatic matching, but an explicit pending
+        // decision (including a removed destination) must remain pending.
         guard tasks.count >= 2 else {
             return files.reduce(into: [:]) { result, file in
                 let decision = decided[file.id].map(sanitized)
-                result[file.id] = (decision?.taskId != nil) ? decision! : .all
+                result[file.id] = decision ?? (tasks.isEmpty ? .unresolved : .all)
             }
         }
 
@@ -86,14 +87,17 @@ enum TaskMediaRouting {
         }
 
         var matched: [UUID: String] = [:]
+        var hasAmbiguity = false
         for file in undecided {
-            if let taskId = TaskMediaNameMatcher.resolve(fileName: file.name,
-                                                         tasks: tasks).suggestedTaskId {
-                matched[file.id] = taskId
-            }
+            let resolution = TaskMediaNameMatcher.resolve(fileName: file.name, tasks: tasks)
+            hasAmbiguity = hasAmbiguity || resolution.isAmbiguous
+            if let taskId = resolution.suggestedTaskId { matched[file.id] = taskId }
         }
 
-        let routed = !matched.isEmpty || resolved.values.contains { $0.taskId != nil }
+        // An ambiguous match is evidence of routing intent, never permission
+        // to broadcast. An explicit manual `.all` remains authoritative.
+        let routed = hasAmbiguity || !matched.isEmpty
+            || resolved.values.contains { $0.taskId != nil || $0.isUnresolved }
 
         for file in undecided {
             if let taskId = matched[file.id] {
@@ -220,7 +224,7 @@ enum TaskMediaDropDecision {
         var replacements: [UUID: URL] = [:]
         var leftovers: [UUID] = []
         for file in dropped {
-            if let assetId = choices[file.id] ?? nil {
+            if let assetId = choices[file.id] ?? nil, replacements[assetId] == nil {
                 replacements[assetId] = file.url
             } else {
                 leftovers.append(file.id)

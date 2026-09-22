@@ -382,6 +382,20 @@ enum TaskMediaPlannerError: LocalizedError, Equatable {
 }
 
 enum TaskMediaPlanner {
+    /// A mixed drop is one transaction: every output reads from the final
+    /// catalog, including new combinations that use a replaced source.
+    static func changing(additions: [TaskMediaSelection],
+                         replacements: [UUID: TaskMediaSelection],
+                         in existing: TaskMediaCatalog) throws -> TaskMediaPlan {
+        guard !replacements.isEmpty else { return try adding(selections: additions, to: existing) }
+        let replacement = try replacing(replacements: replacements, in: existing)
+        guard !additions.isEmpty else { return replacement }
+        var combined = try adding(selections: additions, to: replacement.catalog)
+        combined.pendingRevisionAssetIds = replacement.pendingRevisionAssetIds
+        combined.outputs = replacement.outputs + combined.outputs
+        return combined
+    }
+
     static func adding(selections: [TaskMediaSelection], to existing: TaskMediaCatalog) throws -> TaskMediaPlan {
         guard selections.allSatisfy({ $0.role != nil && $0.contentHash != nil }) else {
             throw TaskMediaPlannerError.unclassifiedFiles

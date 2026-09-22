@@ -61,7 +61,7 @@ final class TaskMediaTransferStore: ObservableObject {
         // Batches deliberately live in memory. After a fresh launch, previous
         // working directories are orphaned; remove them without touching the
         // persistent source cache or the synchronized catalogs.
-        if !Self.cleanedWorkingDirectoriesForCurrentProcess {
+        if !ApolloRuntimeEnvironment.isStudio, !Self.cleanedWorkingDirectoriesForCurrentProcess {
             Self.cleanedWorkingDirectoriesForCurrentProcess = true
             Self.cleanupOrphanedWorkingDirectories()
         }
@@ -116,6 +116,9 @@ final class TaskMediaTransferStore: ObservableObject {
     nonisolated private static func persistedCatalogsDirectory(
         fileManager: FileManager
     ) -> URL? {
+        if ApolloRuntimeEnvironment.isStudio {
+            return Self.studioSupportDirectory.appendingPathComponent("TaskMediaCatalogs", isDirectory: true)
+        }
         guard let root = try? fileManager.url(for: .applicationSupportDirectory,
                                               in: .userDomainMask,
                                               appropriateFor: nil,
@@ -139,6 +142,7 @@ final class TaskMediaTransferStore: ObservableObject {
         if let primary = persistedCatalogsDirectory(fileManager: fileManager) {
             directories.append(primary)
         }
+        if ApolloRuntimeEnvironment.isStudio { return directories }
         let containerPath = ("~/Library/Containers/com.painellunar.app/Data/" +
                              "Library/Application Support/Apollo/TaskMediaCatalogs"
                              as NSString).expandingTildeInPath
@@ -238,7 +242,7 @@ final class TaskMediaTransferStore: ObservableObject {
     }
 
     func prepareReplacements(task: CUTask, replacementURLs: [UUID: URL],
-                             appState: AppState) async {
+                             additions: [TaskMediaSelection] = [], appState: AppState) async {
         do {
             if catalogs[task.id] == nil { await loadCatalog(for: task, appState: appState) }
             let current = catalog(for: task.id)
@@ -253,8 +257,9 @@ final class TaskMediaTransferStore: ObservableObject {
             var hashedByURL: [URL: TaskMediaSelection] = [:]
             for selection in hashedValues { hashedByURL[selection.fileURL] = selection }
             let replacements = raw.compactMapValues { hashedByURL[$0.fileURL] }
-            let plan = try TaskMediaPlanner.replacing(replacements: replacements,
-                                                      in: current)
+            let hashedAdditions = try await hash(additions)
+            let plan = try TaskMediaPlanner.changing(additions: hashedAdditions,
+                                                     replacements: replacements, in: current)
             try await prepare(task: task, plan: plan)
         } catch {
             recordPreparationFailure(taskId: task.id, message: error.localizedDescription)
@@ -747,7 +752,16 @@ final class TaskMediaTransferStore: ObservableObject {
         return directory
     }
 
+    nonisolated private static var studioSupportDirectory: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("ApolloStudio-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    }
+
     private func supportDirectory() throws -> URL {
+        if ApolloRuntimeEnvironment.isStudio {
+            let directory = Self.studioSupportDirectory
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            return directory
+        }
         let root = try fileManager.url(for: .applicationSupportDirectory,
                                        in: .userDomainMask, appropriateFor: nil, create: true)
         let directory = root.appendingPathComponent("Apollo", isDirectory: true)

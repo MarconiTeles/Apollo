@@ -1042,6 +1042,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         dragStarted = false
         bulkSelected = false
         bulkCount = 0
+        fileDropActive = false
         setHoverMotion(active: false, animated: false)
         applyBackground()
     }
@@ -1404,6 +1405,9 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     /// popup próprio. Aqui é o atalho para UMA tarefa.
     private func canAcceptFileDrop(_ sender: NSDraggingInfo) -> Bool {
         guard bulkCount < 2, task != nil, appState?.anyPopupOpen != true else { return false }
+        if let id = task?.id, let phase = appState?.taskMediaTransfers.phase(for: id), phase != .sent {
+            return false  // Preserve a prepared or partially published batch for retry.
+        }
         return sender.draggingPasteboard.canReadObject(
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true])

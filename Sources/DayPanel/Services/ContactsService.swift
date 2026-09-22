@@ -102,6 +102,7 @@ final class ContactsService {
     // MARK: - Internal cache
 
     private func loadAllContacts() async -> [GuestSuggestion] {
+        if ApolloRuntimeEnvironment.isStudio { return [] }
         if let cached = cachedSuggestions { return cached }
         if let inflight = cacheLoadTask { return await inflight.value }
         let attendees = eventAttendees

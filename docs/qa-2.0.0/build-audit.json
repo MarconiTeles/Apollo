@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "build": "98",
+  "code_signature": "codesign --verify --deep --strict passed",
+  "signing": [
+    "Authority=Developer ID Application: Marconi Lima (CU544M36UD)",
+    "Authority=Developer ID Certification Authority",
+    "Authority=Apple Root CA",
+    "Timestamp=22 Sep 2026 at 18:16:57",
+    "TeamIdentifier=CU544M36UD"
+  ],
+  "entitlements_match_source": true,
+  "notarized": false,
+  "installed": false,
+  "public_feed_changed": false,
+  "artifacts": [
+    {
+      "path": "build/Apollo.app/Contents/MacOS/DayPanel",
+      "architectures": "x86_64 arm64",
+      "minimum_macos": "14.0",
+      "sha256": "d025fba846636283193efe63ccc2b73d8a5ccdcf9acf4c0d87938fe28019eb47"
+    },
+    {
+      "path": "build/Apollo.app/Contents/Helpers/Apollo Review.app/Contents/MacOS/ApolloReview",
+      "architectures": "x86_64 arm64",
+      "minimum_macos": "14.0",
+      "sha256": "2a7bee460087b2fd6e7836a6e6f67b1dd1708e88e1f21ce4a29b4a5e5dafe478"
+    }
+  ]
+}

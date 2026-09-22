@@ -56,6 +56,7 @@ struct TaskBulkMediaFlowSheet: View {
     init(store: TaskMediaTransferStore, request: TaskBulkMediaRequest) {
         self.store = store
         self.request = request
+        _targets = State(initialValue: request.tasks)
         _coordinator = StateObject(wrappedValue: TaskBulkMediaCoordinator(store: store))
     }
 
@@ -208,6 +209,7 @@ struct TaskBulkMediaFlowSheet: View {
         // app atrás, e cai para vibrancy/sólido sozinho em máquina Intel
         // ou com Reduzir Transparência ligado.
         .floatingPanelGlass(in: outerShape)
+        .interactiveDismissDisabled(isSending)
         .task { await start() }
         // Arquivos soltos na lista depois que a folha abriu chegam por
         // aqui. Consome e limpa, para um mesmo arquivo não entrar duas
@@ -1328,11 +1330,12 @@ struct TaskBulkMediaFlowSheet: View {
     /// final de uma vez. Como a folha observa o store, ler dele faz a
     /// barra andar de verdade — sem criar transferência nova.
     private func liveProgress(for taskId: String) -> Double {
-        if store.phase(for: taskId) == .sent { return 1 }
+        if coordinator.targets.first(where: { $0.id == taskId })?.phase == .sent { return 1 }
         return min(max(store.progress(for: taskId), 0), 1)
     }
 
     private func liveStatusLabel(for taskId: String) -> String {
+        if coordinator.targets.first(where: { $0.id == taskId })?.phase == .sent { return "enviado" }
         switch store.phase(for: taskId) {
         case .sent:           return "enviado"
         case .sending:        return "enviando \(Int((liveProgress(for: taskId) * 100).rounded()))%"
@@ -1466,12 +1469,16 @@ struct TaskBulkMediaFlowSheet: View {
     @MainActor
     private func start() async {
         targets = request.tasks
-        stage = .dropZone
+        stage = selections.isEmpty ? .dropZone : .compose
         // A projeção já roda aqui, sem arquivo: carrega o catálogo de
         // cada tarefa enquanto a pessoa escolhe o vídeo, para a tela
         // seguinte abrir com as regras já calculadas em vez de piscar
         // "calculando…" depois.
-        await coordinator.warmUp(tasks: targets, appState: appState)
+        if selections.isEmpty {
+            await coordinator.warmUp(tasks: targets, appState: appState)
+        } else {
+            await reproject()
+        }
         // Arrastou o arquivo direto do Finder para a lista: o vídeo já
         // veio junto, não faz sentido pedir de novo.
         if !request.initialURLs.isEmpty {
@@ -1484,13 +1491,12 @@ struct TaskBulkMediaFlowSheet: View {
         // Sem arquivo não há o que projetar, mas as tarefas continuam
         // listadas — quem abriu a janela precisa ver para onde o arquivo
         // vai antes mesmo de escolher qual é.
-        guard !selections.isEmpty else { return }
         applyNameMatching()
         working = true
-        await coordinator.project(tasks: targets,
+        let current = await coordinator.project(tasks: targets,
                                   selectionsFor: { effectiveSelections(for: $0.id) },
                                   appState: appState)
-        working = false
+        if current { working = false }
     }
 
     @MainActor
@@ -1515,9 +1521,9 @@ struct TaskBulkMediaFlowSheet: View {
 
     @discardableResult
     private func append(urls: [URL]) -> [UUID] {
-        let known = Set(selections.map(\.fileURL))
+        var known = Set(selections.map(\.fileURL))
         var added: [UUID] = []
-        for url in urls where !known.contains(url) {
+        for url in urls where known.insert(url).inserted {
             let selection = TaskMediaSelection(fileURL: url)
             selections.append(selection)
             added.append(selection.id)

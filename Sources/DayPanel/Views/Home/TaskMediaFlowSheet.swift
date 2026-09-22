@@ -58,6 +58,7 @@ struct TaskMediaFlowSheet: View {
     @State private var selections: [TaskMediaSelection] = []
     @State private var trimSelectionId: UUID?
     @State private var replacementURLs: [UUID: URL] = [:]
+    @State private var pendingDropReplacements: [UUID: URL] = [:]
     /// Arquivo solto → vídeo existente que ele substitui. `nil` quer
     /// dizer "entra como novo", e é uma escolha legítima, não ausência.
     @State private var dropReplacementChoice: [UUID: UUID?] = [:]
@@ -1582,8 +1583,6 @@ struct TaskMediaFlowSheet: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Na tela de status a mesma mensagem já aparece embaixo do título
-    /// — a faixa de cima só repetia.
     @ViewBuilder private var errorBanner: some View {
         if let localError, stage != .status {
             TaskMediaNoticeBanner(message: localError)
@@ -1616,7 +1615,23 @@ struct TaskMediaFlowSheet: View {
         let newHooks = selections.filter { $0.role == .hook }.count
         let newBodies = selections.filter { $0.role == .body }.count
         let direct = selections.filter { $0.role == .video }.count
+        var replacedLineages = Set<String>()
+        for asset in catalog.assets where pendingDropReplacements[asset.id] != nil {
+            switch asset.role {
+            case .video:
+                replacedLineages.insert(TaskMediaOutputLineage.direct(video: asset.id).id)
+            case .hook:
+                for body in catalog.assets where body.role == .body {
+                    replacedLineages.insert(TaskMediaOutputLineage.combination(hook: asset.id, body: body.id).id)
+                }
+            case .body:
+                for hook in catalog.assets where hook.role == .hook {
+                    replacedLineages.insert(TaskMediaOutputLineage.combination(hook: hook.id, body: asset.id).id)
+                }
+            }
+        }
         return newHooks * existingBodies + newBodies * existingHooks + newHooks * newBodies + direct
+            + replacedLineages.count
     }
 
     private var replacementImpactText: String {
@@ -1755,10 +1770,8 @@ struct TaskMediaFlowSheet: View {
     }
 
     /// O store guarda UM lote por tarefa, então adicionar e substituir
-    /// não cabem na mesma preparação. Quando a pessoa mistura os dois,
-    /// a substituição roda agora (é a intenção explícita dela) e os
-    /// arquivos sem alvo ficam para a etapa de classificação logo em
-    /// seguida — em vez de sumirem sem aviso.
+    /// must be prepared together. For a mixed drop, classify the additions
+    /// first, then create one plan containing both sets of outputs.
     private func applyDropReplacements() {
         let replacements = mappedReplacements
         guard !replacements.isEmpty else {
@@ -1766,6 +1779,15 @@ struct TaskMediaFlowSheet: View {
             return
         }
         let leftovers = unmappedSelections
+        if !leftovers.isEmpty {
+            // Keep both intentions until all new files are classified. Preparing
+            // twice would replace the store's one batch and lose the replacements.
+            pendingDropReplacements = replacements
+            selections = leftovers
+            dropReplacementChoice = [:]
+            stage = .classify
+            return
+        }
         preparing = true
         Task { @MainActor in
             await store.prepareReplacements(task: request.task,
@@ -1777,15 +1799,7 @@ struct TaskMediaFlowSheet: View {
                     ?? "Não foi possível preparar a substituição."
                 return
             }
-            if leftovers.isEmpty {
-                stage = .readyPrompt
-            } else {
-                // Sobrou arquivo sem alvo: segue para a classificação
-                // deles, sem perder o que acabou de ser substituído.
-                selections = leftovers
-                dropReplacementChoice = [:]
-                stage = .classify
-            }
+            stage = .readyPrompt
         }
     }
 
@@ -1867,7 +1881,12 @@ struct TaskMediaFlowSheet: View {
     private func prepareAdd() {
         preparing = true; localError = nil; stage = .status
         Task {
-            await store.prepareAdd(task: request.task, selections: selections, appState: appState)
+            if pendingDropReplacements.isEmpty {
+                await store.prepareAdd(task: request.task, selections: selections, appState: appState)
+            } else {
+                await store.prepareReplacements(task: request.task,
+                    replacementURLs: pendingDropReplacements, additions: selections, appState: appState)
+            }
             preparing = false
             // Pronto → pergunta "enviar agora?" no próprio diálogo, em vez de
             // fechar e exigir o clique em ENVIAR na linha da tarefa.

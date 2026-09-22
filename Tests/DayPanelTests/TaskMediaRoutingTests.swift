@@ -139,4 +139,38 @@ final class TaskMediaRoutingTests: XCTestCase {
             XCTAssertTrue((destinations[file.id] ?? .all).reaches("t1"))
         }
     }
+    func testAmbiguousFileRequiresExplicitDestinationEvenWhenNothingElseMatches() {
+        let ambiguousTasks = [task("a", "Camiseta 1.0 - Réplica Airton - B1 - H5"),
+                              task("b", "Camiseta 1.0 - Réplica Airton 2 - B1 - H5")]
+        let ambiguous = file("H4_REPLICA_BALDA_AIRTON_V02.mov")
+        let unrelated = file("IMG_4821.mov")
+        let result = TaskMediaRouting.resolve(files: [ambiguous, unrelated],
+                                             tasks: ambiguousTasks, decided: [:])
+        XCTAssertEqual(result[ambiguous.id], .unresolved)
+        XCTAssertEqual(result[unrelated.id], .unresolved)
+        for target in ambiguousTasks {
+            XCTAssertTrue(TaskMediaRouting.recipients(of: target.id,
+                files: [ambiguous, unrelated], destinations: result).isEmpty)
+        }
+        let manual = TaskMediaRouting.resolve(files: [ambiguous], tasks: ambiguousTasks,
+                                             decided: [ambiguous.id: .all])
+        XCTAssertEqual(manual[ambiguous.id], .all)
+    }
+
+    func testRemovingDestinationDoesNotRedirectToLastRemainingTask() {
+        let dropped = file("REPLICA_AIRTON - H1.mp4")
+        let result = TaskMediaRouting.resolve(files: [dropped], tasks: [tasks[2]],
+                                             decided: [dropped.id: .task("t1")])
+        XCTAssertEqual(result[dropped.id], .unresolved)
+        XCTAssertTrue(TaskMediaRouting.recipients(of: "t3", files: [dropped],
+                                                  destinations: result).isEmpty)
+    }
+
+    func testExplicitUnresolvedSurvivesWithOneTask() {
+        let dropped = file("IMG_4821.mov")
+        let result = TaskMediaRouting.resolve(files: [dropped], tasks: [tasks[0]],
+                                             decided: [dropped.id: .unresolved])
+        XCTAssertEqual(result[dropped.id], .unresolved)
+    }
+
 }

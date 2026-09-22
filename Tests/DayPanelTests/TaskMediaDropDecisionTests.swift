@@ -79,14 +79,16 @@ final class TaskMediaDropDecisionTests: XCTestCase {
         XCTAssertTrue(missing.isPureAddition)
     }
 
-    /// Dois arquivos apontando para o MESMO vídeo existente: o último
-    /// vence, e o plano continua coerente — sem alvo duplicado.
-    func testTwoFilesTargetingTheSameAssetCollapseToOne() {
+    /// Two files cannot overwrite the same target. Keep the extra file as an
+    /// addition so every input remains represented in the transaction.
+    func testTwoFilesTargetingTheSameAssetKeepTheExtraFileAsAnAddition() {
         let a = dropped("a.mp4"), b = dropped("b.mp4")
         let asset = UUID()
         let plan = TaskMediaDropDecision.plan(
             dropped: [a, b], choices: [a.id: asset, b.id: asset])
         XCTAssertEqual(plan.replacements.count, 1)
+        XCTAssertEqual(plan.replacements[asset], a.url)
+        XCTAssertEqual(plan.leftovers, [b.id])
     }
 
     func testEmptyDropProducesEmptyPlan() {

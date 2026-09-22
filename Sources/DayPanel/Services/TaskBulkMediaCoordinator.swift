@@ -1,5 +1,23 @@
 import Foundation
 
+/// The existing transfer engine, with a narrow seam for deterministic tests
+/// of retries and overlapping projections. Production still uses one store.
+@MainActor
+protocol TaskBulkMediaTransferring: AnyObject {
+    var batches: [String: TaskMediaTransferStore.BatchState] { get }
+    func loadCatalog(for task: CUTask, appState: AppState) async
+    func catalog(for taskId: String) -> TaskMediaCatalog
+    func hash(_ selections: [TaskMediaSelection]) async throws -> [TaskMediaSelection]
+    func prepareAdd(task: CUTask, selections: [TaskMediaSelection], appState: AppState) async
+    func send(task: CUTask, mentionMemberIds: [Int], outputNames: [UUID: String],
+              appState: AppState) async
+    func phase(for taskId: String) -> TaskMediaTransferStore.Phase?
+    func progress(for taskId: String) -> Double
+    func discard(taskId: String)
+}
+
+extension TaskMediaTransferStore: TaskBulkMediaTransferring {}
+
 // Apollo · Envio de arquivo(s) para várias tarefas de uma vez.
 //
 // O trabalho pesado (upload, comentário final, REVISAR, versionamento,
@@ -76,13 +94,11 @@ final class TaskBulkMediaCoordinator: ObservableObject {
     /// hashes diferentes, e precisam ser resolvidos tarefa a tarefa.
     private(set) var resolvedSelections: [String: [TaskMediaSelection]] = [:]
 
-    /// Cache de SHA-256 por caminho de arquivo. Sem ele, um vídeo usado
-    /// sem alteração em oito tarefas seria lido do disco oito vezes.
-    private var hashCache: [URL: String] = [:]
+    private var projectionRevision = 0
+    private var ownedBatchIds: [String: UUID] = [:]
+    private let store: any TaskBulkMediaTransferring
 
-    private let store: TaskMediaTransferStore
-
-    init(store: TaskMediaTransferStore) {
+    init(store: any TaskBulkMediaTransferring) {
         self.store = store
     }
 
@@ -112,10 +128,14 @@ final class TaskBulkMediaCoordinator: ObservableObject {
     /// alvos nascem só com a tarefa, e o `projectedOutputs` chega no
     /// `project(...)`.
     func warmUp(tasks: [CUTask], appState: AppState) async {
+        guard phase != .sending else { return }
+        projectionRevision += 1
+        let revision = projectionRevision
         phase = .projecting
         var built: [Target] = []
         for task in tasks {
             await store.loadCatalog(for: task, appState: appState)
+            guard revision == projectionRevision, !Task.isCancelled else { return }
             built.append(Target(task: task))
         }
         targets = built
@@ -128,55 +148,61 @@ final class TaskBulkMediaCoordinator: ObservableObject {
     ///
     /// Chamado ao abrir a folha e a cada mudança: trocar papel (global ou
     /// de uma tarefa), cortar, adicionar/remover vídeo ou tarefa.
+    @discardableResult
     func project(tasks: [CUTask],
                  selectionsFor: (CUTask) -> [TaskMediaSelection],
-                 appState: AppState) async {
+                 appState: AppState) async -> Bool {
+        guard phase != .sending else { return false }
+        projectionRevision += 1
+        let revision = projectionRevision
+        // Snapshot all destinations/roles before the first suspension.
+        let input = tasks.map { ($0, selectionsFor($0)) }
         phase = .projecting
         errorMessage = nil
-
         var built: [Target] = []
         var resolved: [String: [TaskMediaSelection]] = [:]
-
-        for task in tasks {
+        // Reuse a hash across targets in this projection, but never across
+        // edits: an exported video may have changed at the same file URL.
+        var hashes: [URL: String] = [:]
+        for (task, wanted) in input {
             await store.loadCatalog(for: task, appState: appState)
+            guard revision == projectionRevision, !Task.isCancelled else { return false }
             var target = Target(task: task)
-            let wanted = selectionsFor(task)
+            if let batch = store.batches[task.id], batch.phase != .sent {
+                target.blockedReason = "Esta tarefa já tem um envio pendente. Conclua ou descarte-o primeiro."
+                built.append(target)
+                continue
+            }
             do {
-                let hashed = try await hashing(wanted)
+                var pendingURLs = Set<URL>()
+                let pending = wanted.filter {
+                    hashes[$0.fileURL] == nil && pendingURLs.insert($0.fileURL).inserted
+                }
+                for hashed in try await store.hash(pending) {
+                    hashes[hashed.fileURL] = hashed.contentHash
+                }
+                guard revision == projectionRevision, !Task.isCancelled else { return false }
+                let hashed = wanted.map { selection in
+                    var copy = selection
+                    copy.contentHash = hashes[selection.fileURL]
+                    return copy
+                }
                 resolved[task.id] = hashed
                 let plan = try TaskMediaPlanner.adding(selections: hashed,
                                                        to: store.catalog(for: task.id))
                 target.projectedOutputs = plan.outputs.count
-                if plan.outputs.isEmpty {
-                    target.blockedReason = "Nada novo a gerar nesta tarefa."
-                }
+                if plan.outputs.isEmpty { target.blockedReason = "Nada novo a gerar nesta tarefa." }
             } catch {
+                guard revision == projectionRevision, !Task.isCancelled else { return false }
                 target.blockedReason = error.localizedDescription
             }
             built.append(target)
         }
-
+        guard revision == projectionRevision else { return false }
         resolvedSelections = resolved
         targets = built
         phase = .idle
-    }
-
-    /// Hasheia reaproveitando o cache por arquivo. Dois cortes diferentes
-    /// do mesmo vídeo são arquivos diferentes e recebem hashes diferentes
-    /// — é assim que o planner enxerga a variação de cada tarefa.
-    private func hashing(_ selections: [TaskMediaSelection]) async throws
-    -> [TaskMediaSelection] {
-        let pending = selections.filter { hashCache[$0.fileURL] == nil }
-        if !pending.isEmpty {
-            for hashed in try await store.hash(pending) {
-                hashCache[hashed.fileURL] = hashed.contentHash
-            }
-        }
-        return selections.map { selection in
-            var copy = selection
-            copy.contentHash = hashCache[selection.fileURL]
-            return copy
-        }
+        return true
     }
 
     // MARK: - Envio
@@ -188,7 +214,7 @@ final class TaskBulkMediaCoordinator: ObservableObject {
     /// os próprios responsáveis — assim ninguém é notificado de tarefa
     /// que não é sua só porque entrou no mesmo lote.
     func sendAll(extraMentionMemberIds: [Int], appState: AppState) async {
-        guard !sendableTargets.isEmpty else { return }
+        guard phase != .sending, phase != .projecting, !sendableTargets.isEmpty else { return }
         phase = .sending
         errorMessage = nil
 
@@ -204,15 +230,31 @@ final class TaskBulkMediaCoordinator: ObservableObject {
             // quando ela divergiu do padrão.
             let taskSelections = resolvedSelections[task.id] ?? []
             guard !taskSelections.isEmpty else { continue }
-            await store.prepareAdd(task: task, selections: taskSelections,
-                                   appState: appState)
-            if store.phase(for: task.id) == .failed {
+            let existing = store.batches[task.id]
+            if let existing, existing.phase != .sent,
+               existing.id != ownedBatchIds[task.id] {
+                targets[index].phase = .failed
+                targets[index].failureMessage = "Esta tarefa já tem outro envio pendente."
+                continue
+            }
+            // Keep the exact batch and publication ledger after partial upload
+            // or manifest failure. Re-preparing would duplicate confirmed media.
+            let canResume = existing.map {
+                $0.id == ownedBatchIds[task.id] && $0.total > 0
+                    && $0.preparedFiles.count == $0.total
+                    && TaskMediaTransferStore.canSend(phase: $0.phase, total: $0.total)
+            } ?? false
+            if !canResume {
+                await store.prepareAdd(task: task, selections: taskSelections, appState: appState)
+                ownedBatchIds[task.id] = store.batches[task.id]?.id
+            }
+            if store.phase(for: task.id) == .failed && !canResume {
                 targets[index].phase = .failed
                 targets[index].failureMessage = storeError(for: task.id)
                 continue
             }
 
-            await store.send(task: task, mentionMemberIds: mentions, appState: appState)
+            await store.send(task: task, mentionMemberIds: mentions, outputNames: [:], appState: appState)
 
             let resulting = store.phase(for: task.id)
             targets[index].phase = resulting
@@ -240,7 +282,12 @@ final class TaskBulkMediaCoordinator: ObservableObject {
 
     /// Descarta os lotes preparados em todas as tarefas de destino.
     func discardAll() {
-        for target in targets { store.discard(taskId: target.task.id) }
+        guard phase != .sending else { return }
+        projectionRevision += 1
+        for (taskId, batchId) in ownedBatchIds where store.batches[taskId]?.id == batchId {
+            store.discard(taskId: taskId)
+        }
+        ownedBatchIds.removeAll()
         targets = targets.map { existing in
             var copy = existing
             copy.progress = 0
