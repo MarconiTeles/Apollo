@@ -5,6 +5,19 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 2.0.2</title>
+      <pubDate>Wed, 23 Sep 2026 18:07:40 +0000</pubDate>
+      <sparkle:version>100</sparkle:version>
+      <sparkle:shortVersionString>2.0.2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Melhorias de fluidez e consistência do scroll em Tarefas e Quadros, com renderização AppKit e reutilização de linhas e cartões. Correções no dimensionamento da lista, no tratamento da inércia e no acompanhamento da tela ao mover a janela entre monitores.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v2.0.2/Apollo-2.0.2.zip"
+        sparkle:edSignature="BRd8VgrKgwccqCvHdecufRP34iDvJKqOs6u+z2FdaCuxGkfoEHCysfOqJEKqFZmCK4o9bFumI1uc1eQ98BH3Bw=="
+        length="50961571"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 2.0.1</title>
       <pubDate>Wed, 23 Sep 2026 03:13:46 +0000</pubDate>
       <sparkle:version>99</sparkle:version>
