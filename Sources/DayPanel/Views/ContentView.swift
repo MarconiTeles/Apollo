@@ -1419,18 +1419,17 @@ struct ContentView: View {
             //  collapsibles per category. No need to surface a
             //  second entry point in the top bar.)
 
-            // Buscar — opens the command palette. Stripped to a
-            // plain text link to match the prototype (no glyph,
-            // no ⌘K kbd badge). The ⌘K shortcut still works via
-            // the responder chain.
+            // Search opens the same command palette as the ⌘K shortcut.
             Button {
                 NSApp.sendAction(Selector(("toggleCommandPalette:")), to: nil, from: nil)
             } label: {
-                Text("Buscar")
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 15, weight: .regular))
             }
-            .buttonStyle(TBButtonStyle())
+            .buttonStyle(TBIconButtonStyle())
             .focusEffectDisabled()
             .help("Buscar (⌘K)")
+            .accessibilityLabel("Buscar")
 
             // Apollo IA — REMOVIDO desta build (entry point da toolbar
             // retirado a pedido). O overlay/serviço continuam no código, mas

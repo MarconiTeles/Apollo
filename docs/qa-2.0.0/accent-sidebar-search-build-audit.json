@@ -1,0 +1,17 @@
+{
+  "base_commit": "38633da7cf49f954467d541f7ee78b3aa54a9df3",
+  "build": "./build.sh release passed",
+  "architectures": "arm64",
+  "signature": "codesign --verify --deep --strict passed; required entitlements verified",
+  "source_sha256": {
+    "Sources/DayPanel/Views/Common/MyTasksFilterToggle.swift": "97b6e3bb8f6acad6eac74df482becec98748f265f05b850d6a5eaebb8fc1b30b",
+    "Sources/DayPanel/Views/Home/EditorialSidebar.swift": "f2dfbd7ade23891294ea1df85cc642f5ffd83fa9b62cf85c24032daba8262976",
+    "Sources/DayPanel/Views/ContentView.swift": "df6a94ece536a4e2bd14bba4bac7e8dbaf9749c7eb49483282b74312b78baf61"
+  },
+  "binary_sha256": "8085838bfaba84789902002b762afb2f1b481b8d874a48bf94308f747bcda99d",
+  "toggle_visual_checks": "Purple, blue and green accents; both states and themes; actual component source in an isolated process with SDK compatibility 14.0; native NSSwitch controls",
+  "launch_pid": 61912,
+  "published": false,
+  "notarized": false,
+  "actual_window_visual_check": "sidebar-search-accent-window.png: authenticated app window, purple accent, selected navigation/list icons accented, neutral labels and counters, search magnifier, native switch ON with pale purple track"
+}

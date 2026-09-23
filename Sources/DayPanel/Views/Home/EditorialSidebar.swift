@@ -502,11 +502,12 @@ private struct SidebarNavRow: View {
                                               : (isActive ? Editorial.accent
                                                           : Editorial.inkMute))
                     .frame(width: 18, alignment: .center)
+                    .accentGlow(isActive && !disabled)
                 Text(label)
                     .font(.system(size: 13, weight: isActive ? .medium : .regular))
                     .foregroundStyle(disabled
                                      ? Editorial.inkFaint
-                                     : (isActive ? Editorial.accent : Editorial.ink))
+                                     : Editorial.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
@@ -515,7 +516,7 @@ private struct SidebarNavRow: View {
                         .font(.system(size: 11.5, weight: .regular))
                         .foregroundStyle(disabled
                                          ? Editorial.inkFaint
-                                         : (isActive ? Editorial.accent : Editorial.inkMute))
+                                         : Editorial.inkMute)
                         .monospacedDigit()
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
@@ -532,7 +533,7 @@ private struct SidebarNavRow: View {
                           : Color.clear)
             )
             // Selected → NEUTRAL glass rectangle (Finder-style): the selection
-            // colour lives on the icon + label, not on the fill.
+            // colour and glow live only on the icon.
             .liquidGlassSelected(isActive && !disabled,
                                  in: RoundedRectangle(cornerRadius: 8,
                                                       style: .continuous),
@@ -607,18 +608,19 @@ private struct SidebarDotRow: View {
                     // Ícones de lista SEM tint por cor de lista: neutros em
                     // repouso; só o item SELECIONADO usa a cor de realce do
                     // macOS (accentColor), padrão Finder.
-                    .foregroundStyle(isActive ? Color.accentColor : Editorial.inkMute)
+                    .foregroundStyle(isActive ? Editorial.accent : Editorial.inkMute)
                     .frame(width: 18, alignment: .center)
+                    .accentGlow(isActive)
                 Text(label)
                     .font(.system(size: 13, weight: isActive ? .medium : .regular))
-                    .foregroundStyle((accent || isActive) ? Editorial.accent : Editorial.ink)
+                    .foregroundStyle(Editorial.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
                 if let count {
                     Text("\(count)")
                         .font(.system(size: 11.5, weight: .regular))
-                        .foregroundStyle((accent || isActive) ? Editorial.accent : Editorial.inkMute)
+                        .foregroundStyle(Editorial.inkMute)
                         .monospacedDigit()
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
@@ -635,7 +637,7 @@ private struct SidebarDotRow: View {
                           : Color.clear))
             )
             // Selected list → NEUTRAL glass rectangle (Finder-style): the
-            // selection colour lives on the label, not on the fill.
+            // selection colour and glow live only on the icon.
             .liquidGlassSelected(isActive,
                                  in: RoundedRectangle(cornerRadius: 8,
                                                       style: .continuous),
