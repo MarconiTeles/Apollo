@@ -1,0 +1,17 @@
+{
+  "base_commit": "c782e7686afbada0bf6095bb140e09f78744bc8f",
+  "version": "2.0.0",
+  "build": "98",
+  "build_command": "./build.sh release",
+  "architectures": "arm64",
+  "signature": "codesign --verify --deep --strict passed; required entitlements passed",
+  "source_sha256": {
+    "Sources/DayPanel/Views/Common/MyTasksFilterToggle.swift": "bab9109c6ebbb0e7f457f472f82e508c521126d44bcf17d825ba3f2a63b6402a"
+  },
+  "binary_sha256": "834a2dc8d02a04faf0263cabafef13739b3b81245206f518411600617a299b1f",
+  "visual_validation": "Exact component source rendered with isolated stores, SDK/deployment 14.0, light and dark, OFF dark and ON light; four native NSSwitch controls in hierarchy with states [0,1,0,1]",
+  "snapshot": "toggle-native-states.png",
+  "product_change": "Native Toggle retained; two appearance modifiers only",
+  "published": false,
+  "notarized": false
+}

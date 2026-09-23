@@ -10,6 +10,8 @@ struct MyTasksFilterToggle: View {
         ))
         .toggleStyle(.switch)
         .tint(Color(red: 191 / 255, green: 233 / 255, blue: 1))
+        .environment(\.colorScheme, .light)
+        .brightness(filters.isMine(userId: auth.userId) ? 0.4 : 0)
         .foregroundStyle(.white)
         .controlSize(.small)
         .font(Editorial.sans(12.5, .medium))
