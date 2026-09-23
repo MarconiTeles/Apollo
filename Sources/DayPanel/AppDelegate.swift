@@ -929,15 +929,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
 
-        // Traffic-light buttons stay at macOS's natural
-        // position. The earlier reposition attempt put
-        // them inside the body (using the wrong coord
-        // origin). Instead, we align the SwiftUI toolbar
-        // pills DOWN to where the OS draws traffic lights
-        // — see ContentView's toolbar `.frame(height:)`.
-
         w.makeKeyAndOrderFront(nil)
         window = w
+        SidebarTrafficLights.align(in: w)
     }
 
     /// Pre-fill window frame so the second click on the green button
@@ -1065,6 +1059,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - NSWindowDelegate
 
 extension AppDelegate: NSWindowDelegate {
+    private func alignSidebarTrafficLights(after notification: Notification) {
+        guard let changedWindow = notification.object as? NSWindow,
+              changedWindow === window else { return }
+        // AppKit finishes its titlebar layout before applying our scoped inset.
+        DispatchQueue.main.async { [weak changedWindow] in
+            if let changedWindow { SidebarTrafficLights.align(in: changedWindow) }
+        }
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        alignSidebarTrafficLights(after: notification)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        alignSidebarTrafficLights(after: notification)
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        alignSidebarTrafficLights(after: notification)
+    }
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         // In menu bar mode, hide instead of close so the app stays alive
         if appState.menuBarMode {

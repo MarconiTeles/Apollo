@@ -36,6 +36,10 @@ struct EditorialSidebar: View {
     @Environment(\.colorScheme) private var colorScheme
     private let sidebarCornerRadius: CGFloat =
         ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 ? 12 : 16
+    private var darkenSidebarMaterial: Bool {
+        colorScheme == .dark
+            && ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
+    }
 
     /// Local selection. The sidebar can drive routing once the
     /// dashboard body migrates; for now it's purely visual.
@@ -93,9 +97,12 @@ struct EditorialSidebar: View {
         .background {
             if Materials.tier == .solid {
                 shape.fill(Editorial.panelDeep)
+                    .overlay {
+                        if darkenSidebarMaterial { shape.fill(.black.opacity(0.6)) }
+                    }
             }
         }
-        .modifier(SidebarGlassSurface(shape: shape))
+        .modifier(SidebarGlassSurface(shape: shape, darken: darkenSidebarMaterial))
         .clipShape(shape)
         .overlay {
             if Materials.tier != .solid {
@@ -447,12 +454,22 @@ struct EditorialSidebar: View {
 /// sampled and refracted instead of flattened into an opaque fallback layer.
 private struct SidebarGlassSurface: ViewModifier {
     let shape: RoundedRectangle
+    let darken: Bool
 
     func body(content: Content) -> some View {
         if Materials.tier == .solid {
             content
         } else if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
-            content.glassEffect(.regular, in: shape)
+            if darken {
+                content.glassEffect(.regular.tint(.black.opacity(0.6)), in: shape)
+            } else {
+                content.glassEffect(.regular, in: shape)
+            }
+        } else if darken {
+            content.background {
+                shape.fill(.ultraThinMaterial)
+                    .overlay(shape.fill(.black.opacity(0.6)))
+            }
         } else {
             content.background(.ultraThinMaterial, in: shape)
         }
