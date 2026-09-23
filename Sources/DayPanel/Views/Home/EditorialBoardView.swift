@@ -74,6 +74,12 @@ struct EditorialBoardView: View {
                 boardViewport
                     .frame(width: viewport.size.width,
                            height: viewport.size.height)
+                if showsLoadingScene {
+                    boardLoadingScene
+                        .frame(width: viewport.size.width,
+                               height: viewport.size.height)
+                        .transition(.opacity)
+                }
                 headerChrome
                     .frame(width: viewport.size.width, alignment: .leading)
                     .background(
@@ -89,6 +95,7 @@ struct EditorialBoardView: View {
             .frame(width: viewport.size.width,
                    height: viewport.size.height,
                    alignment: .top)
+            .animation(.easeOut(duration: 0.24), value: showsLoadingScene)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {
@@ -403,7 +410,9 @@ struct EditorialBoardView: View {
             filters: appState.taskFilters,
             cardOrder: cardOrder,
             workspaceName: appState.clickUpAuthService.workspaceName ?? "",
-            isColdLoading: isColdLoading) }
+            // The cold-start placeholders are the sync-aware scene layered
+            // over the whole board (`boardLoadingScene`), not per column.
+            isColdLoading: false) }
     }
 
     private var appKitBoard: some View {
@@ -526,7 +535,34 @@ struct EditorialBoardView: View {
     /// skeleton placeholders. Once data lands, an empty column
     /// renders nothing (matches TaskListView / MyTasks gating).
     private var isColdLoading: Bool {
-        appState.tasks.isEmpty && appState.isSyncing
+        appState.tasks.isEmpty
+            && appState.clickUpAuthService.isConnected
+            && (appState.isSyncing || appState.syncStatus == .idle)
+    }
+
+    /// The AppKit board draws its cold start through one sync-aware scene;
+    /// the SwiftUI fallback renderer keeps its per-column skeletons.
+    private var showsLoadingScene: Bool {
+        usesAppKitRenderer && isColdLoading
+    }
+
+    /// Ghost cards on the exact native column grid, with the sync account
+    /// floating over the visible canvas (right of the 220 pt sidebar).
+    private var boardLoadingScene: some View {
+        let top = BoardColumnMetrics(headerChromeHeight: headerChromeHeight).topInset
+        let statuses = visibleStatuses
+        return SyncLoadingSurface(
+            scene: .board,
+            statuses: statuses,
+            geometry: .init(top: top,
+                            leading: 220,
+                            columnX: BoardViewportView.leadingMargin,
+                            columnWidth: BoardViewportView.columnWidth,
+                            columnGap: BoardViewportView.columnGap,
+                            cardWidth: BoardCardLayout.width)
+        ) {
+            BoardLoadingFallback(columns: statuses.count, top: top)
+        }
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -1430,5 +1466,35 @@ private struct BoardScrollXReader: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+
+/// Native stand-in for the board's loading scene: the same three skeleton
+/// cards per column, on the same grid the scene and the real cards use.
+private struct BoardLoadingFallback: View {
+    let columns: Int
+    let top: CGFloat
+    @State private var height: CGFloat = 0
+
+    var body: some View {
+        // Whole cards above the scene's capsule, like the scene.
+        let cards = SyncLoadingLayout.fitting(bottom: height - SyncLoadingLayout.boardCapsuleReserve,
+                                              top: top,
+                                              size: SyncLoadingLayout.boardCard,
+                                              gap: SyncLoadingLayout.boardCardGap)
+        HStack(alignment: .top,
+               spacing: BoardViewportView.columnWidth + BoardViewportView.columnGap - BoardCardLayout.width) {
+            ForEach(0..<columns, id: \.self) { _ in
+                BoardColumnSkeletons(count: cards)
+            }
+        }
+        .fixedSize()
+        .padding(.leading, BoardViewportView.leadingMargin
+                 + (BoardViewportView.columnWidth - BoardCardLayout.width) / 2)
+        .padding(.top, top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
     }
 }

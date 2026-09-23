@@ -229,7 +229,8 @@ struct EditorialMyTasksView: View {
 
     /// The column header only makes sense once the real task list is on screen.
     private var showsColumnHeader: Bool {
-        appState.clickUpAuthService.userId != nil
+        appState.clickUpAuthService.isConnected
+            && !isLoadingData
             && listMountReady
             && !appState.availableStatuses.isEmpty
     }
@@ -238,14 +239,29 @@ struct EditorialMyTasksView: View {
     // MARK: Body
     // ────────────────────────────────────────────────────────────────────
 
+    /// Nothing to show yet *because it is still coming*: a sync is running,
+    /// or none has run yet this launch, for a list that is actually selected.
+    /// Connection is judged by the token (`isConnected`), never by the user
+    /// id — the id can lag behind (or be re-resolved) on a live connection.
+    private var isLoadingData: Bool {
+        allListTasks.isEmpty
+            && !appState.activeListId.isEmpty
+            && (appState.isSyncing || appState.syncStatus == .idle)
+    }
+
     @ViewBuilder
     private var content: some View {
-        if appState.clickUpAuthService.userId == nil {
+        if !appState.clickUpAuthService.isConnected {
             emptyState(title: "Conecte sua conta ClickUp",
                        caption: "Faça login para ver suas tarefas atribuídas.")
-        } else if !listMountReady || (allListTasks.isEmpty && appState.isSyncing) {
-            MyTasksLoadingPlaceholder()
-                .transition(.opacity)
+        } else if !listMountReady || isLoadingData {
+            // Native skeleton for the one-beat mount delay of a route switch;
+            // the sync-aware scene joins only when data is really in flight.
+            SyncLoadingSurface(scene: .tasks, isActive: listMountReady) {
+                MyTasksLoadingPlaceholder()
+            }
+            .padding(.top, MyTasksLoadingPlaceholder.topReserve)
+            .transition(.opacity)
         } else if appState.availableStatuses.isEmpty {
             emptyState(title: "Status indisponíveis",
                        caption: "Sincronize a lista para carregar suas categorias.")
@@ -905,19 +921,33 @@ struct EditorialMyTasksView: View {
 /// shared lunar sweep. One surface (one clock, one mask) covers the whole
 /// viewport instead of a timer per placeholder row.
 private struct MyTasksLoadingPlaceholder: View {
+    /// Clears the 52 pt toolbar band plus breathing room (the column header
+    /// row is hidden while loading).
+    static let topReserve: CGFloat = 74
+    /// Height of the sync account the web scene draws above the groups
+    /// (`.scene-tasks` in web/apollo-loading): 40 + 21 + 16 + 16 pt. Reserved
+    /// here too so the cross-fade from this skeleton to the scene never moves
+    /// a single row.
+    static let consoleReserve: CGFloat = 93
+    @State private var height: CGFloat = 0
+
     var body: some View {
+        // Whole rows only, down to the bottom edge — the same groups the web
+        // scene lays out (`SyncLoadingLayout.taskGroups`).
+        let groups = SyncLoadingLayout.taskGroups(height: height, top: Self.consoleReserve)
         LunarSkeletonSurface {
             VStack(alignment: .leading, spacing: 0) {
-                skeletonHeader(width: 96)
-                ForEach(0..<3, id: \.self) { _ in skeletonRow }
-                Color.clear.frame(height: 16)
-                skeletonHeader(width: 76)
-                ForEach(0..<6, id: \.self) { _ in skeletonRow }
+                Color.clear.frame(height: Self.consoleReserve)
+                ForEach(Array(groups.enumerated()), id: \.offset) { index, count in
+                    if index > 0 { Color.clear.frame(height: SyncLoadingLayout.taskGroupGap) }
+                    skeletonHeader(width: index.isMultiple(of: 2) ? 96 : 76)
+                    ForEach(0..<count, id: \.self) { _ in skeletonRow }
+                }
             }
         }
-        .frame(maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         .padding(.horizontal, 28)
-        .padding(.top, 8)
         .accessibilityElement()
         .accessibilityLabel("Carregando tarefas")
     }

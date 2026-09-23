@@ -483,9 +483,11 @@ final class BoardColumnView: NSView {
 
 /// Cold-start placeholders, identical to the reference LazyVStack prefix.
 struct BoardColumnSkeletons: View {
+    var count = 3
+
     var body: some View {
         VStack(alignment: .leading, spacing: BoardColumnMetrics.cardSpacing) {
-            ForEach(0..<3, id: \.self) { i in
+            ForEach(0..<count, id: \.self) { i in
                 EditorialSkeletonCard()
                     .cascadeAppear(index: i)
             }

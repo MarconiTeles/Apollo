@@ -51,6 +51,7 @@ let package = Package(
             exclude: [
                 "Resources/Info.plist",
                 "Resources/ApolloSplash",
+                "Resources/ApolloLoading",
                 "Resources/APOLLO_ICON_06.png",
                 "Resources/APOLLO.icon",
                 "Resources/Apollo.entitlements",

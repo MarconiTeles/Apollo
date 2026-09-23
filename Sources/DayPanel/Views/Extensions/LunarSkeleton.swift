@@ -48,30 +48,36 @@ struct LunarSkeletonSurface<Shapes: View>: View {
     @State private var breathing = false
 
     var body: some View {
-        Group {
-            if reduceMotion {
-                // Reduced motion: no travelling light — a slow, gentle
-                // opacity breath still says "loading".
-                Rectangle()
-                    .fill(Editorial.rule)
-                    .mask { shapes }
-                    .opacity(breathing ? 1 : 0.55)
-                    .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true),
-                               value: breathing)
-                    .onAppear { breathing = true }
-            } else {
-                // Qualified: the app defines its own `TimelineView` (calendar).
-                SwiftUI.TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
-                    ZStack {
-                        Rectangle().fill(Editorial.rule)
-                        if let progress = LunarSkeleton.sweepProgress(at: context.date) {
-                            terminator(progress: progress)
+        // Laid out by the shapes themselves (hidden), with the fill drawn
+        // over exactly that box: the surface is as tall as its content, and
+        // content taller than its container overflows downward from the top
+        // (to be clipped by the caller) instead of being centred.
+        shapes
+            .hidden()
+            .overlay(alignment: .top) {
+                if reduceMotion {
+                    // Reduced motion: no travelling light — a slow, gentle
+                    // opacity breath still says "loading".
+                    Rectangle()
+                        .fill(Editorial.rule)
+                        .mask(alignment: .top) { shapes }
+                        .opacity(breathing ? 1 : 0.55)
+                        .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true),
+                                   value: breathing)
+                        .onAppear { breathing = true }
+                } else {
+                    // Qualified: the app defines its own `TimelineView` (calendar).
+                    SwiftUI.TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                        ZStack {
+                            Rectangle().fill(Editorial.rule)
+                            if let progress = LunarSkeleton.sweepProgress(at: context.date) {
+                                terminator(progress: progress)
+                            }
                         }
+                        .mask(alignment: .top) { shapes }
                     }
-                    .mask { shapes }
                 }
             }
-        }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
         // Held back 120 ms so fast loads never flash a placeholder, then
         // faded in. Opacity only — the layout is already in place.

@@ -1,0 +1,24 @@
+{
+  "name": "apollo-loading",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Apollo sync-aware loading scenes — rendered in transparent WKWebViews over the native skeletons.",
+  "scripts": {
+    "dev": "vite --port 5318",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.0",
+    "vite-plugin-singlefile": "^2.3.3"
+  }
+}

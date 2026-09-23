@@ -1,0 +1,1365 @@
+/* Apollo · sync-aware loading scenes.
+ *
+ * Tokens mirror `Editorial` (Sources/DayPanel/Views/Extensions/
+ * EditorialTheme.swift) so a scene is indistinguishable from native chrome.
+ * Motion: transform + opacity only, ease-out for anything entering,
+ * linear only for things that spin. Nothing moves without a reason. */
+
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --accent: #0a84ff;
+  --red: #ff453a;
+  color-scheme: dark;
+}
+
+:root[data-theme="dark"] {
+  --ink: #e8e8ea;
+  --ink-soft: #a0a0a6;
+  --ink-mute: #7a7a80;
+  --ink-faint: #56565b;
+  --rule: rgba(255, 255, 255, 0.07);
+  --rule-strong: rgba(255, 255, 255, 0.12);
+  --page: #1b1b1c;
+  --card: #1c1c1d;
+  --bone: rgba(255, 255, 255, 0.07);
+  /* The lunar glow of `LunarSkeletonSurface` (rgb 0.80, 0.93, 1.0). */
+  --glint: rgba(204, 237, 255, 0.16);
+  --glint-core: rgba(214, 240, 255, 0.28);
+  --moon-disc: rgba(255, 255, 255, 0.18);
+  --moon-glow: 0 0 4px color-mix(in srgb, var(--accent) 70%, transparent);
+  --capsule-bg: rgba(29, 29, 31, 0.9);
+  --capsule-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.25),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.06);
+  --lift-shadow: 0 8px 18px -8px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --ink: #141416;
+  --ink-soft: rgba(20, 20, 22, 0.7);
+  --ink-mute: rgba(20, 20, 22, 0.46);
+  --ink-faint: rgba(20, 20, 22, 0.24);
+  --rule: rgba(20, 20, 22, 0.1);
+  --rule-strong: rgba(20, 20, 22, 0.14);
+  --page: #ffffff;
+  --card: #fafafb;
+  --bone: rgba(20, 20, 22, 0.1);
+  --glint: rgba(255, 255, 255, 0.7);
+  --glint-core: rgba(255, 255, 255, 0.95);
+  --moon-disc: rgba(20, 20, 22, 0.1);
+  --moon-glow: none;
+  --capsule-bg: rgba(255, 255, 255, 0.92);
+  --capsule-shadow: 0 18px 40px -14px rgba(20, 20, 30, 0.22), 0 2px 6px rgba(20, 20, 30, 0.06),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.8);
+  --lift-shadow: 0 8px 18px -8px rgba(20, 20, 30, 0.22);
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  /* Transparent: the native canvas (Editorial.paper) is the background. */
+  background: transparent;
+}
+
+/* ── Scene root ───────────────────────────────────────────────────────── */
+
+.scene {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-size: 11px;
+  -webkit-font-smoothing: antialiased;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.scene *,
+.scene *::before,
+.scene *::after {
+  box-sizing: border-box;
+}
+
+/* ── Bones and the cascading glint ────────────────────────────────────────
+ *
+ * Every bone carries its own reflection. Its start is delayed by the row it
+ * belongs to (--r, 70 ms per row) and by its place in that row (--c, 55 ms
+ * per slot), so the light never flashes everywhere at once: it runs across
+ * each row element by element and down the list row by row — one diagonal
+ * wave over the whole surface, every 3.2 s. Transform-only, so it stays on
+ * the compositor however many bones are on screen. */
+
+.bone {
+  position: relative;
+  display: block;
+  flex: none;
+  overflow: hidden;
+  background-color: var(--bone);
+  isolation: isolate;
+}
+
+.bone::after {
+  content: "";
+  position: absolute;
+  inset: 0 -40%;
+  background: linear-gradient(
+    100deg,
+    transparent 22%,
+    var(--glint) 42%,
+    var(--glint-core) 50%,
+    var(--glint) 58%,
+    transparent 78%
+  );
+  transform: translateX(-100%);
+  animation: glint 3.2s var(--ease-in-out) infinite;
+  animation-delay: calc(var(--r, 0) * 70ms + var(--c, 0) * 55ms);
+}
+
+@keyframes glint {
+  0% {
+    transform: translateX(-100%);
+  }
+  34%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.bone[data-tone="secondary"] {
+  opacity: 0.62;
+}
+
+.bone[data-tone="faint"] {
+  opacity: 0.42;
+}
+
+.row-spacer {
+  flex: 1 1 auto;
+  min-width: 12px;
+}
+
+/* ── Shared type ──────────────────────────────────────────────────────── */
+
+.headline {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context {
+  margin: 2px 0 0;
+  font-size: 11px;
+  font-style: italic;
+  line-height: 1.35;
+  color: var(--ink-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.console-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.console-aside {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  flex: none;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.metric-value {
+  display: block;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.metric-value[data-arrived] {
+  animation: lift 0.5s var(--ease-out);
+}
+
+@keyframes lift {
+  from {
+    transform: translateY(3px);
+    color: var(--accent);
+  }
+}
+
+.metric-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.elapsed {
+  padding-bottom: 1px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+  min-width: 44px;
+  text-align: right;
+}
+
+/* ── Moon phase mark ──────────────────────────────────────────────────── */
+
+.moon {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+
+.moon svg {
+  overflow: visible;
+}
+
+.moon-disc {
+  fill: var(--moon-disc);
+}
+
+.moon-lit {
+  fill: color-mix(in srgb, var(--accent) 88%, white);
+  filter: drop-shadow(var(--moon-glow));
+}
+
+.moon-rim {
+  fill: none;
+  stroke: var(--ink-faint);
+  stroke-width: 0.6;
+  opacity: 0.7;
+}
+
+.moon-orbit {
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 0.5px solid var(--rule);
+  animation: orbit 5.6s linear infinite;
+}
+
+.moon-satellite {
+  position: absolute;
+  top: -1.5px;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  margin-left: -1.5px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+}
+
+.moon[data-tone="failed"] .moon-lit {
+  fill: var(--red);
+}
+
+.moon[data-tone="offline"] .moon-lit {
+  fill: var(--ink-faint);
+  filter: none;
+}
+
+.moon[data-tone="offline"] .moon-orbit {
+  animation-play-state: paused;
+  opacity: 0.4;
+}
+
+@keyframes orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Step glyphs ──────────────────────────────────────────────────────── */
+
+.step-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.step-icon svg {
+  width: 12px;
+  height: 12px;
+  overflow: visible;
+}
+
+.spin-track {
+  fill: none;
+  stroke: var(--rule-strong);
+  stroke-width: 1.4;
+}
+
+.spin-arc {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-dasharray: 26 100;
+  transform-origin: 6px 6px;
+  animation: spin 0.9s linear infinite;
+}
+
+.check {
+  fill: none;
+  stroke: var(--ink-soft);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: draw 0.42s var(--ease-out) forwards;
+}
+
+.pending-dot {
+  fill: none;
+  stroke: var(--ink-faint);
+  stroke-width: 1;
+}
+
+.fail-disc {
+  fill: color-mix(in srgb, var(--red) 18%, transparent);
+}
+
+.fail-mark {
+  stroke: var(--red);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.skip-dash {
+  stroke: var(--ink-faint);
+  stroke-width: 1.3;
+  stroke-linecap: round;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* ── Steps ────────────────────────────────────────────────────────────── */
+
+.steps-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steps-inline li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: var(--ink-soft);
+  transition: color 0.3s var(--ease-out);
+}
+
+.steps-inline li[data-state="active"] {
+  color: var(--ink);
+}
+
+.steps-inline li[data-state="pending"],
+.steps-inline li[data-state="skipped"] {
+  color: var(--ink-faint);
+}
+
+.steps-inline li[data-state="failed"] {
+  color: var(--red);
+}
+
+.step-label {
+  font-weight: 500;
+}
+
+.step-detail {
+  color: var(--ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+
+.steps-ledger {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 0.5px solid var(--rule);
+}
+
+.steps-ledger li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 2px;
+  font-size: 11.5px;
+  border-bottom: 0.5px solid var(--rule);
+  color: var(--ink-soft);
+  animation: rise 0.5s var(--ease-out) both;
+  animation-delay: calc(140ms + var(--i) * 70ms);
+  transition: color 0.3s var(--ease-out);
+}
+
+.steps-ledger li[data-state="active"] {
+  color: var(--ink);
+}
+
+.steps-ledger li[data-state="pending"],
+.steps-ledger li[data-state="skipped"] {
+  color: var(--ink-mute);
+}
+
+.ledger-glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+
+.ledger-glyph svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 0.3s var(--ease-out);
+}
+
+.steps-ledger li[data-state="active"] .ledger-glyph svg {
+  stroke: var(--accent);
+}
+
+/* Editorial dotted leader between the source and its fact. */
+.ledger-fill {
+  flex: 1 1 auto;
+  min-width: 16px;
+  height: 1px;
+  margin: 0 2px;
+  background-image: radial-gradient(circle, var(--ink-faint) 0.55px, transparent 0.75px);
+  background-size: 5px 1px;
+  background-repeat: repeat-x;
+  opacity: 0.8;
+}
+
+/* ── Progress rail ────────────────────────────────────────────────────── */
+
+.rail {
+  display: flex;
+  gap: 4px;
+  height: 2px;
+}
+
+.rail-segment {
+  position: relative;
+  flex: 1 1 0;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--rule-strong);
+}
+
+.rail-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background: var(--accent);
+}
+
+.rail-segment[data-state="failed"] .rail-fill {
+  background: var(--red);
+}
+
+.rail-glint {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 36%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+  animation: glint 1.5s var(--ease-in-out) infinite;
+}
+
+@keyframes glint {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+
+/* ── Shared entrance: facts rise in over the bones already on screen ─── */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* ═════════════════════════ Tarefas ═════════════════════════════════════ */
+
+.scene-tasks {
+  padding: 0 28px;
+}
+
+.scene-tasks .console {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  animation: rise 0.55s var(--ease-out) 0.06s both;
+}
+
+.scene-tasks .rail {
+  margin: 10px 0 9px;
+  animation: rise 0.55s var(--ease-out) 0.12s both;
+}
+
+/* Fixed block heights: the native fallback (MyTasksLoadingPlaceholder)
+   reserves exactly 40 + 21 + 16 + 16 = 93 pt above the first group. */
+.scene-tasks .steps-inline {
+  flex-wrap: nowrap;
+  height: 16px;
+  overflow: hidden;
+  animation: rise 0.55s var(--ease-out) 0.18s both;
+}
+
+.task-groups {
+  margin-top: 16px;
+}
+
+.task-group + .task-group {
+  margin-top: 16px;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  box-shadow: inset 0 -0.5px 0 var(--rule);
+}
+
+.status-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  animation: reveal 0.5s var(--ease-out) both;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status);
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+}
+
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 44px;
+  box-shadow: inset 0 -0.5px 0 var(--rule);
+  animation: cascade-in 0.6s var(--ease-out) both;
+  animation-delay: calc(var(--i) * 32ms);
+}
+
+.group-header {
+  animation: cascade-in 0.6s var(--ease-out) both;
+  animation-delay: calc(var(--r) * 32ms);
+}
+
+/* Rows, cards and capsules land one after another over the native
+   skeleton fading out beneath them. */
+@keyframes cascade-in {
+  from {
+    opacity: 0.25;
+    transform: translateY(6px);
+  }
+}
+
+/* The row's status ring: a bone until tasks start landing, then it lights
+   up in the group's status colour — one row after another. */
+.row-status {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--bone);
+  transition:
+    background-color 0.45s var(--ease-out),
+    box-shadow 0.45s var(--ease-out),
+    transform 0.45s var(--ease-out);
+  transition-delay: calc(var(--i) * 45ms);
+}
+
+.task-row[data-lit] .row-status {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--status) 85%, transparent);
+  transform: scale(1);
+  animation: ring-pop 0.5s var(--ease-out) both;
+  animation-delay: calc(var(--i) * 45ms);
+}
+
+@keyframes ring-pop {
+  40% {
+    transform: scale(1.18);
+    box-shadow:
+      inset 0 0 0 1.5px var(--status),
+      0 0 0 3px color-mix(in srgb, var(--status) 22%, transparent);
+  }
+}
+
+.row-assignee {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 132px;
+  flex: none;
+}
+
+.row-due {
+  display: flex;
+  justify-content: flex-end;
+  width: 92px;
+  flex: none;
+}
+
+/* A page of tasks landed: one band of light runs down the rows. */
+.task-row[data-wave="a"] {
+  animation: wave-a 0.9s var(--ease-out) calc(var(--i) * 45ms) both;
+}
+
+.task-row[data-wave="b"] {
+  animation: wave-b 0.9s var(--ease-out) calc(var(--i) * 45ms) both;
+}
+
+@keyframes wave-a {
+  30% {
+    background-color: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+}
+
+@keyframes wave-b {
+  30% {
+    background-color: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+}
+
+/* ═════════════════════════ Quadro ══════════════════════════════════════ */
+
+.board-column {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ghost-card {
+  animation: card-in 0.7s var(--ease-out) both;
+  animation-delay: calc(var(--col) * 80ms + var(--k) * 55ms);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--page);
+  border: 0.5px solid color-mix(in srgb, var(--rule) 40%, transparent);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0.2;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+.card-crumb,
+.card-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-title {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.card-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--bone);
+  transition: background-color 0.6s var(--ease-out), box-shadow 0.6s var(--ease-out);
+}
+
+/* Structure known: every card wears its column's status colour. */
+.board-column[data-known] .card-dot {
+  background: var(--status);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status) 16%, transparent);
+  transition-delay: calc(var(--col) * 60ms + var(--k) * 40ms);
+}
+
+/* Intake: a packet of light runs down from the column header while cards
+   are being fetched. */
+.intake {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  width: 1px;
+  height: 20px;
+  background: linear-gradient(to bottom, transparent, var(--rule-strong));
+  opacity: 0;
+  transition: opacity 0.4s var(--ease-out);
+}
+
+.intake[data-live] {
+  opacity: 1;
+}
+
+.intake::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -1.5px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  opacity: 0;
+}
+
+.intake[data-live]::after {
+  animation: intake 1.8s var(--ease-in-out) infinite;
+  animation-delay: calc(var(--col) * 170ms);
+}
+
+@keyframes intake {
+  0% {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  25%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+}
+
+/* A batch landed: cards settle column by column. */
+.ghost-card[data-settle="a"] {
+  animation: settle-a 0.7s var(--ease-out) both;
+  animation-delay: calc(var(--col, 0) * 70ms + var(--k) * 45ms);
+}
+
+.ghost-card[data-settle="b"] {
+  animation: settle-b 0.7s var(--ease-out) both;
+  animation-delay: calc(var(--col, 0) * 70ms + var(--k) * 45ms);
+}
+
+@keyframes settle-a {
+  30% {
+    transform: translateY(-3px);
+    box-shadow: var(--lift-shadow);
+  }
+}
+
+@keyframes settle-b {
+  30% {
+    transform: translateY(-3px);
+    box-shadow: var(--lift-shadow);
+  }
+}
+
+.board-capsule {
+  position: absolute;
+  bottom: 28px;
+  left: calc(var(--canvas-leading) + (100% - var(--canvas-leading)) / 2);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100% - var(--canvas-leading) - 56px);
+  padding: 11px 16px 11px 13px;
+  border-radius: 16px;
+  background: var(--capsule-bg);
+  border: 0.5px solid var(--rule-strong);
+  box-shadow: var(--capsule-shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  backdrop-filter: blur(24px) saturate(1.5);
+  transform: translateX(-50%);
+  animation: capsule-in 0.6s var(--ease-out) 0.1s both;
+}
+
+.board-capsule .console-text {
+  flex: none;
+  max-width: 260px;
+}
+
+.capsule-rule {
+  align-self: stretch;
+  width: 0.5px;
+  flex: none;
+  background: var(--rule-strong);
+}
+
+.capsule-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 250px;
+}
+
+@keyframes capsule-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 10px) scale(0.98);
+  }
+}
+
+@media (max-width: 1040px) {
+  .capsule-steps,
+  .capsule-steps + .capsule-rule {
+    display: none;
+  }
+}
+
+/* ═════════════════════════ Comentários ═════════════════════════════════ */
+
+.scene-comments {
+  padding: 0 28px;
+}
+
+/* 100 pt + 12 pt gap: reserved by the native fallback too. */
+.comments-console {
+  height: 100px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-content: center;
+  align-items: center;
+  row-gap: 12px;
+  column-gap: 14px;
+  margin-bottom: 12px;
+  padding: 0 17px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  border: 0.7px solid var(--rule);
+  animation: rise 0.55s var(--ease-out) 0.06s both;
+}
+
+.comments-console .steps-inline {
+  margin-top: 8px;
+}
+
+.comments-rail {
+  grid-column: 1 / -1;
+}
+
+.comments-console .steps-inline {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.scan-ring {
+  position: relative;
+  width: 46px;
+  height: 46px;
+}
+
+.scan-ring svg {
+  width: 46px;
+  height: 46px;
+  transform: rotate(-90deg);
+}
+
+.ring-track {
+  fill: none;
+  stroke: var(--rule-strong);
+  stroke-width: 2.5;
+}
+
+.ring-arc,
+.ring-seek {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.ring-seek {
+  transform-origin: 24px 24px;
+  animation: spin 1.2s linear infinite;
+}
+
+.comments-console[data-tone="failed"] .ring-arc {
+  stroke: var(--red);
+}
+
+.ring-count {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.comment-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.comment-card {
+  animation: cascade-in 0.65s var(--ease-out) both;
+  animation-delay: calc(80ms + var(--i) * 70ms);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 17px;
+  border-radius: 11px;
+  background: var(--card);
+  border: 0.7px solid color-mix(in srgb, var(--rule) 50%, transparent);
+  transition: border-color 0.5s var(--ease-out);
+}
+
+/* Found: an accent spine grows along the card's leading edge, the avatar
+   gets an accent ring and a seal pops in where the chip was. */
+.comment-card::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  left: -0.5px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: scaleY(0);
+  transition: transform 0.6s var(--ease-out);
+}
+
+.comment-card[data-state="found"]::before {
+  transform: scaleY(1);
+}
+
+.comment-card[data-state="reading"] {
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.comment-top,
+.comment-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.comment-body {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.comment-avatar {
+  transition: box-shadow 0.5s var(--ease-out);
+}
+
+.comment-card[data-state="found"] .comment-avatar {
+  box-shadow: 0 0 0 1.5px var(--card), 0 0 0 2.5px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.found-seal {
+  display: grid;
+  place-items: center;
+  width: 88px;
+  height: 22px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--accent) 40%, transparent);
+  animation: seal-pop 0.55s var(--ease-out) both;
+}
+
+.found-seal svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 20;
+  stroke-dashoffset: 20;
+  animation: draw 0.45s var(--ease-out) 0.2s forwards;
+}
+
+@keyframes seal-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  60% {
+    transform: scale(1.06);
+  }
+}
+
+.comment-lines {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+/* The bubble: the same 34 pt silhouette as the native skeleton, now with
+   two lines of "text" inside it. */
+.bubble {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bone) 62%, transparent);
+}
+
+.comment-card[data-state="found"] .bubble-line {
+  background-color: color-mix(in srgb, var(--ink) 16%, transparent);
+}
+
+/* Reading: the lines write themselves in, one after the other, again and
+   again while this conversation is being read. */
+.comment-card[data-state="reading"] .bubble-line {
+  transform-origin: left center;
+  animation: write 2.2s var(--ease-out) infinite;
+}
+
+.comment-card[data-state="reading"] .bubble-line + .bubble-line {
+  animation-delay: 0.35s;
+}
+
+@keyframes write {
+  0% {
+    transform: scaleX(0);
+    opacity: 0.4;
+  }
+  45%,
+  82% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 0.4;
+  }
+}
+
+/* The read head: a band of accent light crossing the card being read. */
+.read-head {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.read-head::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 30%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--accent) 12%, transparent) 70%,
+    color-mix(in srgb, var(--accent) 30%, transparent) 97%,
+    transparent
+  );
+  transform: translateX(-100%);
+  animation: read-head 2.2s var(--ease-in-out) infinite;
+}
+
+@keyframes read-head {
+  to {
+    transform: translateX(340%);
+  }
+}
+
+.typing {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  display: flex;
+  gap: 4px;
+  transform: translateY(-50%);
+  animation: rise 0.4s var(--ease-out) both;
+}
+
+.typing i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: typing 1.2s var(--ease-in-out) infinite;
+}
+
+.typing i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.typing i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2.5px);
+  }
+}
+
+/* The scan ring's lit tip. */
+.ring-tip {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 3px var(--accent));
+  animation: tip 1.4s var(--ease-in-out) infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes tip {
+  50% {
+    transform: scale(1.45);
+    opacity: 0.75;
+  }
+}
+
+/* ═════════════════════════ Inbox ═══════════════════════════════════════ */
+
+.scene-inbox {
+  padding: 0 20px;
+}
+
+/* 34 + 12 + 102.5 + 18 ≈ 166 pt above the first capsule, mirrored by the
+   native fallback. */
+.inbox-head {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 2px 12px;
+  animation: rise 0.55s var(--ease-out) 0.06s both;
+}
+
+.inbox-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 18px;
+}
+
+.capsule {
+  animation: drop-in 0.6s var(--ease-out) both;
+  animation-delay: calc(120ms + var(--i) * 60ms);
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 58px;
+  padding: 0 16px;
+  border-radius: 13.5px;
+  background: color-mix(in srgb, var(--page) 55%, transparent);
+  border: 0.5px solid var(--rule);
+}
+
+.capsule-lines {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+@keyframes drop-in {
+  from {
+    opacity: 0.2;
+    transform: translateY(-8px) scale(0.99);
+  }
+}
+
+/* Listening: an accent ring passes down the capsules — "checking for what
+   changed", one slot at a time. */
+.capsule::after {
+  content: "";
+  position: absolute;
+  inset: -0.5px;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+  opacity: 0;
+}
+
+.inbox-feed[data-listening] .capsule::after {
+  animation: listen 2.6s var(--ease-in-out) infinite;
+  animation-delay: calc(var(--i) * 190ms);
+}
+
+@keyframes listen {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  45% {
+    opacity: 0;
+  }
+}
+
+/* ── Offline: no travelling light pretending there is traffic ─────────── */
+
+.scene[data-offline] .rail-glint,
+.scene[data-offline] .intake,
+.scene[data-offline] .typing,
+.scene[data-offline] .read-head {
+  display: none;
+}
+
+.scene[data-offline] .inbox-feed .capsule::after {
+  animation: none;
+}
+
+/* ── Reduced motion: opacity only ─────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .bone::after {
+    display: none;
+  }
+
+  .bone {
+    animation: breathe 1.4s ease-in-out infinite alternate;
+  }
+
+  .moon-orbit,
+  .rail-glint,
+  .intake::after,
+  .typing,
+  .inbox-feed .capsule::after,
+  .spin-arc,
+  .ring-seek,
+  .ring-tip,
+  .read-head,
+  .comment-card[data-state="reading"] .bubble-line {
+    animation: none !important;
+  }
+
+  .task-row,
+  .group-header,
+  .ghost-card,
+  .comment-card,
+  .capsule,
+  .scene-tasks .console,
+  .scene-tasks .rail,
+  .scene-tasks .steps-inline,
+  .comments-console,
+  .inbox-head,
+  .steps-ledger li,
+  .status-name,
+  .metric-value[data-arrived],
+  .board-capsule,
+  .task-row[data-lit] .row-status {
+    animation-name: fade !important;
+  }
+
+  .row-status {
+    transition-duration: 0.2s;
+  }
+
+  .check {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes breathe {
+  from {
+    opacity: 0.55;
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}

@@ -1956,6 +1956,19 @@ final class AppState: ObservableObject {
                 .store(in: &cancellables)
         }
 
+        // Auth state first, and forwarded: views read connection state
+        // through `appState.clickUpAuthService`, so they must re-render when
+        // it changes — and must never see cached tasks alongside a
+        // not-yet-loaded (nil) connection, which rendered "Conecte sua conta
+        // ClickUp" for a connected account.
+        await MainActor.run {
+            clickUpAuthService.checkAuthState()
+            clickUpAuthService.objectWillChange
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] in self?.objectWillChange.send() }
+                .store(in: &cancellables)
+        }
+
         if let cached = cache.load(), !cached.events.isEmpty || !cached.tasks.isEmpty
                                     || !cached.assignedToMeTasks.isEmpty {
             await MainActor.run {
@@ -1982,7 +1995,6 @@ final class AppState: ObservableObject {
         // GoogleAuthService now (OAuth flow). No EventKit
         // permission probe — Google connection state is the
         // only gate.
-        clickUpAuthService.checkAuthState()
         networkMonitor.start()
 
         networkMonitor.$isOnline
@@ -2449,7 +2461,13 @@ final class AppState: ObservableObject {
                             KeychainHelper.load(for: KeychainHelper.Keys.clickupListId) != nil
         guard calConfigured || cuConfigured else { return }
 
-        await MainActor.run { syncStatus = .syncing }
+        await MainActor.run {
+            syncStatus = .syncing
+            var stages: Set<SyncJournal.Stage> = [.changes]
+            if cuConfigured { stages.formUnion([.structure, .tasks]) }
+            if calConfigured { stages.insert(.calendar) }
+            SyncJournal.shared.beginRun(stages: stages)
+        }
 
         var fetched:      [CalendarEvent] = []
         var fetchedTasks: [CUTask]        = []
@@ -2480,12 +2498,16 @@ final class AppState: ObservableObject {
             let end   = cal.date(byAdding: .day, value:  31, to: today)!
 
             // Single source of truth: Google Calendar API.
+            await MainActor.run { SyncJournal.shared.mark(.calendar, .active) }
             do {
                 fetched = try await googleCalendar.listEvents(from: start, to: end)
                 calFetchSucceeded = true
+                let count = fetched.count
+                await MainActor.run { SyncJournal.shared.mark(.calendar, .done(count: count)) }
             } catch {
                 hadError = true
                 Log.error("Google Calendar list failed: \(error)")
+                await MainActor.run { SyncJournal.shared.mark(.calendar, .failed) }
             }
         }
         if cuConfigured {
@@ -2519,6 +2541,14 @@ final class AppState: ObservableObject {
                     return try await cuSvc.listTasks()
                 }
 
+                await MainActor.run {
+                    let journal = SyncJournal.shared
+                    journal.mark(.structure, needMeta
+                                 ? .active
+                                 : .cached(count: availableStatuses.count))
+                    journal.mark(.tasks, .active)
+                }
+
                 let t: [CUTask]
                 var meta: ([CUStatus], [CUMember], [CUTask.Tag])? = nil
                 if needMeta {
@@ -2533,6 +2563,10 @@ final class AppState: ObservableObject {
                 fetchedTasks = t
                 cuFetchSucceeded = true
                 await MainActor.run {
+                    SyncJournal.shared.mark(.tasks, .done(count: t.count))
+                    if let (s, _, _) = meta {
+                        SyncJournal.shared.mark(.structure, .done(count: s.count))
+                    }
                     if let (s, m, tg) = meta {
                         availableStatuses = s
                         availableMembers  = m
@@ -2589,7 +2623,11 @@ final class AppState: ObservableObject {
                 Task.detached(priority: .background) { [weak self] in
                     await self?.syncAssignedToMeAcrossWorkspace()
                 }
-            } catch { hadError = true; Log.error("ClickUp: \(error)") }
+            } catch {
+                hadError = true
+                Log.error("ClickUp: \(error)")
+                await MainActor.run { SyncJournal.shared.failActiveStages() }
+            }
         }
 
         let now = Date()
@@ -2610,10 +2648,13 @@ final class AppState: ObservableObject {
         // snapshot is NOT re-baselined below, so notifications for it
         // simply defer to the next good sync.
         await MainActor.run {
+            SyncJournal.shared.mark(.changes, .active)
+            let before = notifications.count
             diffAndNotifyRemoteChanges(
                 newTasks:  cuFetchSucceeded  ? fetchedTasks : [],
                 newEvents: calFetchSucceeded ? fetched      : []
             )
+            SyncJournal.shared.mark(.changes, .done(count: max(0, notifications.count - before)))
         }
 
         await MainActor.run {
@@ -2689,6 +2730,7 @@ final class AppState: ObservableObject {
                 if tasks != rebuilt { tasks = rebuilt }
             }
             syncStatus   = hadError ? .error("Algumas fontes falharam") : .success(now)
+            SyncJournal.shared.finishRun()
             // Re-baseline the snapshots to the just-synced state —
             // but ONLY for the sources whose fetch succeeded (the
             // diff above used [] for the failed ones; re-baselining
@@ -4189,6 +4231,12 @@ final class AppState: ObservableObject {
         let hadContent = await MainActor.run {
             !(tasksByListId[id] ?? []).isEmpty
         }
+        // Only the list on screen reports to the loading scenes — pinned-list
+        // prefetches run through here too, silently.
+        let reportsProgress = KeychainHelper.load(for: KeychainHelper.Keys.clickupListId) == id
+        if reportsProgress {
+            await MainActor.run { SyncJournal.shared.beginListFetch() }
+        }
 
         // Merge-and-publish for one snapshot of the accumulated
         // pages. Pending-write guard preserved from the original:
@@ -4247,6 +4295,10 @@ final class AppState: ObservableObject {
             do {
                 let pageTasks = try await cuSvc.listTasksPage(listId: id, page: page)
                 accumulated += pageTasks
+                if reportsProgress {
+                    let received = accumulated.count
+                    await MainActor.run { SyncJournal.shared.streamed(tasks: received) }
+                }
                 if !hadContent { await publish(accumulated) }
                 if pageTasks.count < 100 { break }   // last page
             } catch {
@@ -4261,6 +4313,12 @@ final class AppState: ObservableObject {
         // the list may have been emptied server-side).
         if hadContent && !failed {
             await publish(accumulated)
+        }
+        if reportsProgress {
+            let received = accumulated.count
+            await MainActor.run {
+                SyncJournal.shared.mark(.tasks, failed ? .failed : .done(count: received))
+            }
         }
     }
 

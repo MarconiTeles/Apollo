@@ -279,11 +279,14 @@ struct AssignedCommentsView: View {
 
     @ViewBuilder
     private var content: some View {
-        if me == nil {
+        if !appState.clickUpAuthService.isConnected {
             empty(icon: "person.crop.circle.badge.exclamationmark",
                   title: "Conecte o ClickUp",
                   caption: "Entre na sua conta para carregar comentários atribuídos.")
-        } else if filtered.isEmpty && appState.assignedCommentsLoading {
+        } else if me == nil || (filtered.isEmpty && appState.assignedCommentsLoading) {
+            // Connected but the user id is still being resolved, or actively
+            // scanning with nothing yet: the sync-aware scene, never the
+            // "Conecte" / "Tudo em ordem" states (both would be false).
             // Actively scanning with nothing yet — show a breathing skeleton,
             // never the "Tudo em ordem" empty state (which read as "you have
             // zero comments" while the index was still being built).
@@ -341,19 +344,15 @@ struct AssignedCommentsView: View {
         }
     }
 
-    /// Breathing placeholder cards shown while the index is being built, so
-    /// the surface reads as "loading" rather than "empty".
+    /// Shown while the index is being built: the comments scene reports how
+    /// many recent tasks were read and how many comments were found; the
+    /// native cards are its fallback (same geometry, so the hand-over is
+    /// still).
     private var skeletonList: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                ForEach(0..<5, id: \.self) { _ in CommentSkeletonCard() }
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 4)
+        SyncLoadingSurface(scene: .comments) {
+            CommentsLoadingFallback()
         }
-        .scrollIndicators(.never)
-        .allowsHitTesting(false)
-        .contentMargins(.top, headerBarHeight + 30, for: .scrollContent)
+        .padding(.top, headerBarHeight + 34)
     }
 
     private var loadMoreButton: some View {
@@ -421,6 +420,27 @@ private struct AssignedCommentsToolbarCapsule: ViewModifier {
                     .strokeBorder(Editorial.rule.opacity(0.75), lineWidth: 0.7)
                     .allowsHitTesting(false)
             }
+    }
+}
+
+/// Native stand-in for the comments scene: the reading console's space
+/// (100 pt card + 12 pt gap), then as many whole cards as the window holds.
+private struct CommentsLoadingFallback: View {
+    @State private var height: CGFloat = 0
+
+    var body: some View {
+        let cards = SyncLoadingLayout.fitting(bottom: height,
+                                              top: SyncLoadingLayout.commentsTop,
+                                              size: SyncLoadingLayout.commentCard,
+                                              gap: SyncLoadingLayout.commentGap)
+        VStack(spacing: SyncLoadingLayout.commentGap) {
+            Color.clear.frame(height: SyncLoadingLayout.commentsTop - SyncLoadingLayout.commentGap)
+            ForEach(0..<cards, id: \.self) { _ in CommentSkeletonCard() }
+        }
+        .padding(.horizontal, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .clipped()
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
     }
 }
 

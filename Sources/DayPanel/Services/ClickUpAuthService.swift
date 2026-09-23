@@ -16,6 +16,13 @@ final class ClickUpAuthService: ObservableObject {
         workspaceName = KeychainHelper.load(for: KeychainHelper.Keys.clickupWorkspace)
         userName      = KeychainHelper.load(for: KeychainHelper.Keys.clickupUserName)
         userId        = KeychainHelper.load(for: KeychainHelper.Keys.clickupUserId).flatMap { Int($0) }
+        // A token without a stored user id (the profile request failed when
+        // the account was connected, or the connection predates the id being
+        // persisted) is still a live connection. Resolve the id again instead
+        // of leaving id-gated surfaces thinking ClickUp is disconnected.
+        if let token = accessToken, userId == nil {
+            Task { await self.restoreUserId(token: token) }
+        }
     }
 
     // MARK: - Connection flow
@@ -126,6 +133,25 @@ final class ClickUpAuthService: ObservableObject {
             self.isConnected   = true
             self.userName      = uName
             self.workspaceName = wsName
+        }
+    }
+
+    /// Re-reads only the numeric user id for an existing connection. Unlike
+    /// `fetchProfile`, a failed request changes nothing (no "Usuário" /
+    /// "Workspace" placeholders overwriting the stored names).
+    private func restoreUserId(token: String) async {
+        var request = URLRequest(url: URL(string: "https://api.clickup.com/api/v2/user")!)
+        request.setValue(token, forHTTPHeaderField: "Authorization")
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let user = json["user"] as? [String: Any],
+              let id = user["id"] as? Int
+        else { return }
+        KeychainHelper.save(String(id), for: KeychainHelper.Keys.clickupUserId)
+        await MainActor.run {
+            // Still the same connection? A disconnect in the meantime wins.
+            guard self.accessToken == token else { return }
+            self.userId = id
         }
     }
 

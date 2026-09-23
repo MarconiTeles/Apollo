@@ -159,6 +159,21 @@ fi
 mkdir -p "$APP/Contents/Resources/ApolloSplash"
 cp "$SPLASH_BUILD" "$APP/Contents/Resources/ApolloSplash/index.html"
 
+# Sync-aware loading scenes (React, one transparent WKWebView per surface
+# while it loads). Same model as the splash: committed single-file build,
+# rebuilt first when the web toolchain is installed.
+LOADING_WEB_DIR="web/apollo-loading"
+LOADING_BUILD="Sources/DayPanel/Resources/ApolloLoading/index.html"
+if [ -d "$LOADING_WEB_DIR/node_modules" ] && [ -z "${APOLLO_SKIP_SPLASH_BUILD:-}" ]; then
+    echo "Building loading scenes..."
+    (cd "$LOADING_WEB_DIR" && npm run --silent build >/dev/null) \
+        || { echo "ERROR: loading scenes build failed (npm run build in $LOADING_WEB_DIR)" >&2; exit 1; }
+fi
+[ -f "$LOADING_BUILD" ] \
+    || { echo "ERROR: $LOADING_BUILD missing — run npm ci && npm run build in $LOADING_WEB_DIR" >&2; exit 1; }
+mkdir -p "$APP/Contents/Resources/ApolloLoading"
+cp "$LOADING_BUILD" "$APP/Contents/Resources/ApolloLoading/index.html"
+
 # Apollo Review is a real secondary macOS application bundled with Apollo.
 # Keeping it as a nested .app gives the review surface its own NSWindow,
 # traffic lights, independent movement/resize and lifetime, while both hosts
