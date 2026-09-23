@@ -901,78 +901,74 @@ struct EditorialMyTasksView: View {
     }
 }
 
-/// Animated loading state shaped exactly like the single-line task list.
-/// One shared pulse drives the whole viewport, avoiding a timer/state
-/// machine per placeholder row.
+/// Loading state shaped exactly like the single-line task list, lit by the
+/// shared lunar sweep. One surface (one clock, one mask) covers the whole
+/// viewport instead of a timer per placeholder row.
 private struct MyTasksLoadingPlaceholder: View {
-    @State private var pulse = false
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            skeletonHeader(width: 96)
-            ForEach(0..<3, id: \.self) { _ in skeletonRow }
-            Color.clear.frame(height: 16)
-            skeletonHeader(width: 76)
-            ForEach(0..<6, id: \.self) { _ in skeletonRow }
-            Spacer(minLength: 0)
+        LunarSkeletonSurface {
+            VStack(alignment: .leading, spacing: 0) {
+                skeletonHeader(width: 96)
+                ForEach(0..<3, id: \.self) { _ in skeletonRow }
+                Color.clear.frame(height: 16)
+                skeletonHeader(width: 76)
+                ForEach(0..<6, id: \.self) { _ in skeletonRow }
+            }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .padding(.horizontal, 28)
         .padding(.top, 8)
-        .opacity(pulse ? 1 : 0.38)
-        .animation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true),
-                   value: pulse)
-        .onAppear { pulse = true }
-        .allowsHitTesting(false)
+        .accessibilityElement()
         .accessibilityLabel("Carregando tarefas")
     }
 
     private func skeletonHeader(width: CGFloat) -> some View {
         HStack(spacing: 10) {
             RoundedRectangle(cornerRadius: 2)
-                .fill(Editorial.rule)
+                .fill(LunarSkeleton.primary)
                 .frame(width: 10, height: 6)
-            Circle().fill(Editorial.rule).frame(width: 7, height: 7)
+            Circle().fill(LunarSkeleton.primary).frame(width: 7, height: 7)
             RoundedRectangle(cornerRadius: 3)
-                .fill(Editorial.rule)
+                .fill(LunarSkeleton.primary)
                 .frame(width: width, height: 9)
             RoundedRectangle(cornerRadius: 3)
-                .fill(Editorial.ruleSoft)
+                .fill(LunarSkeleton.secondary)
                 .frame(width: 20, height: 9)
             Spacer()
         }
         .frame(height: 38)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Editorial.ruleSoft).frame(height: 0.5)
+            Rectangle().fill(LunarSkeleton.faint).frame(height: 0.5)
         }
     }
 
     private var skeletonRow: some View {
         HStack(spacing: 14) {
-            Circle().fill(Editorial.rule).frame(width: 14, height: 14)
+            Circle().fill(LunarSkeleton.primary).frame(width: 14, height: 14)
             RoundedRectangle(cornerRadius: 4)
-                .fill(Editorial.rule)
+                .fill(LunarSkeleton.primary)
                 .frame(height: 12)
                 .frame(maxWidth: 390)
             Spacer(minLength: 12)
             RoundedRectangle(cornerRadius: 4)
-                .fill(Editorial.ruleSoft)
+                .fill(LunarSkeleton.secondary)
                 .frame(width: 74, height: 9)
             HStack(spacing: 7) {
-                Circle().fill(Editorial.rule).frame(width: 20, height: 20)
+                Circle().fill(LunarSkeleton.primary).frame(width: 20, height: 20)
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(Editorial.rule)
+                    .fill(LunarSkeleton.primary)
                     .frame(width: 66, height: 10)
             }
             .frame(width: 132, alignment: .leading)
             RoundedRectangle(cornerRadius: 4)
-                .fill(Editorial.ruleSoft)
+                .fill(LunarSkeleton.secondary)
                 .frame(width: 54, height: 9)
                 .frame(width: 92, alignment: .trailing)
-            Circle().fill(Editorial.rule).frame(width: 4, height: 4)
+            Circle().fill(LunarSkeleton.primary).frame(width: 4, height: 4)
         }
         .frame(height: 44)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Editorial.ruleSoft).frame(height: 0.5)
+            Rectangle().fill(LunarSkeleton.faint).frame(height: 0.5)
         }
     }
 }

@@ -68,7 +68,10 @@ struct ContentView: View {
     /// whether the user has ever launched before, but it no
     /// longer shortens the splash.
     @State private var showWelcome:    Bool = true
-    @State private var isFirstWelcome: Bool = true
+    /// Set when the splash starts opening its reveal iris. From then on the
+    /// setup backdrop must not sit behind it, or the iris would open onto
+    /// frosted glass instead of the dashboard.
+    @State private var welcomeRevealing: Bool = false
 
     // Origin frames so popups can scale-up from where the user clicked
     @State private var settingsOrigin: CGRect = .zero
@@ -105,7 +108,6 @@ struct ContentView: View {
         previewMode = true
         _sidebarRoute = State(initialValue: previewRoute)
         _showWelcome = State(initialValue: false)
-        _isFirstWelcome = State(initialValue: false)
     }
 #endif
 
@@ -377,7 +379,7 @@ struct ContentView: View {
                 // `.transition(.opacity)` makes it fade in alongside
                 // the welcome animation and fade out cleanly once
                 // setup is done.
-                if showWelcome || showOnboarding {
+                if (showWelcome && !welcomeRevealing) || showOnboarding {
                     Rectangle()
                         .fill(.regularMaterial)
                         .ignoresSafeArea()
@@ -642,15 +644,22 @@ struct ContentView: View {
                         .zIndex(900)
                 }
 
-                // Welcome splash — sits above every other overlay so
-                // nothing distracts during the intro. Plays on every
-                // launch; `isFirstLaunch` switches between the full
-                // cinematic and the 1-second brand flash.
+                // Lunar launch splash — sits above every other overlay so
+                // nothing distracts during the intro. Plays on every launch
+                // for at least 3 s, then holds until the dashboard has real
+                // rows (or nothing left in flight) and reveals it through
+                // an iris. The web layer removes itself; no fade needed.
                 if showWelcome {
-                    WelcomeAnimationView(isFirstLaunch: isFirstWelcome,
-                                         onComplete: welcomeFinished)
-                        .transition(.opacity)
-                        .zIndex(999)
+                    LunarSplashView(
+                        dataReady: LunarSplashPolicy.isDataReady(
+                            hasTasks: !appState.tasks.isEmpty,
+                            isSyncing: appState.isSyncing
+                        ),
+                        onRevealStart: welcomeRevealStarted,
+                        onFinished: welcomeFinished
+                    )
+                    .transition(.identity)
+                    .zIndex(999)
                 }
 
                 // Sparkle "new version available" banner — sits at the
@@ -1349,19 +1358,21 @@ struct ContentView: View {
         if !showOnboarding { showOnboarding = true }
     }
 
-    /// Called by `WelcomeAnimationView` after its fade-out completes.
-    /// Persists the "seen" flag, brings the onboarding wizard up
-    /// *first* (so the persistent backdrop in `body` stays put while
-    /// SwiftUI cross-fades the two overlays), then dismisses the
-    /// splash. Doing it in this order avoids the brief moment where
-    /// neither overlay is on screen and the dashboard would flash
-    /// through.
+    /// Called by `LunarSplashView` as its reveal iris starts to open.
+    /// Raises the onboarding wizard (when setup is incomplete) *before* the
+    /// iris uncovers anything, so it opens onto the wizard and its backdrop
+    /// rather than flashing the bare dashboard first.
+    private func welcomeRevealStarted() {
+        welcomeRevealing = true
+        maybeShowOnboarding()
+    }
+
+    /// Called by `LunarSplashView` once the reveal has fully uncovered the
+    /// window. Persists the "seen" flag and unmounts the splash.
     private func welcomeFinished() {
         UserDefaults.standard.set(true, forKey: "dp_hasSeenWelcome")
         maybeShowOnboarding()
-        withAnimation(.easeInOut(duration: 0.25)) {
-            showWelcome = false
-        }
+        showWelcome = false
     }
 
     // MARK: - Glass Toolbar

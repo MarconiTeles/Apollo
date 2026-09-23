@@ -424,27 +424,26 @@ private struct AssignedCommentsToolbarCapsule: ViewModifier {
     }
 }
 
-/// One loading placeholder that mirrors an `AssignedCommentCard`'s layout and
-/// breathes so the wait reads as progress, not emptiness.
+/// One loading placeholder that mirrors an `AssignedCommentCard`'s layout,
+/// lit by the shared lunar sweep so the wait reads as progress.
 private struct CommentSkeletonCard: View {
-    @State private var dim = false
-    private var bar: Color { Editorial.ink.opacity(0.09) }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Circle().fill(bar).frame(width: 8, height: 8)
-                RoundedRectangle(cornerRadius: 4).fill(bar).frame(width: 150, height: 11)
-                Spacer(minLength: 12)
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(bar).frame(width: 88, height: 22)
-            }
-            HStack(alignment: .top, spacing: 12) {
-                Circle().fill(bar).frame(width: 34, height: 34)
-                VStack(alignment: .leading, spacing: 9) {
-                    RoundedRectangle(cornerRadius: 4).fill(bar).frame(width: 120, height: 10)
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(bar).frame(maxWidth: .infinity).frame(height: 34)
+        LunarSkeletonSurface {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Circle().fill(LunarSkeleton.primary).frame(width: 8, height: 8)
+                    RoundedRectangle(cornerRadius: 4).fill(LunarSkeleton.primary).frame(width: 150, height: 11)
+                    Spacer(minLength: 12)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(LunarSkeleton.secondary).frame(width: 88, height: 22)
+                }
+                HStack(alignment: .top, spacing: 12) {
+                    Circle().fill(LunarSkeleton.primary).frame(width: 34, height: 34)
+                    VStack(alignment: .leading, spacing: 9) {
+                        RoundedRectangle(cornerRadius: 4).fill(LunarSkeleton.primary).frame(width: 120, height: 10)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(LunarSkeleton.secondary).frame(maxWidth: .infinity).frame(height: 34)
+                    }
                 }
             }
         }
@@ -453,9 +452,6 @@ private struct CommentSkeletonCard: View {
         .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Editorial.card))
         .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
             .strokeBorder(Editorial.rule.opacity(0.5), lineWidth: 0.7))
-        .opacity(dim ? 0.5 : 1)
-        .animation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: dim)
-        .onAppear { dim = true }
     }
 }
 

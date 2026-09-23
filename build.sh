@@ -106,6 +106,21 @@ cp Sources/DayPanel/Resources/Info.plist "$APP/Contents/Info.plist"
 cp build/icon/Assets.car                 "$APP/Contents/Resources/Assets.car"
 cp build/icon/AppIcon.icns               "$APP/Contents/Resources/AppIcon.icns"
 
+# Launch splash (React + WebGL, played in a transparent WKWebView). The
+# committed single-file build is the source of truth for releases; when the
+# web toolchain is installed it is rebuilt first so it can't go stale.
+SPLASH_WEB_DIR="web/apollo-splash"
+SPLASH_BUILD="Sources/DayPanel/Resources/ApolloSplash/index.html"
+if [ -d "$SPLASH_WEB_DIR/node_modules" ] && [ -z "${APOLLO_SKIP_SPLASH_BUILD:-}" ]; then
+    echo "Building launch splash..."
+    (cd "$SPLASH_WEB_DIR" && npm run --silent build >/dev/null) \
+        || { echo "ERROR: launch splash build failed (npm run build in $SPLASH_WEB_DIR)" >&2; exit 1; }
+fi
+[ -f "$SPLASH_BUILD" ] \
+    || { echo "ERROR: $SPLASH_BUILD missing — run npm ci && npm run build in $SPLASH_WEB_DIR" >&2; exit 1; }
+mkdir -p "$APP/Contents/Resources/ApolloSplash"
+cp "$SPLASH_BUILD" "$APP/Contents/Resources/ApolloSplash/index.html"
+
 # Apollo Review is a real secondary macOS application bundled with Apollo.
 # Keeping it as a nested .app gives the review surface its own NSWindow,
 # traffic lights, independent movement/resize and lifetime, while both hosts

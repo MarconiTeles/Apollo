@@ -50,6 +50,7 @@ let package = Package(
             // keeping the signed bundle assembly explicit and reproducible.
             exclude: [
                 "Resources/Info.plist",
+                "Resources/ApolloSplash",
                 "Resources/APOLLO_ICON_06.png",
                 "Resources/APOLLO.icon",
                 "Resources/Apollo.entitlements",

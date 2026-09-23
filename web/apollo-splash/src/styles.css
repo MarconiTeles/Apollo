@@ -1,0 +1,312 @@
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ink: #e8e8ea;
+  --space-core: #10151d;
+  --space-mid: #0a0d12;
+  --space-edge: #060709;
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  /* Transparent so the reveal iris shows the native dashboard underneath. */
+  background: transparent;
+}
+
+.splash {
+  --reveal: 0px;
+  --halo: 0;
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* Keep in sync with LunarSplashBackdrop in Swift — the native backdrop
+     shows these exact stops until the web view reports its first frame. */
+  background: radial-gradient(
+    circle at 50% 38%,
+    var(--space-core) 0,
+    var(--space-mid) 45vmax,
+    var(--space-edge) 90vmax
+  );
+}
+
+.layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Back to front: nebula · dust · stars · far orbits · MOON · near orbits ·
+   mist · motes · flare/glint · wordmark. Every layer moves at its own rate. */
+.nebula {
+  z-index: 1;
+}
+.dust {
+  z-index: 2;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+.live {
+  z-index: 3;
+}
+.orbit {
+  overflow: visible;
+}
+.orbit-back {
+  z-index: 4;
+}
+.orbit-front {
+  z-index: 6;
+}
+.mist {
+  z-index: 7;
+}
+.motes {
+  z-index: 8;
+}
+
+/* ── Moon ──────────────────────────────────────────────────────────── */
+
+.moon {
+  position: absolute;
+  z-index: 5;
+  left: calc(var(--moon-x) - var(--moon-d) / 2);
+  top: calc(var(--moon-y) - var(--moon-d) / 2);
+  width: var(--moon-d);
+  height: var(--moon-d);
+  will-change: transform;
+}
+
+.moon-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+/* Scattered light around the disc, biased toward the sunlit (right) limb. */
+.moon-halo {
+  position: absolute;
+  inset: -55%;
+  border-radius: 50%;
+  opacity: var(--halo);
+  background:
+    radial-gradient(circle at 54% 50%, rgba(200, 228, 255, 0.13) 0, rgba(200, 228, 255, 0) 38%),
+    radial-gradient(circle at 50% 50%, rgba(110, 200, 240, 0.07) 20%, rgba(110, 200, 240, 0) 62%);
+  pointer-events: none;
+}
+
+.moon-fallback {
+  display: none;
+}
+.no-webgl .moon-canvas {
+  display: none;
+}
+.no-webgl .moon-fallback {
+  display: block;
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  opacity: var(--halo);
+  background: radial-gradient(circle at 64% 42%, #dfe3e9 0, #a3a9b1 38%, #3a3f47 66%, #12151a 78%);
+}
+
+/* The icon's four-point star catching the lit limb. */
+/* The expanding ring as sunlight settles on the disc. */
+.shock {
+  position: absolute;
+  z-index: 5;
+  left: calc(var(--moon-x) - var(--moon-d) / 2);
+  top: calc(var(--moon-y) - var(--moon-d) / 2);
+  width: var(--moon-d);
+  height: var(--moon-d);
+  border-radius: 50%;
+  border: 1px solid rgba(180, 232, 255, 0.55);
+  box-shadow:
+    0 0 24px rgba(120, 210, 255, 0.25),
+    inset 0 0 24px rgba(120, 210, 255, 0.18);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Anamorphic sunrise flare on the lit limb. Horizontal regardless of the
+   light angle — that's how an anamorphic lens streaks. */
+.flare {
+  position: absolute;
+  z-index: 9;
+  /* The lit (right) limb — where the sunlight arrives. */
+  left: calc(var(--moon-x) + var(--moon-d) * 0.47);
+  top: var(--moon-y);
+  width: 150vmax;
+  height: 120px;
+  margin: -60px 0 0 -75vmax;
+  opacity: 0;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.95) 0, rgba(200, 240, 255, 0.5) 12px, rgba(140, 220, 255, 0) 60px),
+    linear-gradient(
+      90deg,
+      rgba(120, 210, 255, 0) 0%,
+      rgba(120, 210, 255, 0.18) 30%,
+      rgba(215, 245, 255, 0.85) 49.6%,
+      rgba(215, 245, 255, 0.85) 50.4%,
+      rgba(120, 210, 255, 0.18) 70%,
+      rgba(120, 210, 255, 0) 100%
+    )
+    center / 100% 2px no-repeat;
+}
+
+.glint {
+  position: absolute;
+  z-index: 9;
+  width: 72px;
+  height: 72px;
+  margin: -36px 0 0 -36px;
+  left: calc(var(--moon-x) + var(--moon-d) * 0.321);
+  top: calc(var(--moon-y) - var(--moon-d) * 0.383);
+  opacity: 0;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+.glint svg {
+  width: 100%;
+  height: 100%;
+  fill: #f2fdff;
+  filter: drop-shadow(0 0 5px rgba(140, 238, 255, 0.95)) drop-shadow(0 0 16px rgba(90, 210, 255, 0.55));
+}
+
+/* ── Wordmark ──────────────────────────────────────────────────────── */
+
+.title {
+  position: absolute;
+  z-index: 10;
+  left: 0;
+  right: 0;
+  top: calc(var(--moon-y) + var(--moon-d) / 2 + clamp(28px, calc(var(--moon-d) * 0.13), 60px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.wordmark {
+  display: flex;
+  align-items: baseline;
+  perspective: 640px;
+  color: var(--ink);
+  font-weight: 400;
+  font-size: clamp(40px, calc(var(--moon-d) * 0.13), 70px);
+  letter-spacing: -0.024em;
+  line-height: 1;
+}
+
+.ch {
+  display: inline-block;
+  opacity: 0;
+  transform-origin: 50% 100%;
+  will-change: transform, opacity, filter;
+}
+
+
+/* Loading bar: a faint track, an accent fill that tracks real progress
+   (intro → waiting for data → done), and a light that runs along the fill. */
+.rule {
+  position: relative;
+  width: clamp(96px, calc(var(--moon-d) * 0.3), 150px);
+  height: 2px;
+  border-radius: 1px;
+  overflow: hidden;
+  background: rgba(232, 240, 255, 0.1);
+  opacity: 0;
+}
+.rule b {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+}
+.rule i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0));
+  transform: translateX(-120%);
+  animation: rule-scan 1.3s linear infinite;
+}
+@keyframes rule-scan {
+  to {
+    transform: translateX(260%);
+  }
+}
+
+.status {
+  margin: -4px 0 0;
+  color: rgba(232, 232, 234, 0.52);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 0.4s var(--ease-out),
+    transform 0.4s var(--ease-out);
+}
+.is-waiting .status {
+  opacity: 1;
+  transform: none;
+}
+
+/* ── Reveal ────────────────────────────────────────────────────────── */
+
+.splash.is-revealing {
+  -webkit-mask-image: radial-gradient(
+    circle at var(--moon-x) var(--moon-y),
+    transparent calc(var(--reveal) - 1px),
+    #000 calc(var(--reveal) + 28px)
+  );
+  mask-image: radial-gradient(
+    circle at var(--moon-x) var(--moon-y),
+    transparent calc(var(--reveal) - 1px),
+    #000 calc(var(--reveal) + 28px)
+  );
+}
+
+.reveal-rim {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    circle at var(--moon-x) var(--moon-y),
+    rgba(190, 238, 255, 0) var(--reveal),
+    rgba(190, 238, 255, 0.5) calc(var(--reveal) + 14px),
+    rgba(120, 200, 255, 0.12) calc(var(--reveal) + 46px),
+    rgba(120, 200, 255, 0) calc(var(--reveal) + 130px)
+  );
+}
+.is-revealing .reveal-rim {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rule i {
+    animation: none;
+    opacity: 0;
+  }
+  .status {
+    transition: opacity 0.2s ease;
+    transform: none;
+  }
+}
