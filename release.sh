@@ -328,6 +328,10 @@ echo "✓ DMG rebuilt at $DMG_PATH (stapled bundle preserved)"
 # Notarize and staple the DMG container too. The app inside already carries
 # its own ticket, but stapling the outer image lets Gatekeeper validate the
 # downloaded installer offline before it is mounted.
+# Gatekeeper evaluates the downloaded container independently of its app.
+codesign --force --timestamp \
+    --sign "${APOLLO_SIGNING_ID:-Developer ID Application: Marconi Lima (CU544M36UD)}" \
+    "$DMG_PATH"
 echo "→ Submitting rebuilt DMG to Apple notary…"
 xcrun notarytool submit "$DMG_PATH" \
     --keychain-profile "$NOTARY_PROFILE" \
@@ -359,7 +363,11 @@ rm -rf "$ZIP_AUDIT_DIR"
 
 # ── Sign the ZIP with the EdDSA private key from Keychain ─────────────────
 echo "→ Signing ${ZIP_NAME}…"
-SIGN_OUTPUT="$("$SIGN_UPDATE" "$ZIP_PATH")"
+if [[ -n "${APOLLO_SPARKLE_KEY_FILE:-}" ]]; then
+    SIGN_OUTPUT="$("$SIGN_UPDATE" --ed-key-file "$APOLLO_SPARKLE_KEY_FILE" "$ZIP_PATH")"
+else
+    SIGN_OUTPUT="$("$SIGN_UPDATE" "$ZIP_PATH")"
+fi
 # Output looks like: sparkle:edSignature="…" length="…"
 SIGNATURE_LINE="$SIGN_OUTPUT"
 echo "  $SIGNATURE_LINE"
