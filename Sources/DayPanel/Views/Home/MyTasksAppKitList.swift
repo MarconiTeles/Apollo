@@ -45,7 +45,7 @@ enum TaskDragActivation {
 }
 
 /// Pure-AppKit task viewport. Both headers and rows are recycled by
-/// NSCollectionView; there is no NSHostingView per task during scrolling.
+/// an explicit viewport pool; there is no hosting view per task.
 struct MyTasksAppKitList: NSViewRepresentable {
     @Environment(\.apolloStudioSession) private var studioSession
     let sections: [MyTasksAppKitSection]
@@ -67,8 +67,19 @@ struct MyTasksAppKitList: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView,
+                      context: Context) -> CGSize? {
+        #if APOLLO_DEV
+        if ProcessInfo.processInfo.arguments.contains("--tasks-default-sizing") { return nil }
+        #endif
+        // This is a viewport, not content-sized text. The default bridge walks
+        // every native descendant to infer an Auto Layout fitting size after
+        // row recycling. Its size is supplied by the SwiftUI parent instead.
+        return proposal.replacingUnspecifiedDimensions()
+    }
+
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+        let scroll = MyTasksScrollView()
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
         scroll.drawsBackground = false
@@ -78,45 +89,16 @@ struct MyTasksAppKitList: NSViewRepresentable {
         scroll.automaticallyAdjustsContentInsets = false
         applyInsets(to: scroll)
 
-        let layout = NSCollectionViewFlowLayout()
-        layout.scrollDirection = .vertical
-        layout.minimumLineSpacing = 0
-        layout.minimumInteritemSpacing = 0
-        // The top breathing room belongs to the SCROLLING document, not to
-        // NSScrollView's clipping inset. It is visible at rest, then scrolls
-        // away so rows can genuinely pass underneath the pinned translucent
-        // header (Finder behaviour).
-        layout.sectionInset = NSEdgeInsets(top: topContentInset,
-                                           left: 0, bottom: 0, right: 0)
-        layout.itemSize = NSSize(width: 800, height: 44)
-
-        let collection = WidthTrackingCollectionView(frame: .zero)
-        collection.collectionViewLayout = layout
-        collection.dataSource = context.coordinator
-        collection.delegate = context.coordinator
-        collection.isSelectable = false
-        collection.backgroundColors = [.clear]
-        collection.register(MyTasksTaskItem.self,
-                            forItemWithIdentifier: MyTasksTaskItem.identifier)
-        collection.register(MyTasksHeaderItem.self,
-                            forItemWithIdentifier: MyTasksHeaderItem.identifier)
-        collection.register(MyTasksDropPlaceholderItem.self,
-                            forItemWithIdentifier: MyTasksDropPlaceholderItem.identifier)
-        collection.registerForDraggedTypes([.string])
-        collection.onResize = { [weak collection] in
-            guard let collection,
-                  let flow = collection.collectionViewLayout as? NSCollectionViewFlowLayout
-            else { return }
-            let width = collection.bounds.width
-            guard width > 0, abs(flow.itemSize.width - width) > 0.5 else { return }
-            flow.itemSize = NSSize(width: width, height: flow.itemSize.height)
-            flow.invalidateLayout()
-        }
-        let background = MyTasksSelectionBackgroundView()
-        background.onClearSelection = onClearSelection
-        collection.backgroundView = background
-        context.coordinator.collection = collection
-        scroll.documentView = collection
+        let document = MyTasksViewport()
+        document.coordinator = context.coordinator
+        document.topInset = topContentInset
+        document.onClearSelection = onClearSelection
+        context.coordinator.viewport = document
+        scroll.contentView.drawsBackground = false
+        scroll.contentView.wantsLayer = true
+        scroll.documentView = document
+        document.attach(to: scroll)
+        TasksScrollProbe.install(on: scroll)
         context.coordinator.configureStudio(session: studioSession, scrollView: scroll)
         context.coordinator.update(parent: self, force: true)
         return scroll
@@ -124,20 +106,14 @@ struct MyTasksAppKitList: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         applyInsets(to: scroll)
-        if let collection = scroll.documentView as? NSCollectionView,
-           let layout = collection.collectionViewLayout as? NSCollectionViewFlowLayout,
-           abs(layout.sectionInset.top - topContentInset) > 0.5 {
-            var sectionInset = layout.sectionInset
-            sectionInset.top = topContentInset
-            layout.sectionInset = sectionInset
-            layout.invalidateLayout()
-        }
+        (scroll.documentView as? MyTasksViewport)?.topInset = topContentInset
         context.coordinator.update(parent: self)
         context.coordinator.configureStudio(session: studioSession, scrollView: scroll)
     }
 
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
         coordinator.stopStudioReporting()
+        (scroll.documentView as? MyTasksViewport)?.detach()
     }
 
     private func applyInsets(to scroll: NSScrollView) {
@@ -163,9 +139,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject,
-                             NSCollectionViewDataSource,
-                             NSCollectionViewDelegateFlowLayout {
+    final class Coordinator: NSObject {
         fileprivate enum Row: Equatable {
             case header(status: CUStatus, count: Int, collapsed: Bool, first: Bool)
             case task(CUTask)
@@ -210,7 +184,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
         private weak var studioScrollView: NSScrollView?
         private var studioScrollObserver: NSObjectProtocol?
         private let studioOwnerID: StudioNodeID = "tasks.list"
-        weak var collection: NSCollectionView?
+        weak var viewport: MyTasksViewport?
 
         init(parent: MyTasksAppKitList) {
             appState = parent.appState
@@ -225,17 +199,16 @@ struct MyTasksAppKitList: NSViewRepresentable {
             super.init()
             // Live column resize: when the user drags a divider, mark visible
             // rows dirty so each re-reads the shared metrics on its next layout.
-            // The row WIDTH is unchanged (only internal x's), so we deliberately
-            // do NOT invalidate the flow layout (that would re-enter onResize).
+            // The row width and document offsets stay unchanged.
             columnCancellable = MyTasksColumnLayout.shared.$widths
                 .removeDuplicates()
                 .sink { [weak self] _ in self?.relayoutVisibleRows() }
         }
 
         private func relayoutVisibleRows() {
-            guard let collection else { return }
-            for path in collection.indexPathsForVisibleItems() {
-                (collection.item(at: path) as? MyTasksTaskItem)?.view.needsLayout = true
+            guard let viewport else { return }
+            for path in viewport.indexPathsForVisibleItems() {
+                (viewport.item(at: path) as? MyTasksTaskItem)?.view.needsLayout = true
             }
         }
 
@@ -276,16 +249,16 @@ struct MyTasksAppKitList: NSViewRepresentable {
 
         private func reportVisibleStudioNodes() {
             guard let studioSession,
-                  let collection,
+                  let viewport,
                   let clip = studioScrollView?.contentView
             else { return }
-            collection.layoutSubtreeIfNeeded()
-            let paths = collection.indexPathsForVisibleItems().sorted { $0.item < $1.item }
+            viewport.layoutSubtreeIfNeeded()
+            let paths = viewport.indexPathsForVisibleItems().sorted { $0.item < $1.item }
             let nodes: [StudioNodeDescriptor] = paths.compactMap { path in
                 guard rows.indices.contains(path.item),
-                      let attributes = collection.layoutAttributesForItem(at: path)
+                      let rowFrame = viewport.frameForRow(at: path.item)
                 else { return nil }
-                var frame = collection.convert(attributes.frame, to: clip)
+                var frame = viewport.convert(rowFrame, to: clip)
                 frame.origin.x -= clip.bounds.minX
                 frame.origin.y -= clip.bounds.minY
                 switch rows[path.item] {
@@ -333,49 +306,19 @@ struct MyTasksAppKitList: NSViewRepresentable {
             onMediaAction = parent.onMediaAction
             onBulkMediaAction = parent.onBulkMediaAction
             onFileDrop = parent.onFileDrop
-            (collection?.backgroundView as? MyTasksSelectionBackgroundView)?
-                .onClearSelection = onClearSelection
+            viewport?.onClearSelection = onClearSelection
             let newRows = Self.flatten(parent.sections)
             let contentChanged = rows != newRows
             let selectionChanged = selectedIds != parent.selectedTaskIds
             selectedIds = parent.selectedTaskIds
             guard force || contentChanged || selectionChanged else { return }
 
-            if contentChanged {
-                let idsStable = rows.map(\.id) == newRows.map(\.id)
-                let oldIds = rows.map(\.id)
-                let nextIds = newRows.map(\.id)
-                let oldSet = Set(oldIds)
-                let nextSet = Set(nextIds)
-                let survivingOld = oldIds.filter(nextSet.contains)
-                let survivingNew = nextIds.filter(oldSet.contains)
-                let canAnimateInsertDelete = !force
-                    && survivingOld == survivingNew
-                    && oldIds != nextIds
-
-                if idsStable {
-                    rows = newRows
-                    rebindVisibleCells()
-                } else if canAnimateInsertDelete, let collection {
-                    let removed = Set(oldIds.enumerated().compactMap { index, id in
-                        nextSet.contains(id) ? nil : IndexPath(item: index, section: 0)
-                    })
-                    let inserted = Set(nextIds.enumerated().compactMap { index, id in
-                        oldSet.contains(id) ? nil : IndexPath(item: index, section: 0)
-                    })
-                    rows = newRows
-                    collection.performBatchUpdates {
-                        if !removed.isEmpty { collection.deleteItems(at: removed) }
-                        if !inserted.isEmpty { collection.insertItems(at: inserted) }
-                    } completionHandler: { [weak self] _ in
-                        self?.rebindVisibleCells()
-                    }
-                } else {
-                    rows = newRows
-                    collection?.reloadData()
-                }
+            if contentChanged || force {
+                rows = newRows
+                viewport?.apply(rows: rows, animated: !force)
+                if selectionChanged { updateVisibleSelection() }
             } else {
-                rebindVisibleCells()
+                updateVisibleSelection()
             }
             reportVisibleStudioNodesSoon()
         }
@@ -395,22 +338,12 @@ struct MyTasksAppKitList: NSViewRepresentable {
             return result
         }
 
-        private func rebindVisibleCells() {
-            guard let collection else { return }
-            for path in collection.indexPathsForVisibleItems() where path.item < rows.count {
-                switch rows[path.item] {
-                case .header(let status, let count, let collapsed, let first):
-                    (collection.item(at: path) as? MyTasksHeaderItem)?.bind(
-                        status: status, count: count, collapsed: collapsed, first: first,
-                        onToggle: { [weak self] in self?.onToggleStatus(status.status.lowercased()) })
-                case .task(let task):
-                    if let item = collection.item(at: path) as? MyTasksTaskItem {
-                        configure(item, task: task)
-                    }
-                case .dropPlaceholder(let status):
-                    (collection.item(at: path) as? MyTasksDropPlaceholderItem)?
-                        .bind(status: status)
-                }
+        private func updateVisibleSelection() {
+            guard let viewport else { return }
+            for path in viewport.indexPathsForVisibleItems() where path.item < rows.count {
+                guard case .task(let task) = rows[path.item] else { continue }
+                (viewport.item(at: path) as? MyTasksTaskItem)?.setBulkSelected(
+                    selectedIds.contains(task.id), count: selectedIds.count)
             }
         }
 
@@ -460,70 +393,17 @@ struct MyTasksAppKitList: NSViewRepresentable {
             }
         }
 
-        func collectionView(_ collectionView: NSCollectionView,
-                            numberOfItemsInSection section: Int) -> Int { rows.count }
-
-        func collectionView(_ collectionView: NSCollectionView,
-                            itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
-            // Durante performBatchUpdates o flow layout ainda consulta index
-            // paths do estado PRÉ-batch enquanto `rows` já é o novo array
-            // (padrão obrigatório do AppKit). Se a lista encolheu — ex.:
-            // envio de mídia hook/body reagrupando linhas — um índice antigo
-            // estoura o array e derruba o app (crash 20/jul 17:42). Um item
-            // vazio descartável é a resposta segura: o próprio batch o
-            // remove/recicla no mesmo passe.
-            guard rows.indices.contains(indexPath.item) else {
-                return collectionView.makeItem(
-                    withIdentifier: MyTasksDropPlaceholderItem.identifier,
-                    for: indexPath
-                )
-            }
-            switch rows[indexPath.item] {
+        fileprivate func bind(_ item: MyTasksReusableItem, to row: Row) {
+            switch row {
             case .header(let status, let count, let collapsed, let first):
-                let item = collectionView.makeItem(withIdentifier: MyTasksHeaderItem.identifier,
-                                                   for: indexPath) as! MyTasksHeaderItem
-                item.bind(status: status, count: count, collapsed: collapsed, first: first,
-                          onToggle: { [weak self] in
-                              self?.onToggleStatus(status.status.lowercased())
-                          })
-                return item
+                (item as? MyTasksHeaderItem)?.bind(
+                    status: status, count: count, collapsed: collapsed, first: first,
+                    onToggle: { [weak self] in self?.onToggleStatus(status.status.lowercased()) })
             case .task(let task):
-                let item = collectionView.makeItem(withIdentifier: MyTasksTaskItem.identifier,
-                                                   for: indexPath) as! MyTasksTaskItem
-                configure(item, task: task)
-                return item
+                if let item = item as? MyTasksTaskItem { configure(item, task: task) }
             case .dropPlaceholder(let status):
-                let item = collectionView.makeItem(
-                    withIdentifier: MyTasksDropPlaceholderItem.identifier,
-                    for: indexPath
-                ) as! MyTasksDropPlaceholderItem
-                item.bind(status: status)
-                return item
+                (item as? MyTasksDropPlaceholderItem)?.bind(status: status)
             }
-        }
-
-        func collectionView(_ collectionView: NSCollectionView,
-                            layout collectionViewLayout: NSCollectionViewLayout,
-                            sizeForItemAt indexPath: IndexPath) -> NSSize {
-            // Mesma corrida do itemForRepresentedObjectAt: o prepareLayout do
-            // batch pede tamanhos para índices pré-atualização. Altura padrão
-            // de linha para índices órfãos — o batch corrige em seguida.
-            guard rows.indices.contains(indexPath.item) else {
-                return NSSize(width: collectionView.bounds.width, height: 36)
-            }
-            let height: CGFloat
-            switch rows[indexPath.item] {
-            // Exact SwiftUI geometry from the previous list:
-            // header line ~=14pt + 10pt vertical padding; every following
-            // group carries the former 18pt inter-section spacer.
-            case .header(_, _, _, let first): height = first ? 34 : 52
-            // The ANEXAR capsule (26pt) is the tallest row content; the
-            // remaining ~16pt was inter-item padding. Trimmed ~40% (→ ~9.6pt)
-            // for a denser list without touching the capsule geometry.
-            case .task: height = 36
-            case .dropPlaceholder: height = 36
-            }
-            return NSSize(width: collectionView.bounds.width, height: height)
         }
 
         private func targetStatus(at indexPath: IndexPath) -> CUStatus? {
@@ -552,9 +432,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
             }) else { return }
             let insertion = min(rows.count, header + 1)
             rows.insert(.dropPlaceholder(status), at: insertion)
-            collection?.animator().insertItems(
-                at: [IndexPath(item: insertion, section: 0)]
-            )
+            viewport?.apply(rows: rows, animated: true)
         }
 
         private func clearDropPreview(animated: Bool) {
@@ -563,30 +441,21 @@ struct MyTasksAppKitList: NSViewRepresentable {
                 return false
             }) else { return }
             rows.remove(at: index)
-            let path: Set<IndexPath> = [IndexPath(item: index, section: 0)]
-            if animated { collection?.animator().deleteItems(at: path) }
-            else { collection?.deleteItems(at: path) }
+            viewport?.apply(rows: rows, animated: animated)
         }
 
-        func collectionView(_ collectionView: NSCollectionView,
-                            validateDrop draggingInfo: NSDraggingInfo,
-                            proposedIndexPath proposedDropIndexPath: AutoreleasingUnsafeMutablePointer<NSIndexPath>,
-                            dropOperation proposedDropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>) -> NSDragOperation {
+        fileprivate func validateDrop(_ draggingInfo: NSDraggingInfo, at index: Int) -> NSDragOperation {
             guard draggingInfo.draggingPasteboard.string(forType: .string) != nil,
-                  let status = targetStatus(at: proposedDropIndexPath.pointee as IndexPath)
+                  let status = targetStatus(at: IndexPath(item: index, section: 0))
             else { return [] }
             showDropPreview(for: status)
-            if let preview = rows.firstIndex(where: { $0.id == "drop:\(status.id)" }) {
-                proposedDropIndexPath.pointee = NSIndexPath(forItem: preview, inSection: 0)
-            }
-            proposedDropOperation.pointee = .on
             return .move
         }
 
-        func collectionView(_ collectionView: NSCollectionView,
-                            acceptDrop draggingInfo: NSDraggingInfo,
-                            indexPath: IndexPath,
-                            dropOperation: NSCollectionView.DropOperation) -> Bool {
+        fileprivate func exitDrop() { clearDropPreview(animated: true) }
+
+        fileprivate func acceptDrop(_ draggingInfo: NSDraggingInfo, at index: Int) -> Bool {
+            let indexPath = IndexPath(item: index, section: 0)
             guard let status = targetStatus(at: indexPath),
                   let raw = draggingInfo.draggingPasteboard.string(forType: .string)
             else {
@@ -626,27 +495,271 @@ struct MyTasksAppKitList: NSViewRepresentable {
     }
 }
 
-/// Native empty-canvas responder. Because it is the collection view's
-/// background view, task/header cells remain the hit targets over content;
-/// only genuinely empty space reaches this view and clears bulk selection.
-private final class MyTasksSelectionBackgroundView: NSView {
-    var onClearSelection: (() -> Void)?
+/// Reusable native controllers, independent of NSCollectionView's layout,
+/// accessibility materialization and concurrent scrolling machinery.
+fileprivate class MyTasksReusableItem: NSViewController {
+    func prepareForReuse() {}
+}
+
+fileprivate extension MyTasksAppKitList.Coordinator.Row {
+    var height: CGFloat {
+        if case .header(_, _, _, let first) = self { return first ? 34 : 52 }
+        return 36
+    }
+    var kind: Int {
+        switch self {
+        case .task: return 0
+        case .header: return 1
+        case .dropPlaceholder: return 2
+        }
+    }
+}
+
+/// Board-style native viewport: prefix offsets, binary-search visibility,
+/// bounded overscan, explicit recycling and stable identity. No data diff,
+/// flow layout or row rebind occurs for a surviving row on a scroll tick.
+final class MyTasksViewport: NSView {
+    override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    weak var coordinator: MyTasksAppKitList.Coordinator?
+    var onClearSelection: (() -> Void)?
+    var topInset: CGFloat = 72 {
+        didSet { if topInset != oldValue { rebuildGeometry(); tile(clampOffset: true) } }
+    }
+    private weak var scroll: NSScrollView?
+    private var observer: NSObjectProtocol?
+    private var rows: [MyTasksAppKitList.Coordinator.Row] = []
+    private var offsets: [CGFloat] = []
+    private var indexByID: [String: Int] = [:]
+    private var mounted: [String: MyTasksReusableItem] = [:]
+    private var pool: [Int: [MyTasksReusableItem]] = [:]
+    private var tiling = false
+    private var contentHeight: CGFloat = 0
+    private(set) var createdItemCount = 0
+    private(set) var attachmentCount = 0
+    private(set) var bindCount = 0
+    var rowCount: Int { rows.count }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never
+        layer?.masksToBounds = false
+        registerForDraggedTypes([.string])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.list)
+        setAccessibilityLabel("Tarefas")
+    }
+    required init?(coder: NSCoder) { nil }
+
+    func attach(to scroll: NSScrollView) {
+        detach()
+        self.scroll = scroll
+        scroll.contentView.postsBoundsChangedNotifications = true
+        observer = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scroll.contentView, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tile() }
+        }
+        tile()
+    }
+
+    func detach() {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+        scroll = nil
+        for item in mounted.values {
+            item.prepareForReuse()
+            item.view.removeFromSuperview()
+        }
+        for items in pool.values {
+            for item in items { item.view.removeFromSuperview() }
+        }
+        mounted.removeAll()
+        pool.removeAll()
+    }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    fileprivate func apply(rows next: [MyTasksAppKitList.Coordinator.Row], animated: Bool) {
+        let old = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let oldFrames = mounted.mapValues { $0.view.frame }
+        rows = next
+        indexByID = Dictionary(rows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
+        rebuildGeometry()
+        let changed = Set(rows.compactMap { old[$0.id] == $0 ? nil : $0.id })
+        tile(rebind: changed, clampOffset: true)
+        guard animated else { return }
+        for (id, item) in mounted {
+            guard let prior = oldFrames[id], prior.origin != item.view.frame.origin,
+                  let layer = item.view.layer else { continue }
+            let animation = CABasicAnimation(keyPath: "position.y")
+            animation.fromValue = layer.position.y + prior.minY - item.view.frame.minY
+            animation.toValue = layer.position.y
+            animation.duration = 0.20
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(animation, forKey: "tasks.reflow")
+        }
+    }
+
+    private func rebuildGeometry() {
+        offsets.removeAll(keepingCapacity: true)
+        offsets.reserveCapacity(rows.count)
+        var y = topInset
+        for row in rows { offsets.append(y); y += row.height }
+        contentHeight = y
+    }
+
+    func frameForRow(at index: Int) -> NSRect? {
+        guard rows.indices.contains(index) else { return nil }
+        return NSRect(x: 0, y: offsets[index], width: bounds.width, height: rows[index].height)
+    }
+
+    func indexPathsForVisibleItems() -> Set<IndexPath> {
+        Set(mounted.keys.compactMap { indexByID[$0].map { IndexPath(item: $0, section: 0) } })
+    }
+
+    fileprivate func item(at path: IndexPath) -> MyTasksReusableItem? {
+        guard rows.indices.contains(path.item) else { return nil }
+        return mounted[rows[path.item].id]
+    }
+
+    private func firstIndex(intersecting y: CGFloat) -> Int {
+        var low = 0, high = rows.count
+        while low < high {
+            let mid = (low + high) / 2
+            if offsets[mid] + rows[mid].height < y { low = mid + 1 }
+            else { high = mid }
+        }
+        return low
+    }
+
+    private func rowIndex(at point: NSPoint) -> Int? {
+        guard !rows.isEmpty else { return nil }
+        return min(firstIndex(intersecting: point.y), rows.count - 1)
+    }
+
+    override func layout() { super.layout(); tile() }
+
+    override func prepareContent(in rect: NSRect) {
+        super.prepareContent(in: rect)
+        tile()
+    }
+
+    fileprivate func tile(rebind changed: Set<String> = [], clampOffset: Bool = false) {
+        guard !tiling, let scroll else { return }
+        tiling = true
+        defer { tiling = false }
+        let clip = scroll.contentView.bounds
+        let size = NSSize(width: max(0, clip.width), height: max(contentHeight, clip.height))
+        if frame.size != size { setFrameSize(size) }
+        // Keep elastic overscroll native, but clamp after a data shrink so
+        // collapsing a large group cannot leave the viewport past the end.
+        let maxY = max(0, contentHeight - clip.height + scroll.contentInsets.bottom)
+        if clampOffset, clip.minY > maxY {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: maxY))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        let visible = scroll.contentView.bounds
+        let rect = visible.insetBy(dx: 0, dy: -max(180, visible.height * 0.5))
+        let first = firstIndex(intersecting: rect.minY)
+        var last = first
+        while last < rows.count && offsets[last] <= rect.maxY { last += 1 }
+        let wanted = Set(rows[first..<last].map(\.id))
+        // Recycle before allocating so a jump between far-apart sections has
+        // the same bound as incremental scrolling.
+        for id in Array(mounted.keys) where !wanted.contains(id) {
+            guard let item = mounted.removeValue(forKey: id) else { continue }
+            let kind = item is MyTasksTaskItem ? 0 : (item is MyTasksHeaderItem ? 1 : 2)
+            item.view.layer?.removeAnimation(forKey: "tasks.reflow")
+            item.prepareForReuse()
+            if pool[kind, default: []].count < (kind == 0 ? 64 : 16) {
+                // Keep the bounded pool in the same window. Detaching and
+                // reattaching a row makes AppKit recompute appearance and
+                // semantic context for every text field and control.
+                item.view.isHidden = true
+                pool[kind, default: []].append(item)
+            } else {
+                item.view.removeFromSuperview()
+            }
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        for index in first..<last {
+            let row = rows[index]
+            let item: MyTasksReusableItem
+            let new = mounted[row.id] == nil
+            if let existing = mounted[row.id] { item = existing }
+            else {
+                if let recycled = pool[row.kind]?.popLast() { item = recycled }
+                else {
+                    switch row.kind {
+                    case 0: item = MyTasksTaskItem(nibName: nil, bundle: nil)
+                    case 1: item = MyTasksHeaderItem(nibName: nil, bundle: nil)
+                    default: item = MyTasksDropPlaceholderItem(nibName: nil, bundle: nil)
+                    }
+                    createdItemCount += 1
+                }
+                mounted[row.id] = item
+                if item.view.superview !== self {
+                    addSubview(item.view)
+                    attachmentCount += 1
+                }
+            }
+            if let frame = frameForRow(at: index), item.view.frame != frame { item.view.frame = frame }
+            if new || changed.contains(row.id) {
+                coordinator?.bind(item, to: row)
+                bindCount += 1
+            }
+            if item.view.isHidden { item.view.isHidden = false }
+            // Explicit tiling gives new content final geometry before the
+            // scroll transaction commits; surviving rows need no work.
+            if new || changed.contains(row.id) || item.view.needsLayout {
+                item.view.layoutSubtreeIfNeeded()
+            }
+        }
+    }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         onClearSelection?()
     }
+    override func cancelOperation(_ sender: Any?) { onClearSelection?() }
 
-    override func cancelOperation(_ sender: Any?) {
-        onClearSelection?()
+    private func validate(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let index = rowIndex(at: convert(sender.draggingLocation, from: nil)) else { return [] }
+        return coordinator?.validateDrop(sender, at: index) ?? []
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { validate(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if let event = NSApp.currentEvent { _ = autoscroll(with: event) }
+        return validate(sender)
+    }
+    override func wantsPeriodicDraggingUpdates() -> Bool { true }
+    override func draggingExited(_ sender: NSDraggingInfo?) { coordinator?.exitDrop() }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        sender.draggingPasteboard.string(forType: .string) != nil
+    }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let index = rowIndex(at: convert(sender.draggingLocation, from: nil)) else { return false }
+        return coordinator?.acceptDrop(sender, at: index) ?? false
     }
 }
 
-/// Animated 42pt insertion slot shown while a drag is over a destination
-/// status. It is a real collection item, so surrounding rows physically move
+/// Same synchronous AppKit scrolling model as the board. Momentum and
+/// elasticity stay native; document tiling runs only when bounds change.
+private final class MyTasksScrollView: NSScrollView {
+    override class var isCompatibleWithResponsiveScrolling: Bool { false }
+}
+
+/// Animated insertion slot shown while a drag is over a destination
+/// status. It is a viewport row, so surrounding rows physically move
 /// out of the way and the pending destination is unambiguous.
-private final class MyTasksDropPlaceholderItem: NSCollectionViewItem {
+private final class MyTasksDropPlaceholderItem: MyTasksReusableItem {
     static let identifier = NSUserInterfaceItemIdentifier("MyTasksDropPlaceholderItem")
     private let slot = MyTasksDropPlaceholderView()
     override func loadView() { view = slot }
@@ -711,7 +824,7 @@ private final class MyTasksDropPlaceholderView: NSView {
 /// DONE circle | title | 112pt priority | 132pt avatar+assignee | 92pt date |
 /// ellipsis. This is intentionally separate from the dashboard's generic
 /// `TaskRowCellItem`; reusing that cell changed the layout and typography.
-private final class MyTasksTaskItem: NSCollectionViewItem {
+private final class MyTasksTaskItem: MyTasksReusableItem {
     static let identifier = NSUserInterfaceItemIdentifier("MyTasksTaskItem")
 
     private let row = MyTasksNativeRowView()
@@ -782,14 +895,15 @@ private final class MyTasksTaskItem: NSCollectionViewItem {
     }
 }
 
-private final class MyTasksMediaButton: NSButton {
+final class MyTasksMediaButton: NSButton {
     var onHover: ((Bool) -> Void)?
     private var hoverTracking: NSTrackingArea?
     private(set) var isPointerInside = false
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        // AppKit maintains inVisibleRect, including clipping during scroll.
+        guard hoverTracking == nil else { return }
         let area = NSTrackingArea(rect: bounds,
                                   options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect],
                                   owner: self)
@@ -813,7 +927,22 @@ private final class MyTasksMediaButton: NSButton {
     }
 }
 
-private final class MyTasksNativeRowView: NSView, NSDraggingSource {
+/// A single backing store for the row's native text and button content.
+/// Explicitly layer-backed controls (status, avatar, badge) keep their layers.
+private final class MyTasksRowContentView: NSView {
+    override var isFlipped: Bool { true }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        canDrawSubviewsIntoLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+    }
+
+    required init?(coder: NSCoder) { nil }
+}
+
+final class MyTasksNativeRowView: NSView, NSDraggingSource {
     static let studioSource = StudioSourceLocation(file: String(describing: #fileID),
                                                    line: #line)
     private static weak var activeHoverRow: MyTasksNativeRowView?
@@ -825,6 +954,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         case reviewed
     }
 
+    private let content = MyTasksRowContentView()
     private let hoverLayer = CALayer()
     private let rule = CALayer()
     private let done = MyTasksDoneCircle()
@@ -900,6 +1030,8 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        // This container paints through its explicit layers and content view.
+        layerContentsRedrawPolicy = .never
         layer?.masksToBounds = false
         hoverLayer.cornerRadius = Editorial.notificationCapsuleRadius
         hoverLayer.cornerCurve = .continuous
@@ -935,7 +1067,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
             guard let self, let done else { return }
             self.onStatusPicker?(done)
         }
-        addSubview(done)
+        content.addSubview(done)
 
         for field in [title, priority, assignee, date] {
             field.drawsBackground = false
@@ -945,10 +1077,10 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
             field.cell?.usesSingleLineMode = true
             field.cell?.lineBreakMode = .byTruncatingTail
             field.lineBreakMode = .byTruncatingTail
-            addSubview(field)
+            content.addSubview(field)
         }
         layer?.addSublayer(priorityDot)
-        addSubview(avatar)
+        content.addSubview(avatar)
 
         review.title = "VER REVIEW"
         review.font = NSFont.systemFont(ofSize: 9.2 * Editorial.typeScale, weight: .semibold)
@@ -962,7 +1094,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         review.toolTip = "Abrir a review atualizada"
         review.onHover = { [weak self] active in self?.setReviewHover(active) }
         review.isHidden = true
-        addSubview(review)
+        content.addSubview(review)
         reviewTrackLayer.isHidden = true
 
         media.title = "ANEXAR"
@@ -975,7 +1107,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         media.action = #selector(openMedia(_:))
         media.setAccessibilityLabel("Anexar ou enviar vídeos")
         media.onHover = { [weak self] active in self?.setMediaHover(active) }
-        addSubview(media)
+        content.addSubview(media)
 
         mediaBadge.alignment = .center
         mediaBadge.font = NSFont.monospacedDigitSystemFont(ofSize: 8.5, weight: .bold)
@@ -988,7 +1120,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         mediaBadge.textColor = .controlAccentColor
         mediaBadge.isHidden = true
         mediaBadge.setAccessibilityLabel("Quantidade de vídeos preparados")
-        addSubview(mediaBadge)
+        content.addSubview(mediaBadge)
 
         more.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Mais")
         more.imageScaling = .scaleProportionallyDown
@@ -998,7 +1130,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         more.bezelStyle = .regularSquare
         more.target = self
         more.action = #selector(openMenu(_:))
-        addSubview(more)
+        content.addSubview(more)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(scrollDidBegin),
@@ -1011,6 +1143,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
             name: NSScrollView.willStartLiveScrollNotification,
             object: nil
         )
+        addSubview(content)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -1022,11 +1155,6 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         }
         watchedReviewTaskId = nil
         task = nil
-        appState = nil
-        mediaCancellable?.cancel()
-        mediaCancellable = nil
-        reviewCancellable?.cancel()
-        reviewCancellable = nil
         reviewAnimationGeneration += 1
         reviewVisualState = .hidden
         review.isHidden = true
@@ -1047,11 +1175,19 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         applyBackground()
     }
 
-    func bind(task: CUTask, appState: AppState) {
+    func bind(task: CUTask, appState: AppState, force: Bool = false) {
+        let probeStart = TasksScrollProbe.beginWork()
+        defer { TasksScrollProbe.endWork(probeStart, layout: false) }
+        guard force || self.task != task || self.appState !== appState else { return }
         if let watchedReviewTaskId, watchedReviewTaskId != task.id {
             TaskReviewUpdateStore.shared.unwatch(taskId: watchedReviewTaskId)
         }
         watchedReviewTaskId = task.id
+        if self.appState !== appState {
+            anyPopupCancellable = nil
+            mediaCancellable = nil
+            reviewCancellable = nil
+        }
         self.task = task
         self.appState = appState
         if anyPopupCancellable == nil {
@@ -1070,27 +1206,29 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         more.isEnabled = !appState.anyPopupOpen
         review.isEnabled = !appState.anyPopupOpen && reviewVisualState == .update
         media.isEnabled = !appState.anyPopupOpen
-        mediaCancellable?.cancel()
-        mediaCancellable = appState.taskMediaTransfers.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self, weak appState] _ in
-                DispatchQueue.main.async {
-                    guard let self, let appState, self.task?.id == task.id else { return }
-                    self.updateMediaButton(store: appState.taskMediaTransfers, taskId: task.id)
+        if mediaCancellable == nil {
+            mediaCancellable = appState.taskMediaTransfers.objectWillChange
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self, let state = self.appState, let id = self.task?.id else { return }
+                        self.updateMediaButton(store: state.taskMediaTransfers, taskId: id)
+                    }
                 }
-            }
+        }
         updateMediaButton(store: appState.taskMediaTransfers, taskId: task.id)
         let reviewStore = TaskReviewUpdateStore.shared
         reviewStore.watch(task: task)
-        reviewCancellable?.cancel()
-        reviewCancellable = reviewStore.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                DispatchQueue.main.async {
-                    guard let self, self.task?.id == task.id else { return }
-                    self.updateReviewButton(taskId: task.id)
+        if reviewCancellable == nil {
+            reviewCancellable = reviewStore.objectWillChange
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self, let id = self.task?.id else { return }
+                        self.updateReviewButton(taskId: id)
+                    }
                 }
-            }
+        }
         updateReviewButton(taskId: task.id)
         title.stringValue = task.title
         title.toolTip = task.title
@@ -1152,19 +1290,15 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     }
 
     func setBulkSelected(_ selected: Bool, count: Int = 0) {
-        let countChanged = bulkCount != count
+        let selectionChanged = bulkSelected != selected
+        let selectedCountChanged = selected && bulkCount != count
         bulkCount = count
-        defer {
-            // A cápsula precisa reagir à contagem mesmo quando o estado
-            // de seleção desta linha não mudou: selecionar uma quarta
-            // tarefa tem que atualizar "ANEXAR EM 3" nas outras três.
-            if countChanged, let store = appState?.taskMediaTransfers, let id = task?.id {
-                updateMediaButton(store: store, taskId: id)
-            }
-        }
-        guard bulkSelected != selected else { return }
         bulkSelected = selected
-        applyBackground()
+        if selectionChanged { applyBackground() }
+        if selectionChanged || selectedCountChanged,
+           let store = appState?.taskMediaTransfers, let id = task?.id {
+            updateMediaButton(store: store, taskId: id)
+        }
     }
 
     private func applyBackground() {
@@ -1213,9 +1347,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         dragStarted = false
         done.resetInteraction(animated: false)
         review.resetHover()
-        setReviewHover(false)
         media.resetHover()
-        setMediaHover(false)
         setHoverMotion(active: false, animated: false)
         if needsUpdate { applyBackground() }
         if Self.activeHoverRow === self { Self.activeHoverRow = nil }
@@ -1225,7 +1357,7 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         forceExitAllInteraction()
     }
 
-    /// NSCollectionView can reposition a reused cell without dispatching
+    /// The viewport can reposition a reused cell without dispatching
     /// `mouseExited` to tracking areas inside it. Clear transient visuals as
     /// soon as the row's canvas position changes; the next real pointer event
     /// will re-establish hover only for the control actually under the mouse.
@@ -1238,22 +1370,21 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         pressed = false
         done.resetInteraction(animated: false)
         review.resetHover()
-        setReviewHover(false)
         media.resetHover()
-        setMediaHover(false)
         setHoverMotion(active: false, animated: false)
         if hadRowHover { applyBackground() }
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        if let task, let appState { bind(task: task, appState: appState) }
+        if let task, let appState { bind(task: task, appState: appState, force: true) }
         else { applyBackground() }
     }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
+        // No allocation or structural tracking invalidation on scroll ticks.
+        guard tracking == nil else { return }
         let area = NSTrackingArea(rect: bounds,
                                   options: [.activeInKeyWindow, .mouseEnteredAndExited,
                                             .inVisibleRect],
@@ -1928,7 +2059,16 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
     }
 
     override func layout() {
+        let probeStart = TasksScrollProbe.beginWork()
+        defer { TasksScrollProbe.endWork(probeStart, layout: true) }
         super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        if content.frame != bounds {
+            content.frame = bounds
+            content.needsDisplay = true
+        }
         let h = bounds.height
         let centerY = h / 2
         // Previous hierarchy: LazyVStack horizontal 28 + row horizontal 16.
@@ -1948,8 +2088,9 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
         // the SwiftUI column header and these rows are always in lockstep.
         let m = MyTasksColumnLayout.shared.metrics(totalWidth: bounds.width)
 
-        title.frame = NSRect(x: m.titleX, y: centeredY(for: title, at: centerY),
-                             width: m.titleWidth, height: fittedHeight(title))
+        let titleHeight = max(1, title.cell?.cellSize.height ?? 1)
+        title.frame = NSRect(x: m.titleX, y: centerY - titleHeight / 2,
+                             width: m.titleWidth, height: titleHeight)
 
         review.frame = NSRect(x: m.reviewX, y: centerY - 13,
                               width: m.reviewWidth, height: 26)
@@ -1988,32 +2129,20 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
                                   y: media.frame.minY - 6,
                                   width: 20, height: 16)
 
-        priority.sizeToFit()
-        let priorityH = priority.frame.height
+        let priorityH = priority.cell?.cellSize.height ?? 0
         priority.frame = NSRect(x: m.priorityX, y: centerY - priorityH / 2,
                                 width: max(0, m.priorityWidth), height: priorityH)
 
         avatar.frame = NSRect(x: m.assigneeX, y: centerY - 10, width: 20, height: 20)
-        assignee.sizeToFit()
-        let assigneeH = assignee.frame.height
+        let assigneeH = assignee.cell?.cellSize.height ?? 0
         assignee.frame = NSRect(x: m.assigneeX + 27, y: centerY - assigneeH / 2,
                                 width: max(0, m.assigneeWidth - 27), height: assigneeH)
 
-        date.sizeToFit()
-        let dateSize = date.frame.size
+        let dateSize = date.cell?.cellSize ?? .zero
         date.frame = NSRect(x: m.dateX + max(0, m.dateWidth - dateSize.width),
                             y: centerY - dateSize.height / 2,
                             width: min(dateSize.width, m.dateWidth), height: dateSize.height)
         more.frame = NSRect(x: m.moreX, y: centerY - 9, width: 18, height: 18)
-    }
-
-    private func fittedHeight(_ field: NSTextField) -> CGFloat {
-        field.sizeToFit()
-        return max(1, field.frame.height)
-    }
-
-    private func centeredY(for field: NSTextField, at center: CGFloat) -> CGFloat {
-        center - fittedHeight(field) / 2
     }
 
     private func trackedFont(size: CGFloat, weight: NSFont.Weight,
@@ -2047,18 +2176,22 @@ private final class MyTasksNativeRowView: NSView, NSDraggingSource {
 
 /// 10pt status-colored inner-shadow completion affordance from the previous
 /// SwiftUI row, drawn directly in AppKit to avoid a hosting view per cell.
-private final class MyTasksDoneCircle: NSControl {
+final class MyTasksDoneCircle: NSControl {
     override var isFlipped: Bool { true }
+    override var wantsUpdateLayer: Bool { true }
     private var statusColor = NSColor.clear
     private var completed = false
     private var hovered = false
     private var pressed = false
     private var tracking: NSTrackingArea?
+    private var artwork: CGImage?
+    private var artworkScale: CGFloat = 1
     var onActivate: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
         layer?.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
@@ -2073,21 +2206,79 @@ private final class MyTasksDoneCircle: NSControl {
             || self.completed != completed
         self.statusColor = statusColor
         self.completed = completed
-        if semanticStateChanged { resetInteraction(animated: false) }
-        needsDisplay = true
+        if semanticStateChanged {
+            resetInteraction(animated: false)
+            invalidateArtwork()
+        }
     }
 
     func resetInteraction(animated: Bool) {
         let hadInteraction = hovered || pressed
+        guard hadInteraction || layer?.animation(forKey: "apollo.done.hover") != nil else { return }
         hovered = false
         pressed = false
         layer?.removeAnimation(forKey: "apollo.done.hover")
         if animated { animateScale(to: 1, duration: 0.14) }
         else { layer?.setValue(CGFloat(1), forKeyPath: "transform.scale") }
-        if hadInteraction { needsDisplay = true }
+        if hadInteraction { invalidateArtwork() }
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        // Keep the vector path for printing and non-layer drawing contexts.
+        drawArtwork()
+    }
+
+    private func invalidateArtwork() {
+        artwork = nil
+        needsDisplay = true
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = frame.size != newSize
+        super.setFrameSize(newSize)
+        if changed { invalidateArtwork() }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        invalidateArtwork()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        invalidateArtwork()
+    }
+
+    override func updateLayer() {
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        if artwork == nil || artworkScale != scale {
+            let width = Int(ceil(bounds.width * scale))
+            let height = Int(ceil(bounds.height * scale))
+            guard width > 0, height > 0,
+                  let context = CGContext(data: nil, width: width, height: height,
+                                          bitsPerComponent: 8, bytesPerRow: 0,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return }
+            context.translateBy(x: 0, y: CGFloat(height))
+            context.scaleBy(x: scale, y: -scale)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+            effectiveAppearance.performAsCurrentDrawingAppearance { drawArtwork() }
+            NSGraphicsContext.restoreGraphicsState()
+            artwork = context.makeImage()
+            artworkScale = scale
+        }
+        // Scrolling and repeated layer display reuse this tiny immutable
+        // bitmap. Gradient/color/symbol work occurs only on a visual change.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer?.contentsScale = scale
+        layer?.contents = artwork
+        CATransaction.commit()
+    }
+
+    private func drawArtwork() {
         // The control owns a 24pt hit target while the visible affordance
         // remains the exact prior 10pt circle, centred inside it.
         let visual = NSRect(x: bounds.midX - 5, y: bounds.midY - 5,
@@ -2124,7 +2315,8 @@ private final class MyTasksDoneCircle: NSControl {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
+        // No allocation or structural tracking invalidation on scroll ticks.
+        guard tracking == nil else { return }
         let area = NSTrackingArea(rect: bounds,
                                   options: [.activeInKeyWindow, .mouseEnteredAndExited,
                                             .inVisibleRect, .cursorUpdate],
@@ -2142,14 +2334,17 @@ private final class MyTasksDoneCircle: NSControl {
         }
         hovered = true
         animateScale(to: 1.16, duration: 0.16)
-        needsDisplay = true
+        invalidateArtwork()
     }
 
     override func mouseExited(with event: NSEvent) {
+        // Tracking can deliver an exit while scrolling after entry was
+        // suppressed. That must not redraw or animate an untouched control.
+        guard hovered || pressed else { return }
         hovered = false
         pressed = false
         animateScale(to: 1, duration: 0.20)
-        needsDisplay = true
+        invalidateArtwork()
     }
 
     override func cursorUpdate(with event: NSEvent) {
@@ -2265,7 +2460,7 @@ private final class MyTasksAvatarView: NSView {
     }
 }
 
-private final class MyTasksHeaderItem: NSCollectionViewItem {
+private final class MyTasksHeaderItem: MyTasksReusableItem {
     static let identifier = NSUserInterfaceItemIdentifier("MyTasksHeaderItem")
     private let header = MyTasksHeaderView()
     override func loadView() { view = header }
@@ -2351,7 +2546,7 @@ private final class MyTasksHeaderView: NSView {
 #if DEBUG
 /// Direct Xcode Canvas host for Apollo's production AppKit task viewport.
 ///
-/// The preview renders the actual `NSCollectionView` headers, rows, hover
+/// The preview renders the actual native viewport headers, rows, hover
 /// layers and drag/drop implementation. The fixture state is local-only and
 /// never initializes ClickUp, Google Calendar, Keychain or synchronization.
 @MainActor

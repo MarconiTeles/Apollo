@@ -7,8 +7,46 @@ CONFIG="${1:-release}"
 # build for distribution. Default is single-arch (host only) so
 # day-to-day dev rebuilds stay fast.
 UNIVERSAL="${2:-}"
-APP_DISPLAY_NAME="Apollo"
 REVIEW_PACKAGE_DIR="../apollo-review-swift"
+
+# ── Optional identity/output overrides (all unset for production) ─────────
+# Used by script/build_dev_board_appkit.sh to assemble an isolated DEV bundle
+# from exactly the same steps. With every variable unset, this script runs the
+# same commands and produces the same Info.plist/entitlements as before.
+#   APOLLO_APP_DISPLAY_NAME   bundle file/display name        (Apollo)
+#   APOLLO_APP_PATH           output .app path                (build/<name>.app)
+#   APOLLO_BUNDLE_ID          CFBundleIdentifier              (com.painellunar.app)
+#   APOLLO_IDENTITY_VARIANT   "dev" rewrites identity/updater/URL keys
+#   APOLLO_WORK_DIR           intermediates (review icon…)    (build)
+#   APOLLO_SCRATCH_PATH       SwiftPM scratch path, Apollo    (SwiftPM default)
+#   APOLLO_REVIEW_SCRATCH_PATH SwiftPM scratch path, Review   (SwiftPM default)
+#   APOLLO_EXTRA_SWIFT_FLAGS  extra `swift build` args, Apollo only
+APP_DISPLAY_NAME="${APOLLO_APP_DISPLAY_NAME:-Apollo}"
+PRODUCTION_BUNDLE_ID="com.painellunar.app"
+BUNDLE_ID="${APOLLO_BUNDLE_ID:-$PRODUCTION_BUNDLE_ID}"
+IDENTITY_VARIANT="${APOLLO_IDENTITY_VARIANT:-}"
+WORK_DIR="${APOLLO_WORK_DIR:-build}"
+TEAM_ID="CU544M36UD"
+if [ "$IDENTITY_VARIANT" = "dev" ] && [ "$BUNDLE_ID" = "$PRODUCTION_BUNDLE_ID" ]; then
+    echo "ERROR: a dev identity variant needs its own APOLLO_BUNDLE_ID." >&2
+    exit 1
+fi
+APOLLO_SWIFT_ARGS=()
+if [ -n "${APOLLO_SCRATCH_PATH:-}" ]; then
+    APOLLO_SWIFT_ARGS+=(--scratch-path "$APOLLO_SCRATCH_PATH")
+fi
+if [ -n "${APOLLO_EXTRA_SWIFT_FLAGS:-}" ]; then
+    # Intentionally word-split (e.g. "-Xswiftc -DAPOLLO_DEV").
+    # shellcheck disable=SC2206
+    APOLLO_SWIFT_ARGS+=($APOLLO_EXTRA_SWIFT_FLAGS)
+fi
+REVIEW_SWIFT_ARGS=()
+if [ -n "${APOLLO_REVIEW_SCRATCH_PATH:-}" ]; then
+    REVIEW_SWIFT_ARGS+=(--scratch-path "$APOLLO_REVIEW_SCRATCH_PATH")
+fi
+# Bash 3.2 + `set -u` rejects "${empty[@]}"; these expand to nothing instead.
+apollo_swift_build() { swift build ${APOLLO_SWIFT_ARGS[@]+"${APOLLO_SWIFT_ARGS[@]}"} "$@"; }
+review_swift_build() { swift build ${REVIEW_SWIFT_ARGS[@]+"${REVIEW_SWIFT_ARGS[@]}"} "$@"; }
 
 # SDK adoption is distinct from minimum OS support. Package.swift links the
 # main executable with the macOS 27 design; building with older headers must
@@ -24,14 +62,14 @@ if [ "$UNIVERSAL" = "--universal" ]; then
     # SwiftPM's output layout depends on the build engine. Query it rather
     # than assuming .build/<triple>/release. Some engines reuse one product
     # directory across architectures, so preserve each slice immediately.
-    BIN_DIR="build/universal"
+    BIN_DIR="$WORK_DIR/universal"
     mkdir -p "$BIN_DIR"
     BIN="$BIN_DIR/DayPanel"
     BIN_ARM64="$BIN_DIR/DayPanel-arm64"
     BIN_X86="$BIN_DIR/DayPanel-x86_64"
     for ARCH in arm64 x86_64; do
-        swift build -c "$CONFIG" --arch "$ARCH"
-        SLICE_DIR="$(swift build -c "$CONFIG" --arch "$ARCH" --show-bin-path)"
+        apollo_swift_build -c "$CONFIG" --arch "$ARCH"
+        SLICE_DIR="$(apollo_swift_build -c "$CONFIG" --arch "$ARCH" --show-bin-path)"
         cp "$SLICE_DIR/DayPanel" "$BIN_DIR/DayPanel-$ARCH"
         lipo -verify_arch "$ARCH" "$BIN_DIR/DayPanel-$ARCH"
     done
@@ -40,8 +78,8 @@ if [ "$UNIVERSAL" = "--universal" ]; then
     REVIEW_BIN_X86="$BIN_DIR/ApolloReview-x86_64"
     REVIEW_BIN="$BIN_DIR/ApolloReview"
     for ARCH in arm64 x86_64; do
-        swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --arch "$ARCH"
-        SLICE_DIR="$(swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --arch "$ARCH" --show-bin-path)"
+        review_swift_build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --arch "$ARCH"
+        SLICE_DIR="$(review_swift_build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --arch "$ARCH" --show-bin-path)"
         cp "$SLICE_DIR/ApolloReview" "$BIN_DIR/ApolloReview-$ARCH"
         lipo -verify_arch "$ARCH" "$BIN_DIR/ApolloReview-$ARCH"
     done
@@ -51,11 +89,11 @@ if [ "$UNIVERSAL" = "--universal" ]; then
     lipo -info "$REVIEW_BIN" | sed 's/^/    /'
 else
     echo "Building $APP_DISPLAY_NAME ($CONFIG)..."
-    swift build -c "$CONFIG"
-    BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
+    apollo_swift_build -c "$CONFIG"
+    BIN_DIR="$(apollo_swift_build -c "$CONFIG" --show-bin-path)"
     BIN="$BIN_DIR/DayPanel"
-    swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG"
-    REVIEW_BIN_DIR="$(swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --show-bin-path)"
+    review_swift_build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG"
+    REVIEW_BIN_DIR="$(review_swift_build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --show-bin-path)"
     REVIEW_BIN="$REVIEW_BIN_DIR/ApolloReview"
 fi
 # Inspect every architecture before packaging/signing. A successful compile
@@ -66,7 +104,7 @@ xcrun vtool -show-build "$BIN" | awk '
     END { if (count == 0 || invalid) exit 1 }
 ' || { echo "ERROR: Expected macOS 26 minimum / SDK 27 in every Apollo slice." >&2; exit 1; }
 
-APP="build/${APP_DISPLAY_NAME}.app"
+APP="${APOLLO_APP_PATH:-build/${APP_DISPLAY_NAME}.app}"
 
 # Compile the app icon (Icon Composer .icon → Assets.car + AppIcon.icns) if the
 # artifacts aren't there yet (or after a clean build/).
@@ -78,7 +116,7 @@ fi
 # It is intentionally separate from Apollo's icon and lives only inside the
 # nested Apollo Review.app bundle.
 REVIEW_ICON_SRC="$REVIEW_PACKAGE_DIR/Sources/ApolloReview/Resources/ReviewIcon.icon"
-REVIEW_ICON_OUT="build/review-icon"
+REVIEW_ICON_OUT="$WORK_DIR/review-icon"
 rm -rf "$REVIEW_ICON_OUT"
 mkdir -p "$REVIEW_ICON_OUT"
 REVIEW_ICON_WORK="$(mktemp -d)"
@@ -147,10 +185,36 @@ MAIN_MINIMUM_OS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $MAIN_BUILD_VERSION" \
     "$REVIEW_HELPER/Contents/Info.plist"
 
+# ── Isolated DEV identity (APOLLO_IDENTITY_VARIANT=dev only) ─────────────
+# Own bundle id/name (hence own sandbox container, preferences and Keychain
+# service — see KeychainHelper.secretsService), no Sparkle feed/automatic
+# checks, and no `daypanel` URL scheme so the DEV app can never receive the
+# production app's callbacks. The nested helper gets its own bundle id and
+# drops the `apolloreview` scheme registration for the same reason.
+if [ "$IDENTITY_VARIANT" = "dev" ]; then
+    PLIST="$APP/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_DISPLAY_NAME" "$PLIST"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_DISPLAY_NAME" "$PLIST"
+    /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$PLIST"
+    /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" "$PLIST"
+    /usr/libexec/PlistBuddy -c "Delete :SUScheduledCheckInterval" "$PLIST"
+    /usr/libexec/PlistBuddy -c "Set :SUEnableAutomaticChecks false" "$PLIST"
+    /usr/libexec/PlistBuddy -c "Set :SUEnableInstallerLauncherService false" "$PLIST"
+    /usr/libexec/PlistBuddy -c "Add :SUAutomaticallyUpdate bool false" "$PLIST"
+    /usr/libexec/PlistBuddy -c "Add :ApolloDevBuildVariant string board-appkit" "$PLIST"
+
+    HELPER_PLIST="$REVIEW_HELPER/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID.review" "$HELPER_PLIST"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleName Apollo Review DEV" "$HELPER_PLIST"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Apollo Review DEV" "$HELPER_PLIST"
+    /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$HELPER_PLIST" 2>/dev/null || true
+fi
+
 # A local DEBUG bundle must never touch the production Keychain namespace.
 # KeychainHelper also has a compile-time DEBUG guard, but this explicit plist
 # flag keeps the packaged .app safe even if Swift compilation conditions drift.
-if [ "$CONFIG" = "debug" ]; then
+if [ "$CONFIG" = "debug" ] || [ "${APOLLO_FORCE_LEGACY_SECRET_STORE:-}" = "1" ]; then
     /usr/libexec/PlistBuddy -c \
         "Add :ApolloUseLegacySecretStoreOnly bool true" \
         "$APP/Contents/Info.plist"
@@ -174,9 +238,10 @@ fi
 # We use `cp -R` (or `rsync -a` if available) to preserve
 # symlinks and permissions; `cp -L` would break the
 # Versions/B → Current symlink Sparkle relies on.
-SPARKLE_SRC="$(find .build/artifacts -name Sparkle.framework -type d | head -1)"
+SPARKLE_ARTIFACTS="${APOLLO_SCRATCH_PATH:-.build}/artifacts"
+SPARKLE_SRC="$(find "$SPARKLE_ARTIFACTS" -name Sparkle.framework -type d | head -1)"
 if [ -z "$SPARKLE_SRC" ]; then
-    echo "ERROR: Sparkle.framework not found under .build/artifacts." >&2
+    echo "ERROR: Sparkle.framework not found under $SPARKLE_ARTIFACTS." >&2
     echo "       Run 'swift package resolve' then re-run this script." >&2
     exit 1
 fi
@@ -258,6 +323,36 @@ xattr -dr com.apple.quarantine "$OLLAMA_BUNDLE" 2>/dev/null || true
 # identity rotates in.
 SIGNING_ID="${APOLLO_SIGNING_ID:-Developer ID Application: Marconi Lima (CU544M36UD)}"
 ENTITLEMENTS_PATH="Sources/DayPanel/Resources/Apollo.entitlements"
+SPARKLE_ENT_DIR="Sources/DayPanel/Resources/SparkleEntitlements"
+
+# DEV identity: derive the bundle-scoped entitlement values (application
+# group, Sparkle mach-lookup names, shared-preference domain) from the DEV
+# bundle id so no entitlement points at production's group or preferences.
+if [ "$IDENTITY_VARIANT" = "dev" ]; then
+    DEV_ENT_DIR="$WORK_DIR/entitlements"
+    rm -rf "$DEV_ENT_DIR"
+    mkdir -p "$DEV_ENT_DIR/SparkleEntitlements"
+    cp "$ENTITLEMENTS_PATH" "$DEV_ENT_DIR/Apollo.entitlements"
+    ENTITLEMENTS_PATH="$DEV_ENT_DIR/Apollo.entitlements"
+    /usr/libexec/PlistBuddy \
+        -c "Set :com.apple.security.application-groups:0 $TEAM_ID.$BUNDLE_ID" \
+        -c "Set :com.apple.security.temporary-exception.mach-lookup.global-name:0 $BUNDLE_ID-spki" \
+        -c "Set :com.apple.security.temporary-exception.mach-lookup.global-name:1 $BUNDLE_ID-spks" \
+        -c "Set :com.apple.security.temporary-exception.shared-preference.read-write:0 $BUNDLE_ID" \
+        "$ENTITLEMENTS_PATH"
+    for ENT in Downloader Installer Updater; do
+        cp "$SPARKLE_ENT_DIR/$ENT.entitlements" "$DEV_ENT_DIR/SparkleEntitlements/"
+        /usr/libexec/PlistBuddy \
+            -c "Set :com.apple.security.application-groups:0 $TEAM_ID.$BUNDLE_ID" \
+            "$DEV_ENT_DIR/SparkleEntitlements/$ENT.entitlements"
+    done
+    SPARKLE_ENT_DIR="$DEV_ENT_DIR/SparkleEntitlements"
+    if grep -q "<string>$PRODUCTION_BUNDLE_ID</string>\|$TEAM_ID\.$PRODUCTION_BUNDLE_ID<\|$PRODUCTION_BUNDLE_ID-sp" \
+            "$ENTITLEMENTS_PATH" "$SPARKLE_ENT_DIR"/*.entitlements; then
+        echo "ERROR: DEV entitlements still reference the production identity." >&2
+        exit 1
+    fi
+fi
 SIGNING_ENTITLEMENTS_PATH="$ENTITLEMENTS_PATH"
 
 # Ad-hoc DEBUG bundles do not have a Team ID. With Hardened Runtime enabled,
@@ -265,8 +360,8 @@ SIGNING_ENTITLEMENTS_PATH="$ENTITLEMENTS_PATH"
 # both signatures are valid ("mapping process and mapped file have different
 # Team IDs"). Keep production library validation strict; relax it only for the
 # isolated local debug bundle used by run-debug.sh.
-if [ "$CONFIG" = "debug" ] && [ "$SIGNING_ID" = "-" ]; then
-    DEBUG_ENTITLEMENTS_PATH="build/Apollo-debug.entitlements"
+if { [ "$CONFIG" = "debug" ] || [ "$IDENTITY_VARIANT" = "dev" ]; } && [ "$SIGNING_ID" = "-" ]; then
+    DEBUG_ENTITLEMENTS_PATH="$WORK_DIR/Apollo-debug.entitlements"
     cp "$ENTITLEMENTS_PATH" "$DEBUG_ENTITLEMENTS_PATH"
     /usr/libexec/PlistBuddy -c \
         "Add :com.apple.security.cs.disable-library-validation bool true" \
@@ -285,7 +380,6 @@ fi
 # main app and the installer can't find each other's Mach
 # service inside the sandbox.
 SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
-SPARKLE_ENT_DIR="Sources/DayPanel/Resources/SparkleEntitlements"
 
 if [ -d "$SPARKLE_FW" ]; then
     # Pairs of (path, entitlements-file). When the entitlements
@@ -389,7 +483,7 @@ done
 # Both Sparkle mach-lookup names must be present, not just the
 # parent key. The previous regression had the key but missing
 # values.
-for name in "com.painellunar.app-spki" "com.painellunar.app-spks"; do
+for name in "$BUNDLE_ID-spki" "$BUNDLE_ID-spks"; do
     if ! echo "$ENT_DUMP" | grep -q "$name"; then
         MISSING+=("mach-lookup name: $name")
     fi
@@ -400,7 +494,7 @@ if [ ${#MISSING[@]} -gt 0 ]; then
         echo "    - $m" >&2
     done
     echo "" >&2
-    echo "  Fix Sources/DayPanel/Resources/Apollo.entitlements then rebuild." >&2
+    echo "  Fix $ENTITLEMENTS_PATH then rebuild." >&2
     exit 1
 fi
 echo "  ✓ All required entitlements present"

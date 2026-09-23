@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || APOLLO_DEV
 import SwiftUI
 
 /// Hosts Apollo's real production root view in an isolated preview state.

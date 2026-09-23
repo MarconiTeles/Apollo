@@ -78,7 +78,26 @@ enum KeychainHelper {
     /// namespace inside the user's login Keychain so a future
     /// inspection (`security find-generic-password -s com.painellunar.app.secrets`)
     /// pulls only Apollo's items.
-    private static let service = "com.painellunar.app.secrets"
+    private static let service = secretsService(
+        forBundleIdentifier: Bundle.main.bundleIdentifier)
+
+    /// Production bundle identifier whose Keychain namespace must stay
+    /// exactly `com.painellunar.app.secrets`.
+    static let productionBundleIdentifier = "com.painellunar.app"
+    static let productionSecretsService = "com.painellunar.app.secrets"
+
+    /// Pure derivation of the Keychain service. Production (and any process
+    /// without a bundle identifier, e.g. tools) keeps the historical fixed
+    /// name; any other bundle (the isolated DEV build
+    /// `com.painellunar.app.dev.board-appkit`) gets `<bundleId>.secrets`, so it
+    /// never reads, overwrites or prompts for the production items.
+    static func secretsService(forBundleIdentifier bundleIdentifier: String?) -> String {
+        guard let id = bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty,
+              id != productionBundleIdentifier
+        else { return productionSecretsService }
+        return "\(id).secrets"
+    }
 
     /// While true, every `save(_:for:)` also writes to the legacy
     /// JSON store. We flipped this to `false` for 1.5.0+: with

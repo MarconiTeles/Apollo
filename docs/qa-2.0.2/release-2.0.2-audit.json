@@ -1,0 +1,64 @@
+{
+  "version": "2.0.2",
+  "build": 100,
+  "source_commit": "731db187e26fe5cd5c3a8a77fc68eb56bbbfc394",
+  "review_commit": "5256f8644633131044ba9f6142f120b0b8be6475",
+  "architectures": [
+    "arm64",
+    "x86_64"
+  ],
+  "minimum_system_version": "26.0",
+  "production_bundle_id": "com.painellunar.app",
+  "artifacts": [
+    {
+      "name": "Apollo-2.0.2.zip",
+      "bytes": 50961571,
+      "sha256": "41ad51f45890548280dfe552df000ac1c6e20b2def98d58963edf54890f28843"
+    },
+    {
+      "name": "Apollo-2.0.2.dmg",
+      "bytes": 58720620,
+      "sha256": "762ec63e88341fe2a6b4ba4c0184570dd877c785407021130f4fc6d309b887a9"
+    }
+  ],
+  "executable_sha256": "1b0a55b3ca91a6b4b5a259b5f19c658e50d28ef4844cca199a54d37ab54385f5",
+  "notarization": {
+    "app": {
+      "id": "cce71741-ec39-4b94-b6a4-076a9dac6211",
+      "status": "Accepted"
+    },
+    "dmg": {
+      "id": "f9f79de1-b3d0-4756-9df1-134fe5260197",
+      "status": "Accepted"
+    }
+  },
+  "validation": {
+    "xctest": {
+      "executed": 222,
+      "skipped": 4,
+      "failures": 0
+    },
+    "swift_testing": {
+      "passed": 12,
+      "failures": 0
+    },
+    "sparkle_signature": "Verified with CryptoKit against installed Apollo public key; packaged key unchanged",
+    "codesign": "deep strict passed for app, nested Review, extracted ZIP app and mounted DMG app; signed DMG verified",
+    "gatekeeper": "Notarized Developer ID accepted for app, extracted ZIP app and DMG",
+    "stapler": "Validated app, final ZIP app, DMG and mounted DMG app",
+    "binary_identity": "Original production app, stapled staging copy, extracted ZIP and mounted DMG executable hashes match",
+    "production_smoke": "Opened Tasks and Board with existing data; no data changed. An external calendar/ClickUp synchronization warning was visible; external integration E2E tests were not run. No new inertia or presented-frame-rate claim is made."
+  },
+  "channel": "public",
+  "publication_state": "published as latest; public assets and public update feed verified",
+  "public_downloads_verified": true,
+  "release_url": "https://github.com/MarconiTeles/Apollo/releases/tag/v2.0.2",
+  "published_at": "2026-09-23T18:13:07Z",
+  "feed_promotion_commit": "40b25a8c2f6b862ebef886c13cb07f0eecd97236",
+  "public_feed_verified": true,
+  "feed_url": "https://marconiteles.github.io/Apollo/appcast.xml",
+  "pages_run": {
+    "id": 35900964066,
+    "conclusion": "success"
+  }
+}
