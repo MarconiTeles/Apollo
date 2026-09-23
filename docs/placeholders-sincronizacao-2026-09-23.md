@@ -72,6 +72,18 @@
   - cada cartão encontrado ganha a lombada, o anel no avatar e um selo com check que salta e se desenha;
   - no anel do console, uma ponta luminosa pulsa na frente do arco.
 
+## Iteração 4: merge na 2.0.3 e bugs da build aberta
+- **Merge:** fast-forward da `main` (2.0.3, build 101).
+- **Assinatura:** o timestamp da Apple recusava conexões (17.32.213.161:80, recusa confirmada). Por isso a build local foi assinada com `--timestamp=none`, via um shim de `codesign` em /tmp, sem mudar o `build.sh`. Para a build publicável, basta rodar `./build.sh release` quando o serviço voltar.
+- **"Status indisponíveis" na abertura:**
+  - causa: as tarefas vêm do cache, mas os status não ficam em cache;
+  - correção: sem status e antes do primeiro sync da sessão, a tela mostra o carregamento (`EditorialMyTasksView.isLoadingData`, com testes).
+- **"Falha na sincronização" falsa e repetida:**
+  - causa: status, membros, etiquetas e tarefas compartilhavam um único `try`. A falha de um metadado descartava as tarefas, deixava os status vazios e alertava a cada sync.
+  - correção: cada metadado é buscado de forma independente; sem status, eles são derivados das tarefas; o alerta nomeia a fonte e só dispara na transição para falha.
+  - diagnóstico: `SyncDiagnostics` grava no log público, categoria "Sync" (`log show --predicate 'subsystem == "com.painellunar.app" AND category == "Sync"'`).
+  - na build nova, 2 min de execução sem nenhuma falha registrada.
+
 ## Evidência
 - `swift build`: sem avisos novos.
 - `swift test --skip ReviewBackendE2ETests`: 235 testes, 0 falhas, incluindo 12 em `SyncLoadingSnapshotTests`.
