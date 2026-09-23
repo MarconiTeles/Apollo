@@ -26,5 +26,8 @@
     "dmg": "f8b0b848-b87c-40ca-9d9c-9d10a0616f20"
   },
   "public_assets_match": true,
-  "release_url": "https://github.com/MarconiTeles/Apollo/releases/tag/v2.0.1"
+  "release_url": "https://github.com/MarconiTeles/Apollo/releases/tag/v2.0.1",
+  "public_downloads_verified": true,
+  "public_feed_verified": true,
+  "pages_run": 35813660360
 }
