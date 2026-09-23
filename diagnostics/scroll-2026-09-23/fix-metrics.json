@@ -1,0 +1,34 @@
+[
+  {
+    "name": "list-before-fix",
+    "cpu": {
+      "33492": 21.7,
+      "419": 26.3
+    },
+    "gpu_total": 3.4
+  },
+  {
+    "name": "list-after-fix-valid",
+    "cpu": {
+      "61494": 41.5,
+      "419": 59.3
+    },
+    "gpu_total": 66.7
+  },
+  {
+    "name": "board-before-fix",
+    "cpu": {
+      "33492": 58.1,
+      "419": 51.4
+    },
+    "gpu_total": 70.2
+  },
+  {
+    "name": "board-after-fix",
+    "cpu": {
+      "61494": 54.2,
+      "419": 64.4
+    },
+    "gpu_total": 69.4
+  }
+]

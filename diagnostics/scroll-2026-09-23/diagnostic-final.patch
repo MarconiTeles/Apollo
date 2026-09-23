@@ -1,0 +1,179 @@
+diff --git a/Sources/DayPanel/Services/TaskReviewUpdateStore.swift b/Sources/DayPanel/Services/TaskReviewUpdateStore.swift
+index 15cfb2a..dc7904c 100644
+--- a/Sources/DayPanel/Services/TaskReviewUpdateStore.swift
++++ b/Sources/DayPanel/Services/TaskReviewUpdateStore.swift
+@@ -452,6 +452,7 @@ final class TaskReviewUpdateStore: ObservableObject {
+     /// Called by a row whenever it binds/rebinds. The operation is synchronous
+     /// and cheap; network work is queued once per task and processed serially.
+     func watch(task: CUTask) {
++        if Diag.noReviewProbe { return }
+         let now = Date()
+         let prior = watched[task.id]
+         watched[task.id] = WatchedTask(task: task, lastProbeAt: prior?.lastProbeAt)
+@@ -849,6 +850,7 @@ final class TaskReviewUpdateStore: ObservableObject {
+     /// acabado de acontecer na web). O cache curto do ReviewBackend segue
+     /// deduplicando; isto nunca vira tempestade de requests.
+     func probeVisibleNow() {
++        if Diag.noReviewProbe { return }
+         for taskId in watched.keys { enqueue(taskId) }
+     }
+ 
+diff --git a/Sources/DayPanel/Views/Common/SidebarLuminanceGlass.swift b/Sources/DayPanel/Views/Common/SidebarLuminanceGlass.swift
+index da24074..c73fb65 100644
+--- a/Sources/DayPanel/Views/Common/SidebarLuminanceGlass.swift
++++ b/Sources/DayPanel/Views/Common/SidebarLuminanceGlass.swift
+@@ -27,7 +27,7 @@ struct SidebarLuminanceGlass: NSViewRepresentable {
+             glass.style = .regular
+             glass.autoresizingMask = [.width, .height]
+             glass.frame = bounds
+-            addSubview(glass)
++            if !Diag.noSidebarGlass { addSubview(glass) }
+             update(cornerRadius: cornerRadius, gain: gain)
+         }
+ 
+@@ -38,7 +38,7 @@ struct SidebarLuminanceGlass: NSViewRepresentable {
+ 
+         func update(cornerRadius: CGFloat, gain: CGFloat) {
+             if glass.cornerRadius != cornerRadius { glass.cornerRadius = cornerRadius }
+-            guard currentGain != gain,
++            guard !Diag.noSidebarFilter, currentGain != gain,
+                   let matrix = CIFilter(name: "CIColorMatrix") else { return }
+             matrix.setValue(CIVector(x: gain, y: 0, z: 0, w: 0), forKey: "inputRVector")
+             matrix.setValue(CIVector(x: 0, y: gain, z: 0, w: 0), forKey: "inputGVector")
+diff --git a/Sources/DayPanel/Views/Common/VisualEffectView.swift b/Sources/DayPanel/Views/Common/VisualEffectView.swift
+index 4ea99d8..ebb12a4 100644
+--- a/Sources/DayPanel/Views/Common/VisualEffectView.swift
++++ b/Sources/DayPanel/Views/Common/VisualEffectView.swift
+@@ -47,6 +47,8 @@ struct VisualEffectView: NSViewRepresentable {
+         // effect view view-backed and `layer` remains nil during layout,
+         // leaving the original opaque header tint untouched.
+         v.wantsLayer       = true
++        // Diagnostic ablation: preserve geometry, preference and overlay.
++        v.isHidden = Diag.on("HIDE_HEADER_EFFECT") && stripTint && blendingMode == .withinWindow
+         v.autoresizingMask = [.width, .height]
+         return v
+     }
+@@ -103,7 +105,10 @@ private struct FinderHeaderMaterialModifier: ViewModifier {
+     let bottomExtension: CGFloat
+     let bottomRule: Bool
+ 
+-    func body(content: Content) -> some View {
++    @ViewBuilder func body(content: Content) -> some View {
++        if Diag.noHeaderMaterial {
++            content.background(Editorial.paper)
++        } else {
+         content.background(alignment: .topLeading) {
+             GeometryReader { proxy in
+                 // Header = blur nativo MAIS LEVE. `.fullScreenUI` tem o menor
+@@ -134,6 +139,7 @@ private struct FinderHeaderMaterialModifier: ViewModifier {
+                                 value: proxy.frame(in: .named("appWindow")).maxY + bottomExtension)
+             }
+         }
++        }
+     }
+ }
+ 
+@@ -321,7 +327,7 @@ final class TintlessVisualEffectView: NSVisualEffectView {
+                     // inputRadius parecia não ter efeito). Força captura 1:1.
+                     let curScale = (sub.value(forKey: "scale") as? NSNumber)?
+                         .doubleValue ?? -1
+-                    if curScale != 1.0 {
++                    if !Diag.on("NATIVE_BACKDROP_SCALE"), curScale != 1.0 {
+                         sub.setValue(1.0, forKey: "scale")
+                         NSLog("APOLLO-TintlessVEV backdrop scale %@ -> 1.0",
+                               String(describing: curScale))
+diff --git a/Sources/DayPanel/Views/ContentView.swift b/Sources/DayPanel/Views/ContentView.swift
+index 74991c7..e792e00 100644
+--- a/Sources/DayPanel/Views/ContentView.swift
++++ b/Sources/DayPanel/Views/ContentView.swift
+@@ -136,6 +136,7 @@ struct ContentView: View {
+     }
+ 
+     var body: some View {
++        let _ = Diag.hit("ContentView")
+         GeometryReader { windowGeo in
+             ZStack(alignment: .topTrailing) {
+                 // Editorial canvas was painted full-window here
+diff --git a/Sources/DayPanel/Views/Home/EditorialBoardView.swift b/Sources/DayPanel/Views/Home/EditorialBoardView.swift
+index 9bd4814..0208d1a 100644
+--- a/Sources/DayPanel/Views/Home/EditorialBoardView.swift
++++ b/Sources/DayPanel/Views/Home/EditorialBoardView.swift
+@@ -58,6 +58,7 @@ struct EditorialBoardView: View {
+     @State private var boardScrollRelay = BoardHorizontalScrollRelay()
+ 
+     var body: some View {
++        let _ = Diag.hit("EditorialBoardView")
+         // `labelsRow` deliberately has the intrinsic width of every status
+         // column so its pills can track the horizontal document 1:1. Without
+         // this outer viewport boundary that intrinsic width leaked through the
+@@ -716,6 +717,7 @@ private struct BoardLabelsTrack: View {
+     }
+ 
+     var body: some View {
++        let _ = Diag.hit("BoardLabelsTrack")
+         HStack(alignment: .top, spacing: 20) {
+             ForEach(items) { item in
+                 BoardColumnHeaderView(status: item.status, count: item.count)
+@@ -822,6 +824,7 @@ struct BoardCard: View {
+     @State private var hover: Bool = false
+ 
+     var body: some View {
++        let _ = Diag.hit("BoardCard")
+         VStack(alignment: .leading, spacing: 10) {
+             topRow
+             Text(task.title)
+@@ -1065,8 +1068,9 @@ private struct BoardCardRow: View {
+     private var isDragging: Bool { draggingTaskIds.contains(task.id) }
+ 
+     var body: some View {
++        let _ = Diag.hit("BoardCardRow")
+         BoardCard(task: task)
+-            .captureFrame($cardFrame)
++            .modifier(DiagCardFrame(frame: $cardFrame))
+             .taskSelectionSurface(isSelected,
+                                   radius: Editorial.popupRadius(8),
+                                   tint: Color(statusHex: task.statusDisplayHex))
+@@ -1396,3 +1400,10 @@ private struct BoardScrollXReader: ViewModifier {
+         }
+     }
+ }
++
++private struct DiagCardFrame: ViewModifier {
++    @Binding var frame: CGRect
++    @ViewBuilder func body(content: Content) -> some View {
++        if Diag.noCardFrame { content } else { content.captureFrame($frame) }
++    }
++}
+diff --git a/Sources/DayPanel/Views/Home/EditorialMyTasksView.swift b/Sources/DayPanel/Views/Home/EditorialMyTasksView.swift
+index e2cbb30..555ba64 100644
+--- a/Sources/DayPanel/Views/Home/EditorialMyTasksView.swift
++++ b/Sources/DayPanel/Views/Home/EditorialMyTasksView.swift
+@@ -64,6 +64,7 @@ struct EditorialMyTasksView: View {
+     private let chromeInset: CGFloat = 162
+ 
+     var body: some View {
++        let _ = Diag.hit("EditorialMyTasksView")
+         GeometryReader { geo in
+             let m = columnLayout.metrics(totalWidth: geo.size.width)
+             ZStack(alignment: .top) {
+diff --git a/Sources/DayPanel/Views/Home/EditorialSidebar.swift b/Sources/DayPanel/Views/Home/EditorialSidebar.swift
+index a0621fc..5aeac45 100644
+--- a/Sources/DayPanel/Views/Home/EditorialSidebar.swift
++++ b/Sources/DayPanel/Views/Home/EditorialSidebar.swift
+@@ -15,7 +15,7 @@ enum SidebarRoute: Hashable {
+     /// Route presented on every normal Apollo launch. Keep this explicit so
+     /// previews can still request a different surface without changing the
+     /// production landing page.
+-    static let launchDefault: SidebarRoute = .tasks
++    static var launchDefault: SidebarRoute { Diag.env["APOLLO_DIAG_ROUTE"] == "board" ? .board : .tasks }
+ 
+     var studioKey: String {
+         switch self {
+@@ -62,6 +62,7 @@ struct EditorialSidebar: View {
+     @State private var pinnedLists: [PinnedLists.Entry] = PinnedLists.load()
+ 
+     var body: some View {
++        let _ = Diag.hit("EditorialSidebar")
+         // PANE FLUTUANTE de Liquid Glass — a mesma implementação
+         // do painel do MINIMAL TP: card arredondado inset das
+         // bordas, vidro REAL (glassEffect) no macOS 26 sobre o

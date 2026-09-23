@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 @testable import ApolloRuntime
 
 final class TaskReviewUpdateTests: XCTestCase {
@@ -27,6 +28,114 @@ final class TaskReviewUpdateTests: XCTestCase {
     }
 
     @MainActor
+    func testIdenticalReviewPayloadDoesNotPublishOrPersistAgain() async throws {
+        let suite = "TaskReviewUpdateTests.no-op.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(ReviewRecordingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = TaskReviewUpdateStore(defaults: defaults, catalogFetcher: { _ in nil })
+        defer { store.flushPersistenceOnTermination() }
+        let update = reviewUpdate(commentCount: 1)
+        store.applyProbeResult(update, taskId: update.taskId, visibleAttachmentIds: [])
+        await store.flushPendingPersistence()
+        XCTAssertEqual(defaults.writeCount, 1)
+
+        var publications = 0
+        let subscription = store.objectWillChange.sink { publications += 1 }
+        for _ in 0..<50 {
+            store.applyProbeResult(update, taskId: update.taskId, visibleAttachmentIds: [])
+            XCTAssertTrue(store.refreshPendingMetadata(taskId: update.taskId,
+                                                       activeAtt: update.activeAtt,
+                                                       meta: update.meta))
+            store.reconcileOpenedVersion(taskId: update.taskId, activeAtt: update.activeAtt,
+                                         attachment: update.attachment, meta: update.meta)
+        }
+        await store.flushPendingPersistence()
+        withExtendedLifetime(subscription) {
+            XCTAssertEqual(publications, 0, "Identical probes must not invalidate any observing row")
+        }
+        XCTAssertEqual(defaults.writeCount, 1, "Identical probes must not schedule persistence")
+        XCTAssertFalse(defaults.didWriteOnMainThread)
+    }
+
+    @MainActor
+    func testChangedReviewPayloadWithSameTimestampStillPublishesAndPersists() async throws {
+        let suite = "TaskReviewUpdateTests.same-time.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(ReviewRecordingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = TaskReviewUpdateStore(defaults: defaults, catalogFetcher: { _ in nil })
+        defer { store.flushPersistenceOnTermination() }
+        let first = reviewUpdate(commentCount: 1)
+        store.applyProbeResult(first, taskId: first.taskId, visibleAttachmentIds: [])
+        await store.flushPendingPersistence()
+        var publications = 0
+        let subscription = store.objectWillChange.sink { publications += 1 }
+        let changed = reviewUpdate(commentCount: 3, status: "approved", title: "Novo título")
+        XCTAssertEqual(first.meta.updatedAt, changed.meta.updatedAt)
+        store.applyProbeResult(changed, taskId: changed.taskId, visibleAttachmentIds: [])
+        await store.flushPendingPersistence()
+        withExtendedLifetime(subscription) { XCTAssertEqual(publications, 1) }
+        XCTAssertEqual(defaults.writeCount, 2)
+        let relaunched = TaskReviewUpdateStore(defaults: defaults, catalogFetcher: { _ in nil })
+        defer { relaunched.flushPersistenceOnTermination() }
+        XCTAssertEqual(relaunched.update(for: changed.taskId), changed)
+        XCTAssertNotNil(relaunched.update(for: changed.taskId), "Approval without conclusion keeps its latch")
+    }
+
+    @MainActor
+    func testBatchedSnapshotsAndCriticalCompletionRemainOrderedAcrossRelaunch() async throws {
+        let suite = "TaskReviewUpdateTests.ordered.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(ReviewRecordingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        // A long delay makes coalescing deterministic; explicit barriers drain it.
+        let store = TaskReviewUpdateStore(defaults: defaults, catalogFetcher: { _ in nil },
+                                          persistenceDelay: 60)
+        defer { store.flushPersistenceOnTermination() }
+        let first = reviewUpdate(commentCount: 1)
+        store.applyProbeResult(first, taskId: first.taskId, visibleAttachmentIds: [])
+        await store.flushPendingPersistence()
+        for count in 2...20 {
+            let next = reviewUpdate(commentCount: count)
+            store.applyProbeResult(next, taskId: next.taskId, visibleAttachmentIds: [])
+        }
+        await store.flushPendingPersistence()
+        XCTAssertEqual(defaults.writeCount, 2, "A burst persists only its final snapshot")
+        let readback = TaskReviewUpdateStore(defaults: defaults, catalogFetcher: { _ in nil })
+        defer { readback.flushPersistenceOnTermination() }
+        XCTAssertEqual(readback.update(for: first.taskId)?.meta.commentCount, 20)
+
+        // Queue another stale pending snapshot, then consume it before debounce.
+        let queued = reviewUpdate(commentCount: 21)
+        store.applyProbeResult(queued, taskId: queued.taskId, visibleAttachmentIds: [])
+        let completed = reviewUpdate(commentCount: 21, status: "approved",
+                                     concludedAt: "2026-09-23T10:00:00.000Z")
+        XCTAssertTrue(store.acknowledgeCompleted(completed))
+        // Deliberately no await: acknowledgement must be durable on return.
+        XCTAssertNil(defaults.data(forKey: "taskReviewPendingUpdates.v1"))
+        let relaunched = TaskReviewUpdateStore(defaults: defaults, catalogFetcher: { _ in nil })
+        defer { relaunched.flushPersistenceOnTermination() }
+        XCTAssertNil(relaunched.update(for: first.taskId))
+        await store.flushPendingPersistence()
+        XCTAssertEqual(defaults.writeCount, 3, "Old pending work must never resurrect the consumed latch")
+        XCTAssertFalse(defaults.didWriteOnMainThread)
+
+        store.applyProbeResult(first, taskId: first.taskId, visibleAttachmentIds: [])
+        store.flushPersistenceOnTermination()
+        XCTAssertNotNil(defaults.data(forKey: "taskReviewPendingUpdates.v1"),
+                        "Quit drains the last noncritical snapshot")
+        XCTAssertEqual(defaults.writeCount, 4)
+    }
+
+    private func reviewUpdate(commentCount: Int, status: String = "in_review",
+                              title: String = "Review", concludedAt: String? = nil)
+    -> TaskReviewUpdateStore.Update {
+        .init(taskId: "task-persistence", attachment: reviewAttachment, activeAtt: "review-persistence",
+              meta: .init(exists: true, updatedAt: "2026-09-23T10:00:00.000Z",
+                          status: status, commentCount: commentCount, concludedAt: concludedAt,
+                          reviewId: "review-persistence", currentVersionId: "v1",
+                          mediaTitle: title, evaluatedVersionId: "v1"))
+    }
+
+    @MainActor
     func testCompactListTaskHydratesAttachmentsOnlyOnce() async {
         var fetchCount = 0
         let full = makeTask(attachments: [reviewAttachment])
@@ -34,6 +143,7 @@ final class TaskReviewUpdateTests: XCTestCase {
             fetchCount += 1
             return full
         })
+        defer { store.flushPersistenceOnTermination() }
         let compact = makeTask()
 
         let first = await store.taskForProbe(compact)
@@ -57,6 +167,7 @@ final class TaskReviewUpdateTests: XCTestCase {
                 attachments: [self.reviewAttachment]
             )
         })
+        defer { store.flushPersistenceOnTermination() }
 
         _ = await store.taskForProbe(makeTask(updatedAt: firstDate))
         _ = await store.taskForProbe(makeTask(updatedAt: secondDate))
@@ -137,6 +248,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = TaskReviewUpdateStore(defaults: defaults)
+        defer { store.flushPersistenceOnTermination() }
         let pending = TaskReviewUpdateStore.Update(
             taskId: "task-inline-approval",
             attachment: reviewAttachment,
@@ -168,7 +280,7 @@ final class TaskReviewUpdateTests: XCTestCase {
     }
 
     @MainActor
-    func testUnapprovedConcludedV4KeepsItsRealTitleAndPendingLatch() throws {
+    func testUnapprovedConcludedV4KeepsItsRealTitleAndPendingLatch() async throws {
         let suite = "TaskReviewUpdateTests.unapproved-v4.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -177,6 +289,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         // usa um taskId real — o teste precisa ser determinístico.
         let store = TaskReviewUpdateStore(defaults: defaults,
                                           catalogFetcher: { _ in nil })
+        defer { store.flushPersistenceOnTermination() }
         let attachment = CUTask.Attachment(
             id: "0cf053fd-c483-4579-bc95-ad7859373bb4.mov",
             title: "THE_MINIMAL_V03 · V4.mov",
@@ -206,20 +319,23 @@ final class TaskReviewUpdateTests: XCTestCase {
         XCTAssertEqual(pending.displayTitle, "THE_MINIMAL_V03 · V4.mov")
         XCTAssertFalse(pending.meta.isApprovedAndConcluded)
 
+        await store.flushPendingPersistence()
         let relaunched = TaskReviewUpdateStore(defaults: defaults,
                                                catalogFetcher: { _ in nil })
+        defer { relaunched.flushPersistenceOnTermination() }
         let restored = try XCTUnwrap(relaunched.updates(for: update.taskId).first)
         XCTAssertEqual(restored.displayTitle, "THE_MINIMAL_V03 · V4.mov")
         XCTAssertEqual(relaunched.updates(for: update.taskId).count, 1)
     }
 
     @MainActor
-    func testThirdIndependentUnapprovedReviewCannotDisappear() throws {
+    func testThirdIndependentUnapprovedReviewCannotDisappear() async throws {
         let suite = "TaskReviewUpdateTests.third-pending.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = TaskReviewUpdateStore(defaults: defaults,
                                           catalogFetcher: { _ in nil })
+        defer { store.flushPersistenceOnTermination() }
         let taskId = "86ajhqmw3"
 
         for index in 1...3 {
@@ -258,8 +374,10 @@ final class TaskReviewUpdateTests: XCTestCase {
             !$0.meta.isApprovedAndConcluded
         })
 
+        await store.flushPendingPersistence()
         let relaunched = TaskReviewUpdateStore(defaults: defaults,
                                                catalogFetcher: { _ in nil })
+        defer { relaunched.flushPersistenceOnTermination() }
         XCTAssertEqual(relaunched.updates(for: taskId).count, 3)
         XCTAssertTrue(relaunched.updates(for: taskId).contains {
             $0.displayTitle == "VIDEO 3 · V3.mov"
@@ -274,6 +392,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let store = TaskReviewUpdateStore(
             reviewedDisplayDuration: 0.04, defaults: defaults
         )
+        defer { store.flushPersistenceOnTermination() }
         let attachment = reviewAttachment
         let pending = TaskReviewUpdateStore.Update(
             taskId: "task-remote-final", attachment: attachment,
@@ -315,6 +434,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = TaskReviewUpdateStore(defaults: defaults)
+        defer { store.flushPersistenceOnTermination() }
         let attachment = reviewAttachment
         let taskId = "task-remote-unapproved-\(UUID().uuidString)"
         let pending = TaskReviewUpdateStore.Update(
@@ -351,6 +471,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = TaskReviewUpdateStore(defaults: defaults)
+        defer { store.flushPersistenceOnTermination() }
         let taskId = "task-pristine-\(UUID().uuidString)"
         let attachment = CUTask.Attachment(
             id: "attachment-pristine", title: "VIDEO NOVO.mov",
@@ -378,11 +499,12 @@ final class TaskReviewUpdateTests: XCTestCase {
     }
 
     @MainActor
-    func testLegacyEmptyFalseLatchIsRemovedButRealCommentSurvives() throws {
+    func testLegacyEmptyFalseLatchIsRemovedButRealCommentSurvives() async throws {
         let suite = "TaskReviewUpdateTests.legacy-pristine.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = TaskReviewUpdateStore(defaults: defaults)
+        defer { store.flushPersistenceOnTermination() }
         let emptyTaskId = "task-legacy-empty-\(UUID().uuidString)"
         let activeTaskId = "task-legacy-active-\(UUID().uuidString)"
         let empty = TaskReviewUpdateStore.Update(
@@ -419,6 +541,7 @@ final class TaskReviewUpdateTests: XCTestCase {
                                visibleAttachmentIds: [active.activeAtt])
 
         let key = "taskReviewPendingUpdates.v1"
+        await store.flushPendingPersistence()
         let encoded = try XCTUnwrap(defaults.data(forKey: key))
         var records = try XCTUnwrap(
             JSONSerialization.jsonObject(with: encoded) as? [[String: Any]]
@@ -429,7 +552,9 @@ final class TaskReviewUpdateTests: XCTestCase {
         defaults.set(try JSONSerialization.data(withJSONObject: records),
                      forKey: key)
 
+        await store.flushPendingPersistence()
         let relaunched = TaskReviewUpdateStore(defaults: defaults)
+        defer { relaunched.flushPersistenceOnTermination() }
         XCTAssertNil(relaunched.capsuleState(for: emptyTaskId),
                      "Unsafe legacy empty latches must be migrated away")
         XCTAssertNotNil(relaunched.capsuleState(for: activeTaskId),
@@ -489,7 +614,7 @@ final class TaskReviewUpdateTests: XCTestCase {
     }
 
     @MainActor
-    func testRelaunchPurgesVerifiedButPristineFalseLatch() throws {
+    func testRelaunchPurgesVerifiedButPristineFalseLatch() async throws {
         let suite = "TaskReviewUpdateTests.verified-pristine.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -501,6 +626,7 @@ final class TaskReviewUpdateTests: XCTestCase {
             uploaderId: 42
         )
         let store = TaskReviewUpdateStore(defaults: defaults)
+        defer { store.flushPersistenceOnTermination() }
         store.applyProbeResult(
             TaskReviewUpdateStore.Update(
                 taskId: taskId,
@@ -538,6 +664,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         )
         XCTAssertNotNil(store.capsuleState(for: taskId))
         let key = "taskReviewPendingUpdates.v1"
+        await store.flushPendingPersistence()
         let encoded = try XCTUnwrap(defaults.data(forKey: key))
         var records = try XCTUnwrap(
             JSONSerialization.jsonObject(with: encoded) as? [[String: Any]]
@@ -604,6 +731,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         clearSeen(activeAtt)
         defer { clearSeen(activeAtt) }
         let store = TaskReviewUpdateStore(reviewedDisplayDuration: 0.04)
+        defer { store.flushPersistenceOnTermination() }
         let attachment = CUTask.Attachment(
             id: "attachment-1",
             title: "Video V1.mov",
@@ -640,6 +768,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = TaskReviewUpdateStore(defaults: defaults)
+        defer { store.flushPersistenceOnTermination() }
         let attachment = CUTask.Attachment(
             id: "attachment-latched",
             title: "Video V1.mov",
@@ -704,7 +833,7 @@ final class TaskReviewUpdateTests: XCTestCase {
     }
 
     @MainActor
-    func testPublishedReviewSurvivesAppRelaunchUntilExplicitCompletion() throws {
+    func testPublishedReviewSurvivesAppRelaunchUntilExplicitCompletion() async throws {
         let suite = "TaskReviewUpdateTests.pending.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -732,13 +861,16 @@ final class TaskReviewUpdateTests: XCTestCase {
         )
 
         let firstLaunch = TaskReviewUpdateStore(defaults: defaults)
+        defer { firstLaunch.flushPersistenceOnTermination() }
         firstLaunch.applyProbeResult(
             update,
             taskId: update.taskId,
             visibleAttachmentIds: [attachment.id]
         )
 
+        await firstLaunch.flushPendingPersistence()
         let secondLaunch = TaskReviewUpdateStore(defaults: defaults)
+        defer { secondLaunch.flushPersistenceOnTermination() }
         guard case .update? = secondLaunch.capsuleState(for: update.taskId) else {
             return XCTFail("Relaunch must preserve VER REVIEW")
         }
@@ -749,7 +881,9 @@ final class TaskReviewUpdateTests: XCTestCase {
             taskId: update.taskId,
             visibleAttachmentIds: [attachment.id]
         )
+        await secondLaunch.flushPendingPersistence()
         let thirdLaunch = TaskReviewUpdateStore(defaults: defaults)
+        defer { thirdLaunch.flushPersistenceOnTermination() }
         guard case .update? = thirdLaunch.capsuleState(for: update.taskId) else {
             return XCTFail("Open/close and relaunch must preserve VER REVIEW")
         }
@@ -768,11 +902,12 @@ final class TaskReviewUpdateTests: XCTestCase {
             meta: confirmed
         ))
         let afterCompletion = TaskReviewUpdateStore(defaults: defaults)
+        defer { afterCompletion.flushPersistenceOnTermination() }
         XCTAssertNil(afterCompletion.capsuleState(for: update.taskId))
     }
 
     @MainActor
-    func testMultipleReviewsOnOneTaskPersistAndCompleteIndependently() throws {
+    func testMultipleReviewsOnOneTaskPersistAndCompleteIndependently() async throws {
         let suite = "TaskReviewUpdateTests.multiple.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -800,13 +935,16 @@ final class TaskReviewUpdateTests: XCTestCase {
         )
 
         let firstLaunch = TaskReviewUpdateStore(defaults: defaults)
+        defer { firstLaunch.flushPersistenceOnTermination() }
         firstLaunch.applyProbeResult(first, taskId: taskId,
                                      visibleAttachmentIds: [firstAttachment.id])
         firstLaunch.applyProbeResult(second, taskId: taskId,
                                      visibleAttachmentIds: [secondAttachment.id])
         XCTAssertEqual(firstLaunch.updates(for: taskId).count, 2)
 
+        await firstLaunch.flushPendingPersistence()
         let secondLaunch = TaskReviewUpdateStore(defaults: defaults)
+        defer { secondLaunch.flushPersistenceOnTermination() }
         XCTAssertEqual(secondLaunch.updates(for: taskId).map(\.activeAtt),
                        ["review-2", "review-1"])
 
@@ -830,7 +968,9 @@ final class TaskReviewUpdateTests: XCTestCase {
             return XCTFail("Completing one video must keep VER REVIEW for its sibling")
         }
 
+        await secondLaunch.flushPendingPersistence()
         let thirdLaunch = TaskReviewUpdateStore(defaults: defaults)
+        defer { thirdLaunch.flushPersistenceOnTermination() }
         XCTAssertEqual(thirdLaunch.updates(for: taskId).map(\.activeAtt),
                        ["review-2"])
     }
@@ -841,6 +981,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = TaskReviewUpdateStore(defaults: defaults)
+        defer { store.flushPersistenceOnTermination() }
         let final = TaskReviewUpdateStore.Update(
             taskId: "task-final", attachment: reviewAttachment,
             activeAtt: "review-final",
@@ -859,11 +1000,12 @@ final class TaskReviewUpdateTests: XCTestCase {
     }
 
     @MainActor
-    func testApprovedConclusionConsumesCanonicalAndLegacyAliasesOnly() throws {
+    func testApprovedConclusionConsumesCanonicalAndLegacyAliasesOnly() async throws {
         let suite = "TaskReviewUpdateTests.alias-final.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = TaskReviewUpdateStore(defaults: defaults)
+        defer { store.flushPersistenceOnTermination() }
         let taskId = "task-alias-final"
         let canonical = reviewAttachment.id
         let legacy = ReviewBackend.att(forMediaUrl: reviewAttachment.url)
@@ -910,14 +1052,16 @@ final class TaskReviewUpdateTests: XCTestCase {
 
         XCTAssertEqual(store.updates(for: taskId).map(\.activeAtt),
                        [siblingAttachment.id])
+        await store.flushPendingPersistence()
         let relaunched = TaskReviewUpdateStore(defaults: defaults)
+        defer { relaunched.flushPersistenceOnTermination() }
         XCTAssertEqual(relaunched.updates(for: taskId).map(\.activeAtt),
                        [siblingAttachment.id],
                        "The legacy alias must not return after relaunch")
     }
 
     @MainActor
-    func testV3AndPhysicalV4CollapseIntoOnePendingReviewAcrossRelaunch() throws {
+    func testV3AndPhysicalV4CollapseIntoOnePendingReviewAcrossRelaunch() async throws {
         let suite = "TaskReviewUpdateTests.lineage-dedupe.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -926,6 +1070,7 @@ final class TaskReviewUpdateTests: XCTestCase {
             defaults: defaults,
             catalogFetcher: { _ in catalog }
         )
+        defer { store.flushPersistenceOnTermination() }
         let v3 = replacementAttachment(
             id: "review-v3", title: "BODY BALDA · V3.mov",
             url: "https://files.test/v3.mov"
@@ -970,10 +1115,12 @@ final class TaskReviewUpdateTests: XCTestCase {
         XCTAssertEqual(pending.meta.currentVersionId, "v3")
         XCTAssertEqual(pending.meta.evaluatedVersionId, "v3")
 
+        await store.flushPendingPersistence()
         let relaunched = TaskReviewUpdateStore(
             defaults: defaults,
             catalogFetcher: { _ in catalog }
         )
+        defer { relaunched.flushPersistenceOnTermination() }
         XCTAssertEqual(relaunched.updates(for: catalog.taskId).count, 1)
         XCTAssertEqual(relaunched.updates(for: catalog.taskId).first?.activeAtt,
                        "review-v3")
@@ -984,7 +1131,7 @@ final class TaskReviewUpdateTests: XCTestCase {
     }
 
     @MainActor
-    func testExactEmptyV4RepairsContaminatedV3LatchWithoutDeletingSibling() throws {
+    func testExactEmptyV4RepairsContaminatedV3LatchWithoutDeletingSibling() async throws {
         let suite = "TaskReviewUpdateTests.exact-version-reconcile.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -993,6 +1140,7 @@ final class TaskReviewUpdateTests: XCTestCase {
             defaults: defaults,
             catalogFetcher: { _ in catalog }
         )
+        defer { store.flushPersistenceOnTermination() }
         let v4 = replacementAttachment(
             id: "attachment-v4", title: "THE_MINIMAL_V03 · V4.mov",
             url: "https://files.test/v4.mov"
@@ -1058,6 +1206,7 @@ final class TaskReviewUpdateTests: XCTestCase {
 
         XCTAssertEqual(store.updates(for: catalog.taskId).map(\.activeAtt),
                        [sibling.id])
+        await store.flushPendingPersistence()
         XCTAssertEqual(TaskReviewUpdateStore(
             defaults: defaults,
             catalogFetcher: { _ in catalog }
@@ -1074,6 +1223,7 @@ final class TaskReviewUpdateTests: XCTestCase {
             defaults: defaults,
             catalogFetcher: { _ in catalog }
         )
+        defer { store.flushPersistenceOnTermination() }
         let v4 = replacementAttachment(
             id: "attachment-v4", title: "THE_MINIMAL_V03 · V4.mov",
             url: "https://files.test/v4.mov"
@@ -1118,6 +1268,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let catalog = twoVersionCatalog()
         let store = TaskReviewUpdateStore(defaults: defaults,
                                           catalogFetcher: { _ in catalog })
+        defer { store.flushPersistenceOnTermination() }
 
         // V2 registrada e projetada, mas sem qualquer atividade de revisor.
         store.recordDiscoveredUpdate(
@@ -1146,6 +1297,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let catalog = twoVersionCatalog()
         let store = TaskReviewUpdateStore(defaults: defaults,
                                           catalogFetcher: { _ in catalog })
+        defer { store.flushPersistenceOnTermination() }
 
         store.recordDiscoveredUpdate(
             taskId: catalog.taskId, activeAtt: "review-lineage",
@@ -1182,6 +1334,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let catalog = twoVersionCatalog()
         let store = TaskReviewUpdateStore(defaults: defaults,
                                           catalogFetcher: { _ in catalog })
+        defer { store.flushPersistenceOnTermination() }
 
         // `currentVersionId = v2` diz apenas qual vídeo está projetado. Sem
         // `evaluatedVersionId` numa linhagem multiversão, o registro é ambíguo
@@ -1201,13 +1354,14 @@ final class TaskReviewUpdateTests: XCTestCase {
     }
 
     @MainActor
-    func testAmbiguousLegacyLatchOnMultiversionLineageIsPurgedOnRelaunch() throws {
+    func testAmbiguousLegacyLatchOnMultiversionLineageIsPurgedOnRelaunch() async throws {
         let suite = "TaskReviewUpdateTests.ambiguous-legacy.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let catalog = twoVersionCatalog()
         let store = TaskReviewUpdateStore(defaults: defaults,
                                           catalogFetcher: { _ in catalog })
+        defer { store.flushPersistenceOnTermination() }
         let attachment = replacementAttachment(
             id: "att-v2", title: "VIDEO · V2.mov",
             url: "https://files.test/lin-v2.mov"
@@ -1229,8 +1383,10 @@ final class TaskReviewUpdateTests: XCTestCase {
         )
         XCTAssertNotNil(store.capsuleState(for: catalog.taskId))
 
+        await store.flushPendingPersistence()
         let relaunched = TaskReviewUpdateStore(defaults: defaults,
                                                catalogFetcher: { _ in catalog })
+        defer { relaunched.flushPersistenceOnTermination() }
         XCTAssertNil(relaunched.capsuleState(for: catalog.taskId),
                      "Latch ambíguo de linhagem multiversão não volta no relaunch")
     }
@@ -1243,6 +1399,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let catalog = twoVersionCatalog()
         let store = TaskReviewUpdateStore(defaults: defaults,
                                           catalogFetcher: { _ in catalog })
+        defer { store.flushPersistenceOnTermination() }
 
         store.recordDiscoveredUpdate(
             taskId: catalog.taskId, activeAtt: "review-lineage",
@@ -1271,6 +1428,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let store = TaskReviewUpdateStore(reviewedDisplayDuration: 0,
                                           defaults: defaults,
                                           catalogFetcher: { _ in catalog })
+        defer { store.flushPersistenceOnTermination() }
 
         for (version, url, count) in [("v1", "https://files.test/lin-v1.mov", 2),
                                       ("v2", "https://files.test/lin-v2.mov", 1)] {
@@ -1320,6 +1478,7 @@ final class TaskReviewUpdateTests: XCTestCase {
         let catalog = twoVersionCatalog()
         let store = TaskReviewUpdateStore(defaults: defaults,
                                           catalogFetcher: { _ in catalog })
+        defer { store.flushPersistenceOnTermination() }
 
         for (version, url, count) in [("v1", "https://files.test/lin-v1.mov", 2),
                                       ("v2", "https://files.test/lin-v2.mov", 1)] {
@@ -1424,6 +1583,46 @@ final class TaskReviewUpdateTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: "reviewObserved.\(att)")
         UserDefaults.standard.removeObject(forKey: "reviewObservedStatus.\(att)")
         UserDefaults.standard.removeObject(forKey: "reviewObservedComments.\(att)")
+    }
+}
+
+/// Observe real persistence calls, including their thread, without replacing
+/// the writer or changing UserDefaults' durability/readback behavior.
+private final class ReviewRecordingDefaults: UserDefaults, @unchecked Sendable {
+    private let writeLock = NSLock()
+    private var writes = 0
+    private var mainThreadWrite = false
+
+    var writeCount: Int {
+        writeLock.lock()
+        defer { writeLock.unlock() }
+        return writes
+    }
+
+    var didWriteOnMainThread: Bool {
+        writeLock.lock()
+        defer { writeLock.unlock() }
+        return mainThreadWrite
+    }
+
+    private func record(_ key: String) {
+        guard key == "taskReviewPendingUpdates.v1" else { return }
+        writeLock.lock()
+        writes += 1
+        mainThreadWrite = mainThreadWrite || Thread.isMainThread
+        writeLock.unlock()
+    }
+
+    override func set(_ value: Any?, forKey defaultName: String) {
+        // Some Foundation versions implement removeObject via set(nil).
+        // Count the explicit removal once, regardless of that implementation.
+        if value != nil { record(defaultName) }
+        super.set(value, forKey: defaultName)
+    }
+
+    override func removeObject(forKey defaultName: String) {
+        record(defaultName)
+        super.removeObject(forKey: defaultName)
     }
 }
 

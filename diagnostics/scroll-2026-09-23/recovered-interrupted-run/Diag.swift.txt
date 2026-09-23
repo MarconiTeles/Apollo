@@ -1,0 +1,107 @@
+import Foundation
+import AppKit
+
+/// DIAGNÓSTICO LOCAL (worktree /tmp/apollo-diag) — nunca entra no main.
+enum Diag {
+    static let env = ProcessInfo.processInfo.environment
+    static func on(_ k: String) -> Bool { env["APOLLO_DIAG_" + k] == "1" }
+    static let noCardFrame = on("NO_CARDFRAME")
+    static let noSidebarFilter = on("NO_SIDEBAR_FILTER")
+    static let noSidebarGlass = on("NO_SIDEBAR_GLASS")
+    static let noHeaderMaterial = on("NO_HEADER_MATERIAL")
+    static let noReviewProbe = on("NO_REVIEW_PROBE")
+    static let counting = on("COUNT")
+
+    nonisolated(unsafe) static var counts: [String: Int] = [:]
+    nonisolated(unsafe) static var timer: Timer?
+
+    static func hit(_ name: String) {
+        guard counting else { return }
+        counts[name, default: 0] += 1
+        if timer == nil {
+            installAutoScrollTrigger()
+            timer = Timer(timeInterval: 1.0, repeats: true) { _ in
+                guard !counts.isEmpty else { return }
+                let line = counts.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+                counts.removeAll()
+                NSLog("APOLLO-COUNT %@", line)
+            }
+            RunLoop.main.add(timer!, forMode: .common)
+        }
+    }
+
+    // MARK: - In-process scroll driver (sem permissão de Acessibilidade)
+    // APOLLO_DIAG_AUTOSCROLL="x,y,duration,delta,mode"  (x,y em pontos, topo-esquerda da janela)
+    // Disparado por DistributedNotification "apollo.diag.autoscroll".
+    nonisolated(unsafe) static var scrollTimer: Timer?
+    static func installAutoScrollTrigger() {
+        guard env["APOLLO_DIAG_AUTOSCROLL"] != nil else { return }
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("apollo.diag.autoscroll"), object: nil, queue: .main) { _ in
+            startAutoScroll()
+        }
+        NSLog("APOLLO-AUTOSCROLL armed")
+    }
+
+    static func startAutoScroll() {
+        let p = (env["APOLLO_DIAG_AUTOSCROLL"] ?? "").split(separator: ",").map(String.init)
+        guard p.count >= 5, let x = Double(p[0]), let y = Double(p[1]),
+              let duration = Double(p[2]), let delta = Double(p[3]) else { return }
+        let mode = p[4]
+        guard let win = NSApp.windows.filter({ $0.isVisible && $0.frame.width > 800 })
+                .max(by: { $0.frame.width < $1.frame.width }),
+              let frameView = win.contentView?.superview else { NSLog("APOLLO-AUTOSCROLL no window"); return }
+        let windowPt = NSPoint(x: x, y: win.frame.height - y)
+        guard let hit = frameView.hitTest(windowPt) else { NSLog("APOLLO-AUTOSCROLL no hit"); return }
+        let scroll = hit.enclosingScrollView
+        func offset() -> String {
+            guard let s = scroll else { return "nil" }
+            return String(format: "%.0f,%.0f", s.contentView.bounds.origin.x, s.contentView.bounds.origin.y)
+        }
+        NSLog("APOLLO-AUTOSCROLL start hit=%@ scroll=%@ offset=%@", String(describing: type(of: hit)),
+              String(describing: scroll.map { type(of: $0) }), offset())
+        let screenPt = win.convertPoint(toScreen: windowPt)
+        let primaryH = NSScreen.screens.first?.frame.height ?? 0
+        let cgPt = CGPoint(x: screenPt.x, y: primaryH - screenPt.y)
+        let start = Date()
+        var lastDir = 0.0
+        var tick = 0
+        var minOff = Double.greatestFiniteMagnitude, maxOff = -Double.greatestFiniteMagnitude
+        func send(_ dy: Double, phase: Int64) {
+            guard let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                  wheel1: Int32(dy), wheel2: 0, wheel3: 0) else { return }
+            e.location = cgPt
+            e.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            e.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+            e.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: dy)
+            e.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: dy)
+            e.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(win.windowNumber))
+            e.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(win.windowNumber))
+            guard let ev = NSEvent(cgEvent: e) else { return }
+            if mode == "send" { win.sendEvent(ev) } else { hit.scrollWheel(with: ev) }
+        }
+        scrollTimer?.invalidate()
+        let t = Timer(timeInterval: 1.0 / 120.0, repeats: true) { timer in
+            let el = Date().timeIntervalSince(start)
+            if el >= duration {
+                send(0, phase: 4); timer.invalidate()
+                NSLog("APOLLO-AUTOSCROLL stop ticks=%d offset=%@ range=%.0f..%.0f", tick, offset(), minOff, maxOff)
+                return
+            }
+            let dir: Double = Int(el / 1.5) % 2 == 0 ? -1 : 1
+            if dir != lastDir {
+                if lastDir != 0 { send(0, phase: 4) }
+                send(dir * delta, phase: 1); lastDir = dir
+            } else {
+                send(dir * delta, phase: 2)
+            }
+            tick += 1
+            if let s = scroll {
+                let o = Double(s.contentView.bounds.origin.y)
+                minOff = min(minOff, o); maxOff = max(maxOff, o)
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        scrollTimer = t
+    }
+}

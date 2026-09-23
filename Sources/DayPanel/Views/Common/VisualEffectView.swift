@@ -106,19 +106,11 @@ private struct FinderHeaderMaterialModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.background(alignment: .topLeading) {
             GeometryReader { proxy in
-                // Header = blur nativo MAIS LEVE. `.fullScreenUI` tem o menor
-                // véu-base dos materiais (junto do underWindowBackground);
-                // `.withinWindow` desfoca o conteúdo da janela (os cards atrás)
-                // e `stripTint: true` tira a camada de cor/vibrancy — sobra o
-                // blur mais limpo que o nativo permite.
-                VisualEffectView(material: .fullScreenUI,
-                                 blendingMode: .withinWindow,
-                                 state: .followsWindowActiveState,
-                                 stripTint: true,
-                                 blurScale: 5.0 / 30.0) // raio 5 (nativo = 30)
-                    // Tint da cor do fundo (paper) por cima do blur — o véu
-                    // que separa o header do conteúdo, na cor do canvas.
-                    .overlay(Editorial.paper.opacity(0.85))
+                // Matte version of the previous 85%-paper veil. Keep its
+                // light/dark color and all geometry, without a live backdrop
+                // that must resample the scrolling task canvas every frame.
+                // Popup materials intentionally retain their existing recipe.
+                Editorial.paper
                     .frame(width: proxy.size.width + leadingExtension + trailingExtension,
                            height: proxy.size.height + topExtension + bottomExtension)
                     // Linha do FIM DO HEADER: desenhada no fim REAL do material
@@ -138,9 +130,8 @@ private struct FinderHeaderMaterialModifier: ViewModifier {
 }
 
 extension View {
-    /// Finder-style toolbar surface for sticky top chrome. `.titlebar` is the
-    /// semantic AppKit material used by native window chrome, so AppKit owns
-    /// its blur, vibrancy and light/dark adaptation. `leadingExtension` lets a
+    /// Matte toolbar surface for sticky top chrome, using the same adaptive
+    /// paper color as its former tinted material. `leadingExtension` lets a
     /// route whose content is inset around the floating sidebar still paint one
     /// uninterrupted material band all the way to the window's leading edge.
     /// `bottomExtension` estende SÓ o material para baixo (via background, fora
