@@ -85,7 +85,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// "Verificar Atualizações…" menu action. Routes a user-initiated
     /// check through the raw updater (which drives our custom UI).
     @objc private func checkForUpdatesMenu(_ sender: Any?) {
+#if APOLLO_DEV
+        return   // DEV build: Sparkle is never started (see installMainMenu).
+#else
         updater.checkForUpdates()
+#endif
     }
 
     /// Grey out the update menu item while a check can't be started
@@ -93,7 +97,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// target is this AppDelegate.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(checkForUpdatesMenu(_:)) {
+#if APOLLO_DEV
+            return false
+#else
             return updater.canCheckForUpdates
+#endif
         }
         return true
     }
@@ -125,7 +133,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // window's right edge. 1100pt = 880 chrome floor + 220 sidebar.
     static let windowMinFrameSize = NSSize(width: 1100, height: 680)
 
+#if APOLLO_DEV
+    /// DEV build: `--board-fixtures=N` swaps in an offline fixture state
+    /// (see `ApolloDevLaunchOptions`); otherwise the normal AppState.
+    let appState: AppState = ApolloDevLaunchOptions.makeFixtureAppState() ?? AppState()
+#else
     let appState = AppState()
+#endif
 
     private var window:     NSWindow?
     private var statusItem: NSStatusItem?
@@ -154,6 +168,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Launch
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+#if APOLLO_DEV
+        if let appearance = ApolloDevLaunchOptions.appearanceOverride {
+            // Launch-only override; not persisted to preferences.
+            appState.appearanceMode = appearance
+        }
+        if ApolloDevLaunchOptions.isFixtureMode {
+            launchDevFixtureMode()
+            return
+        }
+#endif
         // ── Apply the user's appearance choice (Claro / Escuro /
         //    Sistema). Pinning `NSApp.appearance` cascades to every
         //    window, popover, NSPanel (command palette), the main
@@ -430,6 +454,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (`copy:`, `paste:`, `selectAll:`, `undo:`…) so the focused
     /// `NSTextField` / `NSTextView` (which SwiftUI's `TextField`
     /// and `TextEditor` wrap) receives them automatically.
+#if APOLLO_DEV
+    @MainActor @objc private func startTasksScrollProbe(_ sender: Any?) {
+        TasksScrollProbe.restart()
+    }
+#endif
+
     private func installMainMenu() {
         let mainMenu = NSMenu()
 
@@ -465,12 +495,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         aboutItem.target = self
         appMenu.addItem(aboutItem)
+#if APOLLO_DEV
+        if ProcessInfo.processInfo.arguments.contains("--tasks-metrics") {
+            let item = NSMenuItem(title: "Medir scroll de Tarefas (45 s)",
+                                  action: #selector(startTasksScrollProbe(_:)), keyEquivalent: "")
+            item.target = self
+            appMenu.addItem(item)
+        }
+#endif
+
 
         // ── Sparkle "Check for Updates…". With a raw `SPUUpdater` (so we
         // can use our custom user driver) there's no built-in menu
         // validator, so we route through an AppDelegate selector and
         // grey the item out via `validateMenuItem` while a check can't
         // run. Touching `updater` here also starts it on launch.
+#if !APOLLO_DEV
+        // The DEV build never constructs the Sparkle updater: it must not
+        // check, download or install production updates (its Info.plist also
+        // carries no SUFeedURL and disables automatic checks).
         appMenu.addItem(.separator())
         let updateItem = NSMenuItem(
             title: "Verificar Atualizações…",
@@ -480,6 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateItem.target = self
         appMenu.addItem(updateItem)
         _ = updater   // force lazy init → starts the scheduled-check timer
+#endif
 
         appMenu.addItem(.separator())
 
@@ -745,7 +789,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
+#if APOLLO_DEV
+        w.title                        = ApolloDevLaunchOptions.windowTitle
+#else
         w.title                        = "Apollo"
+#endif
         // Minimum window size set to the dimensions the user
         // declared as the smallest comfortable layout — every
         // toolbar pill, the filter row and a usable portion of the
@@ -820,11 +868,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 w.setFrame(f, display: true, animate: false)
             }
         }
+#if APOLLO_DEV
+        let host = makeDevRootController()
+#else
         let host = NSHostingController(
             rootView: ContentView()
                 .environmentObject(appState)
                 .environmentObject(updateService)
         )
+#endif
         w.contentViewController = host
         w.delegate = self
 
@@ -843,75 +895,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             cv.layer?.isOpaque        = false
         }
 
-        // PERF: locked the foreground refresh rate at 60Hz
-        // (was preferred 120Hz / range 80–120). At 120Hz the
-        // per-frame budget is 8.3ms, but our SwiftUI scroll
-        // work measures ~20ms mean — meaning the OS demanded
-        // 120 frames/sec but the app could only deliver ~50,
-        // and the WindowServer's ProMotion adaptive scaling
-        // produced visible stutter as it kept jumping between
-        // 80, 100, 120Hz looking for a sustainable rate. When
-        // the window goes background, the OS falls back to a
-        // calmer 60Hz (16.6ms budget) where our work fits, so
-        // the user observed background scrolling looking
-        // SMOOTHER than foreground — exactly the inversion of
-        // what should happen.
-        //
-        // Locking the range to a single 60Hz value means:
-        //   • Foreground and background now run at the same
-        //     rate, equalising the perceived FPS gap.
-        //   • Frame budget is 16.6ms — comfortable for the
-        //     current SwiftUI workload; ~70% of frames already
-        //     complete inside that window per our latest trace.
-        //   • No more ProMotion adaptive jumps mid-scroll, so
-        //     the few remaining slow frames don't get amplified
-        //     into compounding stutter.
-        //
-        // If we get the per-frame work down to <8ms in a
-        // future round, we can reopen the range to 120Hz —
-        // but only after consistently hitting that budget.
-        // PERF DATA (Animation Hitches traces):
-        //   • 120Hz adaptive (orig 80-120 range):
-        //       mean 20.6ms · 70% @ 60Hz · 10.6% severe
-        //   • 60Hz LOCKED:
-        //       mean 20.6ms · 72% @ 60Hz · 12.2% severe
-        //   • 120Hz LOCKED (tried twice):
-        //       mean 25-42ms · 0-67% @ 60Hz · 25-92% severe
-        //
-        // Forcing the displayLink to 120Hz when the per-frame
-        // SwiftUI work measures ~20ms creates a runaway:
-        // every 8.3ms tick demands a new frame, the OS misses
-        // it, the queue backs up, and per-frame latency
-        // BLOWS UP to 40+ms. The lock at 60Hz is the proven
-        // sweet spot — frame budget (16.6ms) comfortably
-        // accommodates the workload, foreground and
-        // background render at the same cadence (closing the
-        // gap the user reported), and the few remaining
-        // slow frames degrade gracefully to 30Hz instead of
-        // compounding into 5-FPS stutter.
-        // Adaptive 60-120Hz: floor at 60Hz so frames that miss
-        // a 120Hz tick degrade gracefully (16.6ms budget instead
-        // of compounding stutter), ceiling at 120Hz so the
-        // WindowServer can drive ProMotion at full rate when our
-        // frame work fits the 8.3ms slot. Now that the task
-        // list runs on `NSCollectionListView` (cell recycling
-        // via NSHostingView pool), the per-frame SwiftUI work
-        // for the visible rows dropped enough that 60-120Hz
-        // adaptive is viable again — the previous hard-lock at
-        // 120Hz created runaway because the work was 20+ms,
-        // but with recycling we should fit inside 8.3ms most
-        // of the time on the task column.
+        // Attach the refresh request to the window, not its launch screen.
+        // NSWindow's display link follows moves between the internal ProMotion
+        // panel and an external display; NSScreen's remains on the old display.
+        // Keep the existing adaptive 60–120 Hz request.
         if #available(macOS 14.0, *) {
-            let displayLink = w.screen?.displayLink(
+            let displayLink = w.displayLink(
                 target: self,
                 selector: #selector(promotionTick(_:))
             )
-            displayLink?.preferredFrameRateRange = CAFrameRateRange(
+            displayLink.preferredFrameRateRange = CAFrameRateRange(
                 minimum:    60,
                 maximum:   120,
                 preferred: 120
             )
-            displayLink?.add(to: .main, forMode: .common)
+            displayLink.add(to: .main, forMode: .common)
             self.promotionDisplayLink = displayLink
         }
 
@@ -1173,3 +1171,52 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         }
     }
 }
+
+#if APOLLO_DEV
+// MARK: - DEV build (APOLLO_DEV) launch paths
+
+extension AppDelegate {
+    /// Offline fixture launch (`--board-fixtures=N`): only the window, menu
+    /// and appearance. No sync, timers, review watcher, Spotlight indexing,
+    /// notification prompts, Sparkle or Keychain (the runtime was switched
+    /// to the offline boundary before `appState` was built).
+    @MainActor fileprivate func launchDevFixtureMode() {
+        appState.applyAppearanceMode()
+        ScrollGate.shared.install()
+        installMainMenu()
+        // Fixture mode is always a regular window, regardless of the DEV
+        // container's saved menu-bar preference.
+        appState.menuBarMode = false
+        enableWindowMode()
+        BoardScrollDriver.startIfRequested(window: window)
+    }
+
+    /// Root controller for the DEV window. Fixture mode renders the real
+    /// ContentView through its preview initializer (no welcome/onboarding)
+    /// with view preferences (`@AppStorage`, e.g. `dp_board_cardOrder_v1`)
+    /// redirected to the separate fixtures suite, exactly like Apollo Studio.
+    fileprivate func makeDevRootController() -> NSViewController {
+        let route = ApolloDevLaunchOptions.initialRoute
+        if ApolloDevLaunchOptions.isFixtureMode {
+            return NSHostingController(
+                rootView: ContentView(previewRoute: route ?? .board)
+                    .environmentObject(appState)
+                    .environmentObject(updateService)
+                    .defaultAppStorage(ApolloPreviewFixtures.defaults)
+            )
+        }
+        if let route {
+            return NSHostingController(
+                rootView: ContentView(devInitialRoute: route)
+                    .environmentObject(appState)
+                    .environmentObject(updateService)
+            )
+        }
+        return NSHostingController(
+            rootView: ContentView()
+                .environmentObject(appState)
+                .environmentObject(updateService)
+        )
+    }
+}
+#endif

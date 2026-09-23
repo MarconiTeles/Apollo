@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || APOLLO_DEV
 import Foundation
 
 /// Deterministic, local-only data for Xcode's SwiftUI Canvas.
@@ -18,9 +18,10 @@ enum ApolloPreviewFixtures {
     static let listName = "Listas / Video"
     static let currentUserId = 42
 
+    static let defaultsSuiteName = "com.painellunar.apollo.preview-catalog"
+
     static let defaults: UserDefaults = {
-        let suite = "com.painellunar.apollo.preview-catalog"
-        return UserDefaults(suiteName: suite) ?? .standard
+        UserDefaults(suiteName: defaultsSuiteName) ?? .standard
     }()
 
     static let statuses: [CUStatus] = [

@@ -71,7 +71,7 @@ struct EditorialBoardView: View {
         // drag/drop and the labels' shared horizontal offset.
         GeometryReader { viewport in
             ZStack(alignment: .top) {
-                board
+                boardViewport
                     .frame(width: viewport.size.width,
                            height: viewport.size.height)
                 headerChrome
@@ -176,12 +176,16 @@ struct EditorialBoardView: View {
     /// offset horizontal; a raiz do board permanece estável durante o scroll.
     private var labelsRow: some View {
         BoardLabelsTrack(
-            items: visibleStatuses.map { status in
-                BoardColumnHeaderItem(
-                    status: status,
-                    count: columnCards(status.status.lowercased()).count
-                )
-            },
+            items: usesAppKitRenderer
+                ? appKitSnapshot.columns.map {
+                    BoardColumnHeaderItem(status: $0.status, count: $0.cards.count)
+                }
+                : visibleStatuses.map { status in
+                    BoardColumnHeaderItem(
+                        status: status,
+                        count: columnCards(status.status.lowercased()).count
+                    )
+                },
             scrollRelay: boardScrollRelay
         )
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -370,6 +374,81 @@ struct EditorialBoardView: View {
     }
 
     // ────────────────────────────────────────────────────────────────────
+    // MARK: Renderer selection (DEV experiment)
+    // ────────────────────────────────────────────────────────────────────
+
+    /// Ship the validated AppKit viewport. Only the DEV build can explicitly
+    /// select the SwiftUI reference renderer for a comparison.
+    private var usesAppKitRenderer: Bool {
+        ApolloDevLaunchOptions.boardRenderer != "swiftui"
+    }
+
+    @ViewBuilder
+    private var boardViewport: some View {
+        if usesAppKitRenderer {
+            appKitBoard
+        } else {
+            board
+        }
+    }
+
+    /// One pass over the tasks per body evaluation: scope, filters, columns
+    /// and local order (see `BoardRenderSnapshot.make`).
+    private var appKitSnapshot: BoardRenderSnapshot {
+        BoardInstrumentation.interval("BoardSnapshot") { BoardRenderSnapshot.make(
+            tasks: appState.tasks,
+            activeListId: appState.activeListId,
+            statuses: visibleStatuses,
+            showSubtasks: showSubtasks,
+            filters: appState.taskFilters,
+            cardOrder: cardOrder,
+            workspaceName: appState.clickUpAuthService.workspaceName ?? "",
+            isColdLoading: isColdLoading) }
+    }
+
+    private var appKitBoard: some View {
+        let snapshot = appKitSnapshot
+        let ordered = snapshot.orderedTasks
+        let relay = boardScrollRelay
+        return BoardAppKitViewport(
+            snapshot: snapshot,
+            selectedTaskIds: selectedTaskIds,
+            headerChromeHeight: headerChromeHeight,
+            appState: appState,
+            actions: BoardAppKitActions(
+                activate: { task, modifiers, rect in
+                    activate(task, modifiers: modifiers, rect: rect)
+                },
+                clearSelection: clearSelection,
+                draggedIds: { task in
+                    TaskDragSelectionResolver.draggedIDs(
+                        dragged: task.id,
+                        selected: selectedTaskIds,
+                        ordered: ordered.map(\.id))
+                },
+                dragPreviewTasks: { task in
+                    selectedTaskIds.contains(task.id)
+                        ? ordered.filter { selectedTaskIds.contains($0.id) }
+                        : [task]
+                },
+                contextActions: { task in
+                    selectedTaskIds.contains(task.id)
+                        ? TaskBulkActions.actions(
+                            for: ordered.filter { selectedTaskIds.contains($0.id) },
+                            appState: appState)
+                        : TaskContextMenu.actions(for: task, appState: appState)
+                },
+                setColumnOrder: { statusKey, ids in
+                    var dict = cardOrder
+                    dict[statusKey] = ids
+                    setCardOrder(dict)
+                },
+                horizontalOffset: { relay.send($0) }
+            )
+        )
+    }
+
+    // ────────────────────────────────────────────────────────────────────
     // MARK: Board body
     // ────────────────────────────────────────────────────────────────────
 
@@ -435,14 +514,7 @@ struct EditorialBoardView: View {
         if !appState.availableStatuses.isEmpty {
             return appState.availableStatuses
         }
-        return [
-            CUStatus(status: "to do",     color: "#54577E", type: "open"),
-            CUStatus(status: "doing",     color: "#B0612E", type: "custom"),
-            CUStatus(status: "review",    color: "#7A6597", type: "custom"),
-            CUStatus(status: "liberado",  color: "#9A7B1F", type: "custom"),
-            CUStatus(status: "concluído", color: "#1F7A3A", type: "done"),
-            CUStatus(status: "cancelado", color: "#C7321B", type: "closed"),
-        ]
+        return BoardOrdering.fallbackStatuses
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -463,14 +535,12 @@ struct EditorialBoardView: View {
 
     /// Decoded `[statusKey: [taskId]]` order map.
     private var cardOrder: [String: [String]] {
-        (try? JSONDecoder().decode([String: [String]].self,
-                                   from: Data(cardOrderRaw.utf8))) ?? [:]
+        BoardOrdering.decode(cardOrderRaw)
     }
 
     /// Persist a new order map back into AppStorage.
     private func setCardOrder(_ dict: [String: [String]]) {
-        guard let data = try? JSONEncoder().encode(dict),
-              let str  = String(data: data, encoding: .utf8) else { return }
+        guard let str = BoardOrdering.encode(dict) else { return }
         cardOrderRaw = str
     }
 
@@ -483,17 +553,7 @@ struct EditorialBoardView: View {
     /// list sort by their stored index; cards absent (newly synced)
     /// keep their natural relative order and fall to the end.
     private func orderedCards(_ cards: [CUTask], statusKey: String) -> [CUTask] {
-        let saved = cardOrder[statusKey] ?? []
-        let pos = Dictionary(saved.enumerated().map { ($1, $0) },
-                             uniquingKeysWith: { a, _ in a })
-        return cards.enumerated().sorted { a, b in
-            switch (pos[a.element.id], pos[b.element.id]) {
-            case let (.some(x), .some(y)): return x < y
-            case (.some, .none):           return true
-            case (.none, .some):           return false
-            case (.none, .none):           return a.offset < b.offset
-            }
-        }.map(\.element)
+        BoardOrdering.ordered(cards, saved: cardOrder[statusKey] ?? [])
     }
 
     /// Move the dragged card to sit immediately BEFORE `targetId` in the
@@ -501,12 +561,10 @@ struct EditorialBoardView: View {
     /// card-level drop delegate's `dropEntered` (wrapped in
     /// `withAnimation` so the surrounding cards reflow under the cursor).
     private func reorder(dragInFrontOf targetId: String, statusKey: String) {
-        var ids = orderedCards(columnCards(statusKey), statusKey: statusKey).map(\.id)
-        let moving = ids.filter { draggingTaskIds.contains($0) }
-        guard !moving.isEmpty, !moving.contains(targetId), ids.contains(targetId) else { return }
-        ids.removeAll { moving.contains($0) }
-        guard let insertAt = ids.firstIndex(of: targetId) else { return }
-        ids.insert(contentsOf: moving, at: insertAt)
+        guard let ids = BoardOrdering.reorder(
+            ids: orderedCards(columnCards(statusKey), statusKey: statusKey).map(\.id),
+            dragging: draggingTaskIds,
+            before: targetId) else { return }
         var dict = cardOrder
         dict[statusKey] = ids
         setCardOrder(dict)
@@ -516,10 +574,10 @@ struct EditorialBoardView: View {
     /// task's status was just changed to this column), so it lands where
     /// the user dropped it rather than at the column's tail.
     private func place(_ dragIds: [String], before targetId: String, statusKey: String) {
-        var ids = orderedCards(columnCards(statusKey), statusKey: statusKey).map(\.id)
-        ids.removeAll { dragIds.contains($0) }
-        let insertAt = ids.firstIndex(of: targetId) ?? ids.count
-        ids.insert(contentsOf: dragIds, at: insertAt)
+        let ids = BoardOrdering.place(
+            ids: orderedCards(columnCards(statusKey), statusKey: statusKey).map(\.id),
+            dragIds: dragIds,
+            before: targetId)
         var dict = cardOrder
         dict[statusKey] = ids
         setCardOrder(dict)
@@ -838,11 +896,11 @@ struct BoardCard: View {
         // white in light mode, charcoal in dark; opaque so the
         // chrome paper / desktop don't bleed through.
         .background(
-            RoundedRectangle(cornerRadius: Editorial.popupRadius(8), style: .continuous)
+            RoundedRectangle(cornerRadius: BoardCardLayout.radius, style: .continuous)
                 .fill(Editorial.page)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: Editorial.popupRadius(8), style: .continuous)
+            RoundedRectangle(cornerRadius: BoardCardLayout.radius, style: .continuous)
                 .strokeBorder(Editorial.rule, lineWidth: 0.5)
         )
         // Reference capsule hover: elastic expansion without reflow. Keep the
@@ -905,11 +963,8 @@ struct BoardCard: View {
     /// "SPACE · LIST" — uses the workspace name as the parent crumb when
     /// available, otherwise just the list name. Stays under 1 line.
     private var breadcrumb: String {
-        let ws  = appState.clickUpAuthService.workspaceName ?? ""
-        let lst = task.listName
-        if !ws.isEmpty && !lst.isEmpty { return "\(ws.uppercased()) · \(lst.uppercased())" }
-        if !lst.isEmpty                { return lst.uppercased() }
-        return ws.uppercased()
+        BoardCardFormatting.breadcrumb(workspace: appState.clickUpAuthService.workspaceName ?? "",
+                                       listName: task.listName)
     }
 
     // ── Footer: avatar + first name + date ─────────────────────────────
@@ -941,22 +996,12 @@ struct BoardCard: View {
     }
 
     private var firstName: String {
-        let raw = task.assignees.first?.username ?? ""
-        let token = raw.split(whereSeparator: { " ._-".contains($0) }).first ?? ""
-        return token.isEmpty ? "Sem responsável" : token.prefix(1).uppercased() + token.dropFirst()
+        BoardCardFormatting.firstName(task)
     }
 
     private var assigneeColorHex: String {
-        // Studio Glass: o cinabre saiu da paleta de avatar (era a
-        // cor de marca antiga). Entrou o teal dos role-tints do
-        // Galileo — NÃO o roxo accent, que já tem um violeta
-        // (#8B5CF6) aqui e criaria dois avatares quase iguais.
-        let palette = ["#8B5CF6", "#2E6E6A", "#3F6B4A", "#4F8EF7",
-                       "#9A7B1F", "#7A6597", "#B0612E", "#54577E"]
-        let key = task.assignees.first?.username ?? task.id
-        var h = 0
-        for u in key.unicodeScalars { h = (h &* 31) &+ Int(u.value) }
-        return palette[abs(h) % palette.count]
+        // Studio Glass palette — see BoardCardFormatting.assigneeColorHex.
+        BoardCardFormatting.assigneeColorHex(task)
     }
 
     @ViewBuilder
@@ -979,16 +1024,7 @@ struct BoardCard: View {
     }
 
     private func relativeDate(_ d: Date) -> String {
-        let cal = Calendar.current
-        if cal.isDateInToday(d)     { return "Hoje" }
-        if cal.isDateInYesterday(d) { return "Ontem" }
-        if cal.isDateInTomorrow(d)  { return "Amanhã" }
-        let now = Date()
-        let days = cal.dateComponents([.day], from: cal.startOfDay(for: now),
-                                              to:   cal.startOfDay(for: d)).day ?? 0
-        if days > 1 && days < 7  { return "em \(days) dias" }
-        if days < -1 && days > -7 { return "\(-days) dias atrás" }
-        return SharedDateFormatters.dayOfMonthAbbrevPTBR.string(from: d)
+        BoardCardFormatting.relativeDate(d)
     }
 }
 
@@ -1068,7 +1104,7 @@ private struct BoardCardRow: View {
         BoardCard(task: task)
             .captureFrame($cardFrame)
             .taskSelectionSurface(isSelected,
-                                  radius: Editorial.popupRadius(8),
+                                  radius: BoardCardLayout.radius,
                                   tint: Color(statusHex: task.statusDisplayHex))
             // The source card dims + shrinks slightly while it's the one
             // under the cursor, so the moving preview reads as "lifted

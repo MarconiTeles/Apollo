@@ -32,6 +32,7 @@ enum StandaloneReviewLauncher {
     }
 
     private static func launch(arguments: [String]) {
+        guard !blockedInDevBuild() else { return }
         guard FileManager.default.fileExists(atPath: helperURL.path) else {
             presentFailure("Apollo Review não está incluído nesta build.")
             return
@@ -58,6 +59,7 @@ enum StandaloneReviewLauncher {
     /// native document/deep-link contract and reaches both a fresh helper and
     /// an already-running helper through `application(_:open:)`.
     private static func launch(url: URL) {
+        guard !blockedInDevBuild() else { return }
         guard FileManager.default.fileExists(atPath: helperURL.path) else {
             presentFailure("Apollo Review não está incluído nesta build.")
             return
@@ -75,6 +77,20 @@ enum StandaloneReviewLauncher {
                 }
             }
         }
+    }
+
+    /// The helper hard-codes its completion callback as
+    /// `daypanel://review-done`, which Launch Services delivers to the
+    /// production Apollo (the DEV bundle does not register `daypanel`).
+    /// A review concluded from the DEV build would therefore make the
+    /// production app post the ClickUp summary comment. Until the helper can
+    /// take a DEV callback scheme (repository apollo-review-swift, out of
+    /// scope), the DEV build refuses to launch it.
+    private static func blockedInDevBuild() -> Bool {
+        guard ApolloDevLaunchOptions.isDevBuild else { return false }
+        presentFailure("Apollo Review está desativado na build DEV: o retorno " +
+                       "daypanel://review-done seria entregue ao Apollo de produção.")
+        return true
     }
 
     private static func presentFailure(_ message: String) {

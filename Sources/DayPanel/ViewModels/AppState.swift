@@ -6336,7 +6336,7 @@ final class AppState: ObservableObject {
     }
 }
 
-#if DEBUG
+#if DEBUG || APOLLO_DEV
 extension AppState {
     /// Canvas/preview-only instance preloaded with mock data.
     /// Nothing calls `initialize()`, so no network, no timers,

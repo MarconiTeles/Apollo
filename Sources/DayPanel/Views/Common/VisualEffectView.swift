@@ -116,6 +116,9 @@ private struct FinderHeaderMaterialModifier: ViewModifier {
                                  state: .followsWindowActiveState,
                                  stripTint: true,
                                  blurScale: 5.0 / 30.0) // raio 5 (nativo = 30)
+                    // DEV-only attribution switch (`--board-diag=noheadermaterial`);
+                    // never a delivery state. Always visible outside APOLLO_DEV.
+                    .opacity(BoardDiag.has("noheadermaterial") ? 0 : 1)
                     // Tint da cor do fundo (paper) por cima do blur — o véu
                     // que separa o header do conteúdo, na cor do canvas.
                     .overlay(Editorial.paper.opacity(0.85))

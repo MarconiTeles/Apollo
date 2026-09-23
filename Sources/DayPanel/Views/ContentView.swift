@@ -100,12 +100,21 @@ struct ContentView: View {
         previewMode = false
     }
 
-#if DEBUG
+#if DEBUG || APOLLO_DEV
     init(previewRoute: SidebarRoute) {
         previewMode = true
         _sidebarRoute = State(initialValue: previewRoute)
         _showWelcome = State(initialValue: false)
         _isFirstWelcome = State(initialValue: false)
+    }
+#endif
+
+#if APOLLO_DEV
+    /// DEV build only (`--route=` with real data): start on a chosen surface
+    /// while keeping the normal launch flows (welcome/onboarding) intact.
+    init(devInitialRoute: SidebarRoute) {
+        previewMode = false
+        _sidebarRoute = State(initialValue: devInitialRoute)
     }
 #endif
 
