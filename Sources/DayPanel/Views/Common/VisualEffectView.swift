@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import CoreImage
 
 // SwiftUI's `.ultraThinMaterial` is the lightest of the bundled materials,
 // but it still applies a fairly heavy Gaussian blur. NSVisualEffectView
@@ -75,21 +74,24 @@ struct VisualEffectView: NSViewRepresentable {
     }
 }
 
-/// A RECEITA OFICIAL do material de header do app (a mesma do header de
-/// Tarefas): `.fullScreenUI` sem tint nativo + blur reduzido (raio 5) +
-/// véu de `Editorial.paper` a 0.85. Reutilizável em qualquer barra/painel
-/// (popups, rodapés, sidebars) via `officialHeaderMaterial(in:)`.
+/// Shaped headers share the page-header material in light mode.
+/// Preserve their existing approved dark appearance.
 struct OfficialHeaderMaterial<S: Shape>: View {
+    @Environment(\.colorScheme) private var colorScheme
     let shape: S
 
     var body: some View {
-        VisualEffectView(material: .fullScreenUI,
-                         blendingMode: .withinWindow,
-                         state: .followsWindowActiveState,
-                         stripTint: true,
-                         blurScale: 5.0 / 30.0)
-            .overlay(Editorial.paper.opacity(0.85))
-            .clipShape(shape)
+        if colorScheme == .dark {
+            VisualEffectView(material: .fullScreenUI,
+                             blendingMode: .withinWindow,
+                             state: .active,
+                             stripTint: true,
+                             blurScale: 5.0 / 30.0)
+                .overlay(Editorial.paper.opacity(0.85))
+                .clipShape(shape)
+        } else {
+            AppHeaderMaterial().clipShape(shape)
+        }
     }
 }
 
@@ -101,66 +103,187 @@ extension View {
     }
 }
 
-/// Material dos headers de página (e superfícies que devem casar com eles,
-/// como o seletor de listas): material nativo de sidebar — o do painel
-/// lateral —, 30% mais escuro no modo escuro e com o blur do conteúdo por trás reduzido duas
-/// vezes em 60% (raio × 0.4 × 0.4 = 0.16).
+/// Shared page-header material. Light mode uses the system
+/// sidebar's regular glass. Dark mode retains the approved sidebar recipe
+/// with reduced blur and a 30% black veil.
 struct AppHeaderMaterial: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         if colorScheme == .dark {
-            // Dark: approved look — native `.sidebar`, blur × 0.16, 30% black.
+            // Keep the approved dark recipe even when the window loses focus.
             VisualEffectView(material: .sidebar,
                              blendingMode: .withinWindow,
-                             state: .followsWindowActiveState,
+                             state: .active,
                              blurScale: 0.16)
                 .overlay(Color.black.opacity(0.3))
         } else {
-            // Light: the sidebar panel's own material (NSGlassEffectView,
-            // keeps its blur when the window is inactive), pulled to white.
-            PanelGlassMaterial(gain: 0.4, bias: 0.6)
+            // Sidebar background recipe, with the requested lighter blur
+            // and white veil applied only in light mode.
+            PanelGlassMaterial()
+                .overlay(Color.white.opacity(0.252))
         }
     }
 }
 
-/// NSGlassEffectView — the material of the sidebar column — with an RGB
-/// colour matrix (alpha untouched). Decorative only: never hit-tests.
-struct PanelGlassMaterial: NSViewRepresentable {
-    let gain: CGFloat
-    let bias: CGFloat
+/// The sidebar BACKGROUND recipe, not the regular control/selection glass.
+/// On macOS 27 both are NSGlassEffectView, but the system sidebar uses
+/// variant 17 and adaptive appearance 1; controls use variant 0 / appearance 2.
+/// These AppKit-internal settings were read from NavigationSplitView's
+/// _NSSplitViewItemViewWrapper background (see docs/qa-header-light).
+private struct PanelGlassMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { SidebarBackgroundView() }
 
-    func makeNSView(context: Context) -> Host { Host() }
-
-    func updateNSView(_ view: Host, context: Context) {
-        view.update(gain: gain, bias: bias)
+    func updateNSView(_ view: NSView, context: Context) {
+        (view as? SidebarBackgroundView)?.refreshMaterial()
     }
 
-    final class Host: NSView {
-        private let glass = NSGlassEffectView()
+    private final class SidebarBackgroundView: NSView {
+        private let background = HeaderSidebarEffectView()
+        // Keep the native surface's refracting perimeter outside the header.
+        // Clipping exposes its flat interior without changing the material.
+        private let perimeterInset: CGFloat = 64
 
         init() {
             super.init(frame: .zero)
             wantsLayer = true
-            glass.style = .regular
-            glass.cornerRadius = 0
-            glass.autoresizingMask = [.width, .height]
-            glass.frame = bounds
-            addSubview(glass)
+            layer?.masksToBounds = true
+            clipsToBounds = true
+            background.style = .regular
+            background.cornerRadius = 0
+            background.setValue(17, forKey: "_variant")
+            background.setValue(1, forKey: "_adaptiveAppearance")
+            // 0 follows focus; 1 fixes the subdued (unfocused) appearance.
+            background.setValue(1, forKey: "_subduedState")
+            addSubview(background)
         }
 
         required init?(coder: NSCoder) { nil }
 
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func layout() {
+            super.layout()
+            background.frame = bounds.insetBy(dx: -perimeterInset,
+                                              dy: -perimeterInset)
+        }
 
-        func update(gain: CGFloat, bias: CGFloat) {
-            guard let matrix = CIFilter(name: "CIColorMatrix") else { return }
-            matrix.setValue(CIVector(x: gain, y: 0, z: 0, w: 0), forKey: "inputRVector")
-            matrix.setValue(CIVector(x: 0, y: gain, z: 0, w: 0), forKey: "inputGVector")
-            matrix.setValue(CIVector(x: 0, y: 0, z: gain, w: 0), forKey: "inputBVector")
-            matrix.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
-            matrix.setValue(CIVector(x: bias, y: bias, z: bias, w: 0), forKey: "inputBiasVector")
-            layer?.filters = [matrix]
+        func refreshMaterial() {
+            background.refreshMaterial()
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    private final class HeaderSidebarEffectView: NSGlassEffectView {
+        private var refreshScheduled = false
+        private var layerObservations: [ObjectIdentifier: [NSKeyValueObservation]] = [:]
+
+        override func layout() {
+            super.layout()
+            refreshMaterial()
+        }
+
+        override func updateLayer() {
+            super.updateLayer()
+            applyMaterial()
+        }
+
+        override func viewWillDraw() {
+            super.viewWillDraw()
+            applyMaterial()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            refreshMaterial()
+        }
+
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            refreshMaterial()
+        }
+
+        override func viewDidChangeBackingProperties() {
+            super.viewDidChangeBackingProperties()
+            refreshMaterial()
+        }
+
+        func refreshMaterial() {
+            applyMaterial()
+            // AppKit may rebuild its backdrop after attachment/layout.
+            // Coalesce a second pass; never continuously invalidate layout.
+            guard !refreshScheduled else { return }
+            refreshScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.refreshScheduled = false
+                self.applyMaterial()
+            }
+        }
+
+        private func applyMaterial() {
+            // The recipe must survive native layer/appearance rebuilds too.
+            for (key, target) in [("_variant", 17),
+                                  ("_adaptiveAppearance", 1),
+                                  ("_subduedState", 1)] {
+                if (value(forKey: key) as? NSNumber)?.intValue != target {
+                    setValue(target, forKey: key)
+                }
+            }
+            if let layer {
+                var liveLayers: Set<ObjectIdentifier> = []
+                observeLayerTree(layer, liveLayers: &liveLayers)
+                layerObservations = layerObservations.filter { liveLayers.contains($0.key) }
+                reduceBlur(in: layer)
+            }
+        }
+
+        private func observeLayerTree(_ node: CALayer,
+                                      liveLayers: inout Set<ObjectIdentifier>) {
+            let id = ObjectIdentifier(node)
+            liveLayers.insert(id)
+            if layerObservations[id] == nil {
+                // Native backdrop reconstruction does not necessarily call
+                // NSView.layout/updateLayer. Observe the actual layer tree.
+                let children = node.observe(\.sublayers) { [weak self] _, _ in
+                    MainActor.assumeIsolated { self?.refreshMaterial() }
+                }
+                let filters = node.observe(\.filters) { [weak self] _, _ in
+                    MainActor.assumeIsolated { self?.refreshMaterial() }
+                }
+                layerObservations[id] = [children, filters]
+            }
+            for child in node.sublayers ?? [] {
+                observeLayerTree(child, liveLayers: &liveLayers)
+            }
+        }
+
+        private func reduceBlur(in layer: CALayer) {
+            if NSStringFromClass(type(of: layer)).contains("Backdrop") {
+                for filter in layer.filters ?? [] {
+                    let filter = filter as AnyObject
+                    guard (filter.value(forKey: "name") as? String) == "glassBackground"
+                    else { continue }
+                    // Absolute targets: never derive them from a transient
+                    // native radius captured during creation or screen changes.
+                    for (key, target): (String, CGFloat) in [
+                        ("inputBlurRadius", 3.98034),
+                        ("inputBlurFillBlurRadius", 1.592136)
+                    ] {
+                        let path = "filters.glassBackground.\(key)"
+                        guard let number = layer.value(forKeyPath: path) as? NSNumber
+                        else { continue }
+                        let current = CGFloat(truncating: number)
+                        if abs(current - target) > 0.01 {
+                            layer.setValue(target, forKeyPath: path)
+                        }
+                    }
+                    // Avoid the extra softening from the native half-size capture.
+                    if (layer.value(forKey: "scale") as? NSNumber)?.doubleValue != 1 {
+                        layer.setValue(1.0, forKey: "scale")
+                    }
+                }
+            }
+            for child in layer.sublayers ?? [] { reduceBlur(in: child) }
         }
     }
 }

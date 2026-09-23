@@ -33,6 +33,7 @@ enum TaskMediaDropChoice {
 }
 
 struct TaskMediaFlowSheet: View {
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: AppState
     let dismiss: () -> Void
     @ObservedObject var store: TaskMediaTransferStore
@@ -173,11 +174,7 @@ struct TaskMediaFlowSheet: View {
             }
 
             // Top glass bar.
-            header
-                .frame(height: headerHeight)
-                .frame(maxWidth: .infinity)
-                .liquidGlass(in: headerBarShape, tint: Editorial.ink,
-                             tintOpacity: 0.01, interactive: false)
+            materialHeader
                 .overlay(alignment: .bottom) {
                     Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
                 }
@@ -211,6 +208,22 @@ struct TaskMediaFlowSheet: View {
     }
 
     // MARK: Header
+
+    @ViewBuilder
+    private var materialHeader: some View {
+        if colorScheme == .dark {
+            header
+                .frame(height: headerHeight)
+                .frame(maxWidth: .infinity)
+                .liquidGlass(in: headerBarShape, tint: Editorial.ink,
+                             tintOpacity: 0.01, interactive: false)
+        } else {
+            header
+                .frame(height: headerHeight)
+                .frame(maxWidth: .infinity)
+                .officialHeaderMaterial(in: headerBarShape)
+        }
+    }
 
     private var header: some View {
         HStack(spacing: 12) {

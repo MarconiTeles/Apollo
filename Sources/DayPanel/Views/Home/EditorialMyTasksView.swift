@@ -290,6 +290,7 @@ struct EditorialMyTasksView: View {
                 sections: nativeSections,
                 selectedTaskIds: selectedTaskIds,
                 appState: appState,
+                headerOcclusionHeight: showsColumnHeader ? 82 : 52,
                 topContentInset: chromeInset,
                 // Reserve the bulk-action capsule only while it actually
                 // exists. A permanent 112pt NSScrollView inset left visible

@@ -48,6 +48,7 @@ struct TaskBulkMediaRequest: Identifiable {
 /// linhas são planas. Empilhar material aqui custaria exatamente a
 /// legibilidade que esta tela precisa entregar.
 struct TaskBulkMediaFlowSheet: View {
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: AppState
     let dismiss: () -> Void
     @ObservedObject var store: TaskMediaTransferStore
@@ -177,14 +178,7 @@ struct TaskBulkMediaFlowSheet: View {
                     .zIndex(15)
             }
 
-            header
-                .frame(height: headerHeight)
-                .frame(maxWidth: .infinity)
-                // As barras continuam, mas como um véu sobre o vidro do
-                // fundo — não um segundo material. Vidro sobre vidro
-                // embaralha a leitura, que é justamente o que esta tela
-                // não pode fazer.
-                .background(headerBarShape.fill(Editorial.page.opacity(0.55)))
+            materialHeader
                 .overlay(alignment: .bottom) {
                     Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
                 }
@@ -245,6 +239,21 @@ struct TaskBulkMediaFlowSheet: View {
         let tasks = targets.count
         return "\(videos) \(videos == 1 ? "vídeo" : "vídeos") · "
              + "\(tasks) \(tasks == 1 ? "tarefa" : "tarefas")"
+    }
+
+    @ViewBuilder
+    private var materialHeader: some View {
+        if colorScheme == .dark {
+            header
+                .frame(height: headerHeight)
+                .frame(maxWidth: .infinity)
+                .background(headerBarShape.fill(Editorial.page.opacity(0.55)))
+        } else {
+            header
+                .frame(height: headerHeight)
+                .frame(maxWidth: .infinity)
+                .officialHeaderMaterial(in: headerBarShape)
+        }
     }
 
     private var header: some View {

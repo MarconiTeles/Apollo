@@ -1,0 +1,6 @@
+active:
+WINDOW_KEY false EFFECT_STATE 1
+DARK gaussianBlur radius 4.8 scale 1
+
+following:
+WINDOW_KEY false EFFECT_STATE 0

@@ -60,6 +60,26 @@ final class BoardAppKitViewportTests: XCTestCase {
                                  cardOrder: order, workspaceName: "Moon Ventures", isColdLoading: false)
     }
 
+    func testHeaderRejectsHitTestingButKeepsContentInteractive() {
+        let h = makeHarness(tasks: [])
+        h.coordinator.apply(snapshot: snapshot([]), selected: [],
+                            headerChromeHeight: 100, force: true)
+        // Simulate a card scrolled beneath the header, spanning its boundary.
+        let card = NSView(frame: NSRect(x: 300, y: 20, width: 200, height: 160))
+        h.view.addSubview(card)
+        let covered = NSPoint(x: 350, y: 60)
+        let exposed = NSPoint(x: 350, y: 140)
+        XCTAssertNil(h.view.hitTest(h.view.convert(covered, to: h.view.superview)))
+        XCTAssertTrue(h.view.hitTest(h.view.convert(exposed, to: h.view.superview)) === card)
+        XCTAssertTrue(card.isBehindPageHeader(windowPoint: h.view.convert(covered, to: nil)))
+        XCTAssertFalse(card.isBehindPageHeader(windowPoint: h.view.convert(exposed, to: nil)))
+        // A route/header geometry update must change the boundary immediately.
+        h.coordinator.apply(snapshot: snapshot([]), selected: [],
+                            headerChromeHeight: 50, force: false)
+        XCTAssertTrue(h.view.hitTest(h.view.convert(covered, to: h.view.superview)) === card)
+        h.window.close()
+    }
+
     // MARK: Virtualization and reuse
 
     func testLiveViewsAreBoundedByViewportNotByTaskCount() {

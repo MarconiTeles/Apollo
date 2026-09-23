@@ -1,0 +1,8 @@
+Dark probe (active): gaussianBlur.inputRadius = 4.8; backdrop scale = 1
+Light probe (first group is header; second is unmodified system sidebar):
+GLASS SCALE Optional(1)
+GLASS INPUT inputBlurRadius Optional(4.8)
+GLASS INPUT inputBlurFillBlurRadius Optional(1.92)
+GLASS SCALE Optional(0.5)
+GLASS INPUT inputBlurRadius Optional(10)
+GLASS INPUT inputBlurFillBlurRadius Optional(8)

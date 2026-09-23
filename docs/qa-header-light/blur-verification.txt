@@ -1,0 +1,7 @@
+          HeaderSidebarEffectView (-64.0, -64.0, 1008.0, 220.0)
+GLASS SCALE Optional(1)
+GLASS INPUT inputBlurRadius Optional(8)
+GLASS INPUT inputBlurFillBlurRadius Optional(3.2)
+GLASS SCALE Optional(0.5)
+GLASS INPUT inputBlurRadius Optional(10)
+GLASS INPUT inputBlurFillBlurRadius Optional(8)

@@ -51,6 +51,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
     let sections: [MyTasksAppKitSection]
     let selectedTaskIds: Set<String>
     let appState: AppState
+    var headerOcclusionHeight: CGFloat = 0
     var topContentInset: CGFloat = 72
     var bottomContentInset: CGFloat = 112
     let onActivate: (CUTask, NSEvent.ModifierFlags, CGRect) -> Void
@@ -80,6 +81,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = MyTasksScrollView()
+        scroll.headerOcclusionHeight = headerOcclusionHeight
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
         scroll.drawsBackground = false
@@ -105,6 +107,7 @@ struct MyTasksAppKitList: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
+        (scroll as? MyTasksScrollView)?.headerOcclusionHeight = headerOcclusionHeight
         applyInsets(to: scroll)
         (scroll.documentView as? MyTasksViewport)?.topInset = topContentInset
         context.coordinator.update(parent: self)
@@ -752,7 +755,15 @@ final class MyTasksViewport: NSView {
 
 /// Same synchronous AppKit scrolling model as the board. Momentum and
 /// elasticity stay native; document tiling runs only when bounds change.
-private final class MyTasksScrollView: NSScrollView {
+private final class MyTasksScrollView: NSScrollView, HeaderOccludingViewport {
+    var headerOcclusionHeight: CGFloat = 0
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let windowPoint = superview?.convert(point, to: nil) ?? point
+        guard !isBehindPageHeader(windowPoint: windowPoint) else { return nil }
+        return super.hitTest(point)
+    }
+
     override class var isCompatibleWithResponsiveScrolling: Bool { false }
 }
 
@@ -912,6 +923,7 @@ final class MyTasksMediaButton: NSButton {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard !isBehindPageHeader(windowPoint: event.locationInWindow) else { return }
         isPointerInside = true
         onHover?(true)
     }
@@ -1394,6 +1406,7 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard !isBehindPageHeader(windowPoint: event.locationInWindow) else { return }
         guard appState?.anyPopupOpen != true,
               !ScrollStateObserver.isScrollingNow,
               !ScrollGate.shared.active else {
@@ -2326,6 +2339,7 @@ final class MyTasksDoneCircle: NSControl {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard !isBehindPageHeader(windowPoint: event.locationInWindow) else { return }
         guard isEnabled, !completed,
               !ScrollStateObserver.isScrollingNow,
               !ScrollGate.shared.active else {

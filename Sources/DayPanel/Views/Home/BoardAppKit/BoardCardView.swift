@@ -287,7 +287,8 @@ final class BoardCardView: NSView, NSDraggingSource {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        let blocked = ScrollStateObserver.isScrollingNow || ScrollGate.shared.active
+        let blocked = isBehindPageHeader(windowPoint: event.locationInWindow)
+            || ScrollStateObserver.isScrollingNow || ScrollGate.shared.active
             || delegate?.isPopupOpen == true
         setHover(!blocked, animated: true)
     }
@@ -301,7 +302,8 @@ final class BoardCardView: NSView, NSDraggingSource {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
-        guard delegate?.isPopupOpen != true else { return }
+        guard !isBehindPageHeader(windowPoint: event.locationInWindow),
+              delegate?.isPopupOpen != true else { return }
         pressed = true
         dragStarted = false
         mouseDownPoint = event.locationInWindow
