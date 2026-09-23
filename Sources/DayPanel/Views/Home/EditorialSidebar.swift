@@ -90,16 +90,12 @@ struct EditorialSidebar: View {
             userFooter
         }
         .frame(width: 220)
-        // Keep the sidebar on its dedicated, direct glass path. Wrapping the
-        // effect in the shared floating-panel builder inserted an additional
-        // view-builder layer that weakened the live backdrop capture and made
-        // this pane read like an opaque vibrancy sheet.
+        // Keep the material separate from the foreground when adjusting its
+        // luminance, so text, icons and selected rows retain their own colors.
         .background {
             if Materials.tier == .solid {
                 shape.fill(Editorial.panelDeep)
-                    .overlay {
-                        if darkenSidebarMaterial { shape.fill(.black.opacity(0.6)) }
-                    }
+                    .colorMultiply(Color(white: darkenSidebarMaterial ? 0.61 : 1))
             }
         }
         .modifier(SidebarGlassSurface(shape: shape, darken: darkenSidebarMaterial))
@@ -449,9 +445,8 @@ struct EditorialSidebar: View {
 // MARK: - Sidebar glass surface
 // ────────────────────────────────────────────────────────────────────────
 
-/// Dedicated direct material application for the sidebar. Liquid Glass must
-/// remain attached to the pane content itself so the board/list beneath is
-/// sampled and refracted instead of flattened into an opaque fallback layer.
+/// Native sidebar material, with a luminance-only adjustment in macOS 27 dark
+/// mode. No tint or additional opaque layer is placed over the glass.
 private struct SidebarGlassSurface: ViewModifier {
     let shape: RoundedRectangle
     let darken: Bool
@@ -460,15 +455,17 @@ private struct SidebarGlassSurface: ViewModifier {
         if Materials.tier == .solid {
             content
         } else if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
-            if darken {
-                content.glassEffect(.regular.tint(.black.opacity(0.6)), in: shape)
+            if #available(macOS 27.0, *), darken {
+                content.background {
+                    SidebarLuminanceGlass(cornerRadius: shape.cornerSize.width, gain: 0.61)
+                }
             } else {
                 content.glassEffect(.regular, in: shape)
             }
         } else if darken {
             content.background {
                 shape.fill(.ultraThinMaterial)
-                    .overlay(shape.fill(.black.opacity(0.6)))
+                    .colorMultiply(Color(white: 0.61))
             }
         } else {
             content.background(.ultraThinMaterial, in: shape)
