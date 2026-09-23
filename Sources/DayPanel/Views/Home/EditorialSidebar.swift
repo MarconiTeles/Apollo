@@ -493,9 +493,55 @@ private struct SidebarSection<Content: View>: View {
     }
 }
 
+/// Selection chrome shared only by sidebar navigation and pinned lists.
+private struct SidebarSelectionSurface: ViewModifier {
+    let active: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var subdued: Bool {
+        colorScheme == .dark &&
+        ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
+    }
+
+    @ViewBuilder
+    private func surface(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        if #available(macOS 27.0, *), subdued, active,
+           Materials.tier == .liquidGlass {
+            // Same native material as the panel, with enough luminance to
+            // distinguish selection. RGB only; alpha and blur stay native.
+            content.background {
+                SidebarLuminanceGlass(cornerRadius: 8, gain: 0.65)
+            }
+        } else {
+            content.liquidGlassSelected(active, in: shape,
+                tint: colorScheme == .light ? Editorial.ink : .white,
+                tintOpacity: colorScheme == .light ? 0.035 : 0.025)
+        }
+    }
+
+    func body(content: Content) -> some View {
+        surface(content: content)
+            .overlay {
+                if active {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Editorial.ink.opacity(0.09), lineWidth: 0.55)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 7.5, style: .continuous)
+                                .inset(by: 0.65)
+                                .strokeBorder(Color.white.opacity(subdued ? 0.14 : 0.42),
+                                              lineWidth: 0.55)
+                        }
+                        .allowsHitTesting(false)
+                }
+            }
+            .shadow(color: active ? .black.opacity(0.12) : .clear,
+                    radius: 5, y: 2.5)
+    }
+}
+
 private struct SidebarNavRow: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.colorScheme) private var colorScheme
     let label: String
     let icon: String
     var count: Int? = nil
@@ -550,25 +596,7 @@ private struct SidebarNavRow: View {
             )
             // Selected → NEUTRAL glass rectangle (Finder-style): the selection
             // colour and glow live only on the icon.
-            .liquidGlassSelected(isActive && !disabled,
-                                 in: RoundedRectangle(cornerRadius: 8,
-                                                      style: .continuous),
-                                 tint: colorScheme == .light ? Editorial.ink : .white,
-                                 tintOpacity: colorScheme == .light ? 0.035 : 0.025)
-            .overlay {
-                if isActive && !disabled {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Editorial.ink.opacity(0.09), lineWidth: 0.55)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 7.5, style: .continuous)
-                                .inset(by: 0.65)
-                                .strokeBorder(Color.white.opacity(0.42), lineWidth: 0.55)
-                        }
-                        .allowsHitTesting(false)
-                }
-            }
-            .shadow(color: isActive && !disabled ? .black.opacity(0.12) : .clear,
-                    radius: 5, y: 2.5)
+            .modifier(SidebarSelectionSurface(active: isActive && !disabled))
             .contentShape(RoundedRectangle(cornerRadius: 8,
                                            style: .continuous))
         }
@@ -605,7 +633,6 @@ private struct SidebarNavRow: View {
 
 private struct SidebarDotRow: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.colorScheme) private var colorScheme
     let color: Color
     let label: String
     var count: Int? = nil
@@ -654,25 +681,7 @@ private struct SidebarDotRow: View {
             )
             // Selected list → NEUTRAL glass rectangle (Finder-style): the
             // selection colour and glow live only on the icon.
-            .liquidGlassSelected(isActive,
-                                 in: RoundedRectangle(cornerRadius: 8,
-                                                      style: .continuous),
-                                 tint: colorScheme == .light ? Editorial.ink : .white,
-                                 tintOpacity: colorScheme == .light ? 0.035 : 0.025)
-            .overlay {
-                if isActive {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Editorial.ink.opacity(0.09), lineWidth: 0.55)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 7.5, style: .continuous)
-                                .inset(by: 0.65)
-                                .strokeBorder(Color.white.opacity(0.42), lineWidth: 0.55)
-                        }
-                        .allowsHitTesting(false)
-                }
-            }
-            .shadow(color: isActive ? .black.opacity(0.12) : .clear,
-                    radius: 5, y: 2.5)
+            .modifier(SidebarSelectionSurface(active: isActive))
             .contentShape(RoundedRectangle(cornerRadius: 8,
                                            style: .continuous))
         }
