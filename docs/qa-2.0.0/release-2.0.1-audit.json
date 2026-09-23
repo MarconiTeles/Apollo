@@ -1,0 +1,30 @@
+{
+  "version": "2.0.1",
+  "build": 99,
+  "source_commit": "834857419a4c4497a8c66837cbc66552b2342ba6",
+  "review_commit": "5256f8644633131044ba9f6142f120b0b8be6475",
+  "artifacts": {
+    "dist/Apollo-2.0.1.zip": {
+      "bytes": 50729571,
+      "sha256": "e6782d509f4d9d2e31aaba823ff155937c825d0d2d10104d04b188276f0ca27d"
+    },
+    "dist/Apollo-2.0.1.dmg": {
+      "bytes": 59324546,
+      "sha256": "4abbad4f58e45ee09e9d9a8eaf8059837affcf2a0e991fd02a2c921ab1329815"
+    }
+  },
+  "sparkle_signature_verified_against": "installed Apollo 2.0.0 public key",
+  "codesign": "passed",
+  "gatekeeper": "accepted",
+  "staple": "app and DMG validated",
+  "channel": "public",
+  "published": true,
+  "minimum_macos": "26.0",
+  "sdk": "27.0",
+  "notarization": {
+    "app": "a458084e-b9b9-4b87-b834-4bfa179a8775",
+    "dmg": "f8b0b848-b87c-40ca-9d9c-9d10a0616f20"
+  },
+  "public_assets_match": true,
+  "release_url": "https://github.com/MarconiTeles/Apollo/releases/tag/v2.0.1"
+}

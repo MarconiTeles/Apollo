@@ -5,6 +5,19 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 2.0.1</title>
+      <pubDate>Wed, 23 Sep 2026 03:13:46 +0000</pubDate>
+      <sparkle:version>99</sparkle:version>
+      <sparkle:shortVersionString>2.0.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<p>Requer macOS 26 ou posterior.</p><ul><li>Controles nativos atualizados para macOS 27.</li><li>Ajustes de contraste, materiais e alinhamento no painel lateral.</li><li>Melhorias no filtro Minhas tarefas e nas notificações.</li><li>Botões Adicionar e Substituir mais distinguíveis no modo claro.</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v2.0.1/Apollo-2.0.1.zip"
+        sparkle:edSignature="FnhBWzUh3+Jnrrj8ZT3jbMPK08fCIPoSF6bns3efcPcqF4CyulcH9R8FtOsXd1nneKTWGlVx9w7OavJBmQznDA=="
+        length="50729571"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 2.0.0</title>
       <pubDate>Tue, 22 Sep 2026 23:24:02 +0000</pubDate>
       <sparkle:version>98</sparkle:version>
