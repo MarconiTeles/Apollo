@@ -154,3 +154,58 @@ final class SyncLoadingLayoutTests: XCTestCase {
         XCTAssertEqual(SyncLoadingLayout.taskGroups(height: 2000, top: 93).prefix(3), [3, 6, 5])
     }
 }
+
+final class MyTasksLoadingGateTests: XCTestCase {
+    private func gate(tasks: Bool, statuses: Bool, syncing: Bool, neverSynced: Bool = false,
+                      completed: Bool, list: Bool = true) -> Bool {
+        EditorialMyTasksView.isLoadingData(hasList: list, hasTasks: tasks, hasStatuses: statuses,
+                                           isSyncing: syncing, neverSynced: neverSynced,
+                                           completedSessionSync: completed)
+    }
+
+    func testCachedTasksWithoutStatusesAtLaunchIsLoading() {
+        // The launch state behind "Status indisponíveis": tasks from disk,
+        // statuses not fetched yet, first sync of the session running.
+        XCTAssertTrue(gate(tasks: true, statuses: false, syncing: true, completed: false))
+        // …and in the beat before that sync starts.
+        XCTAssertTrue(gate(tasks: true, statuses: false, syncing: false, completed: false))
+    }
+
+    func testMissingStatusesAfterACompletedSyncIsARealEmptyState() {
+        XCTAssertFalse(gate(tasks: true, statuses: false, syncing: false, completed: true))
+    }
+
+    func testEmptyListWhileSyncingIsLoading() {
+        XCTAssertTrue(gate(tasks: false, statuses: true, syncing: true, completed: true))
+        XCTAssertFalse(gate(tasks: false, statuses: true, syncing: false, completed: true))
+    }
+
+    func testReadyListIsNotLoading() {
+        XCTAssertFalse(gate(tasks: true, statuses: true, syncing: true, completed: false))
+    }
+
+    func testOfflineIsNeverLoading() {
+        XCTAssertFalse(EditorialMyTasksView.isLoadingData(hasList: true, online: false, hasTasks: true,
+                                                          hasStatuses: false, isSyncing: false,
+                                                          neverSynced: false, completedSessionSync: false))
+    }
+
+    func testNoSelectedListIsNeverLoading() {
+        XCTAssertFalse(gate(tasks: false, statuses: false, syncing: true, completed: false, list: false))
+    }
+}
+
+final class ListMetadataFallbackTests: XCTestCase {
+    func testStatusesDerivedFromTasksKeepFirstSeenOrderAndColour() {
+        let tasks = [
+            CUTask(id: "1", title: "a", status: "em andamento", statusColor: "#5F55EE", priority: 0, priorityColor: "", startDate: nil, dueDate: nil, listId: "l", listName: "L", isCompleted: false),
+            CUTask(id: "2", title: "b", status: "a fazer", statusColor: "#87909E", priority: 0, priorityColor: "", startDate: nil, dueDate: nil, listId: "l", listName: "L", isCompleted: false),
+            CUTask(id: "3", title: "c", status: "Em andamento", statusColor: "#000000", priority: 0, priorityColor: "", startDate: nil, dueDate: nil, listId: "l", listName: "L", isCompleted: false),
+            CUTask(id: "4", title: "d", status: "concluído", statusColor: "#008844", priority: 0, priorityColor: "", startDate: nil, dueDate: nil, listId: "l", listName: "L", isCompleted: true),
+        ]
+        let statuses = AppState.statuses(derivedFrom: tasks)
+        XCTAssertEqual(statuses.map(\.status), ["em andamento", "a fazer", "concluído"])
+        XCTAssertEqual(statuses.first?.color, "#5F55EE")
+        XCTAssertEqual(statuses.last?.type, "closed")
+    }
+}

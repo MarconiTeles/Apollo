@@ -532,6 +532,9 @@ final class AppState: ObservableObject {
     /// 30s fast-sync tick for data that almost never changes.
     /// Refetched when the active list changes or after 5 min.
     @MainActor private var listMetaFetchedAt: Date = .distantPast
+    /// Sources named in the last "Falha na sincronização" alert — so a
+    /// source that stays down alerts once, not on every sync.
+    @MainActor private var lastReportedSyncFailures: [String] = []
     @MainActor private var listMetaFetchedForList: String = ""
 
     /// Wraps an async operation so its activity is reflected in
@@ -2507,6 +2510,7 @@ final class AppState: ObservableObject {
             } catch {
                 hadError = true
                 Log.error("Google Calendar list failed: \(error)")
+                SyncDiagnostics.failure("calendar", error)
                 await MainActor.run { SyncJournal.shared.mark(.calendar, .failed) }
             }
         }
@@ -2549,14 +2553,23 @@ final class AppState: ObservableObject {
                     journal.mark(.tasks, .active)
                 }
 
+                // Metadata is fetched alongside the tasks but must never
+                // decide the fate of the sync: each request stands on its
+                // own. One `try` over all four used to drop the freshly
+                // fetched tasks, leave the statuses empty ("Status
+                // indisponíveis") and report "Falha na sincronização"
+                // whenever, say, the space tags request failed — on every
+                // sync, since the metadata was then never marked fetched.
                 let t: [CUTask]
-                var meta: ([CUStatus], [CUMember], [CUTask.Tag])? = nil
+                var meta: ListMetadataFetch? = nil
                 if needMeta {
-                    async let statusesReq = cuSvc.getListStatuses()
-                    async let membersReq  = cuSvc.getMembers()
-                    async let tagsReq     = cuSvc.getSpaceTags()
+                    async let statusesReq = Self.attempt("statuses") { try await cuSvc.getListStatuses() }
+                    async let membersReq  = Self.attempt("members") { try await cuSvc.getMembers() }
+                    async let tagsReq     = Self.attempt("tags") { try await cuSvc.getSpaceTags() }
                     t = try await fetchTasksForMode()
-                    meta = try await (statusesReq, membersReq, tagsReq)
+                    meta = await ListMetadataFetch(statuses: statusesReq,
+                                                   members: membersReq,
+                                                   tags: tagsReq)
                 } else {
                     t = try await fetchTasksForMode()
                 }
@@ -2564,15 +2577,24 @@ final class AppState: ObservableObject {
                 cuFetchSucceeded = true
                 await MainActor.run {
                     SyncJournal.shared.mark(.tasks, .done(count: t.count))
-                    if let (s, _, _) = meta {
-                        SyncJournal.shared.mark(.structure, .done(count: s.count))
-                    }
-                    if let (s, m, tg) = meta {
-                        availableStatuses = s
-                        availableMembers  = m
-                        availableTags     = tg
-                        listMetaFetchedAt = Date()
-                        listMetaFetchedForList = activeListKey
+                    if let meta {
+                        if let statuses = meta.statuses {
+                            availableStatuses = statuses
+                            // Fetched for good: the 5-minute throttle
+                            // starts. Otherwise the next sync retries.
+                            listMetaFetchedAt = Date()
+                            listMetaFetchedForList = activeListKey
+                        } else if availableStatuses.isEmpty {
+                            // Statuses unreachable: the tasks carry their
+                            // own status name and colour — enough to draw
+                            // the groups instead of "Status indisponíveis".
+                            availableStatuses = Self.statuses(derivedFrom: t)
+                        }
+                        if let members = meta.members { availableMembers = members }
+                        if let tags = meta.tags { availableTags = tags }
+                        SyncJournal.shared.mark(.structure, availableStatuses.isEmpty
+                                                ? .failed
+                                                : .done(count: availableStatuses.count))
                     }
                     // Warm the per-list cache with the active
                     // list's freshly-fetched tasks so a switch
@@ -2626,6 +2648,7 @@ final class AppState: ObservableObject {
             } catch {
                 hadError = true
                 Log.error("ClickUp: \(error)")
+                SyncDiagnostics.failure("clickup.tasks", error)
                 await MainActor.run { SyncJournal.shared.failActiveStages() }
             }
         }
@@ -2754,10 +2777,24 @@ final class AppState: ObservableObject {
                 )
             }
         }
-        if hadError {
+        // Name the source that actually failed, and only on the transition
+        // into failure: a source that stays down must not post a new alert
+        // on every 30-second sync.
+        let failedSources = [
+            calConfigured && !calFetchSucceeded ? "Google Agenda" : nil,
+            cuConfigured && !cuFetchSucceeded ? "ClickUp" : nil,
+        ].compactMap { $0 }
+        let shouldNotify = await MainActor.run { () -> Bool in
+            let changed = failedSources != lastReportedSyncFailures
+            lastReportedSyncFailures = failedSources
+            return changed && !failedSources.isEmpty
+        }
+        if shouldNotify {
             notify(.error,
                    title: "Falha na sincronização",
-                   message: "Algumas fontes (Calendário ou ClickUp) não responderam.")
+                   message: failedSources.count == 1
+                       ? "\(failedSources[0]) não respondeu. Tentando de novo automaticamente."
+                       : "Google Agenda e ClickUp não responderam. Tentando de novo automaticamente.")
         }
         // Shared overlay calendars — fetched AFTER the main
         // sync so the timeline already has primary events
@@ -6454,3 +6491,41 @@ extension AppState {
     static var preview: AppState { preview(.populated) }
 }
 #endif
+
+
+// MARK: - Sync metadata and diagnostics
+
+/// Outcome of the per-list metadata requests; `nil` = that request failed.
+struct ListMetadataFetch {
+    var statuses: [CUStatus]?
+    var members: [CUMember]?
+    var tags: [CUTask.Tag]?
+}
+
+extension AppState {
+    /// Runs one metadata request; a failure is logged and becomes `nil`.
+    nonisolated static func attempt<T>(_ label: String,
+                                       _ work: () async throws -> T) async -> T? {
+        do { return try await work() }
+        catch {
+            SyncDiagnostics.failure("clickup.\(label)", error)
+            return nil
+        }
+    }
+
+    /// The list's statuses as the tasks themselves report them (name and
+    /// colour), in first-seen order — a stand-in when the list endpoint
+    /// can't be reached.
+    nonisolated static func statuses(derivedFrom tasks: [CUTask]) -> [CUStatus] {
+        var seen = Set<String>()
+        var result: [CUStatus] = []
+        for task in tasks {
+            let key = task.status.lowercased()
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            result.append(CUStatus(status: task.status,
+                                   color: task.statusColor,
+                                   type: task.isCompleted ? "closed" : "open"))
+        }
+        return result
+    }
+}

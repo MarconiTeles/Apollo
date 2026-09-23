@@ -244,9 +244,33 @@ struct EditorialMyTasksView: View {
     /// Connection is judged by the token (`isConnected`), never by the user
     /// id — the id can lag behind (or be re-resolved) on a live connection.
     private var isLoadingData: Bool {
-        allListTasks.isEmpty
-            && !appState.activeListId.isEmpty
-            && (appState.isSyncing || appState.syncStatus == .idle)
+        Self.isLoadingData(hasList: !appState.activeListId.isEmpty,
+                           online: appState.isOnline,
+                           hasTasks: !allListTasks.isEmpty,
+                           hasStatuses: !appState.availableStatuses.isEmpty,
+                           isSyncing: appState.isSyncing,
+                           neverSynced: appState.syncStatus == .idle,
+                           completedSessionSync: SyncJournal.shared.hasCompletedSync)
+    }
+
+    /// The list can't be drawn without BOTH its tasks and its statuses (the
+    /// groups). At launch the tasks come from the disk cache but the
+    /// statuses are not cached — they arrive midway through the first sync —
+    /// so "tasks present, statuses missing" is still loading until that sync
+    /// has had its chance. Only afterwards is an empty status set a real
+    /// "Status indisponíveis".
+    static func isLoadingData(hasList: Bool,
+                              online: Bool = true,
+                              hasTasks: Bool,
+                              hasStatuses: Bool,
+                              isSyncing: Bool,
+                              neverSynced: Bool,
+                              completedSessionSync: Bool) -> Bool {
+        // Offline no sync will run: never promise one.
+        guard hasList, online else { return false }
+        if !hasTasks && (isSyncing || neverSynced) { return true }
+        if !hasStatuses && (isSyncing || !completedSessionSync) { return true }
+        return false
     }
 
     @ViewBuilder
