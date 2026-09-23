@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "DayPanel",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("26.0")],
     products: [
         // Apollo's production executable keeps the historical product name so
         // build.sh, packaging and Sparkle remain unchanged.
@@ -61,7 +61,16 @@ let package = Package(
         .executableTarget(
             name: "DayPanel",
             dependencies: ["ApolloRuntime"],
-            path: "Sources/DayPanelApp"
+            path: "Sources/DayPanelApp",
+            // Adopt the macOS 27 native design with macOS 26 as
+            // the minimum supported OS. Explicit SDK metadata avoids the
+            // SwiftPM linker falling back to the deployment version.
+            linkerSettings: [.unsafeFlags([
+                "-Xlinker", "-platform_version",
+                "-Xlinker", "macos",
+                "-Xlinker", "26.0",
+                "-Xlinker", "27.0"
+            ])]
         ),
         // Invariants that were expensive to (re)discover in
         // production: deterministic task ordering, page-order

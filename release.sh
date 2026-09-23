@@ -373,6 +373,9 @@ ED_SIG="$(echo "$SIGNATURE_LINE" | sed -E 's/.*sparkle:edSignature="([^"]+)".*/\
 LEN="$(echo "$SIGNATURE_LINE" | sed -E 's/.*length="([^"]+)".*/\1/')"
 
 # ── Appcast item ──────────────────────────────────────────────────────────
+# Match the signed app requirement so Sparkle does not offer this release
+# to systems that cannot launch it. Historical feed items remain unchanged.
+MINIMUM_SYSTEM_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "build/Apollo.app/Contents/Info.plist")"
 RFC_DATE="$(LC_TIME=en_US.UTF-8 date -u '+%a, %d %b %Y %H:%M:%S +0000')"
 # GitHub Releases per-tag URL pattern. Each release lives at
 # its own /releases/download/vX.Y.Z/ subpath, so the URL is
@@ -384,7 +387,7 @@ ITEM_XML="    <item>
       <pubDate>$RFC_DATE</pubDate>
       <sparkle:version>$NEW_BUILD</sparkle:version>
       <sparkle:shortVersionString>$NEW_VERSION</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>"
+      <sparkle:minimumSystemVersion>$MINIMUM_SYSTEM_VERSION</sparkle:minimumSystemVersion>"
 if [[ -n "$CHANNEL" ]]; then
     ITEM_XML+="
       <sparkle:channel>$CHANNEL</sparkle:channel>"

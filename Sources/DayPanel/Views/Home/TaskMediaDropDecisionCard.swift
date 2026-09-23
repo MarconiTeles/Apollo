@@ -133,11 +133,12 @@ private struct TaskMediaDropChoiceCard: View {
     let action: () -> Void
 
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
 
     private var borderColor: Color {
         if lit { return Editorial.accent.opacity(0.8) }
-        if isDefault { return Editorial.accent.opacity(0.32) }
-        return Color.white.opacity(0.09)
+        if isDefault { return Editorial.accent.opacity(colorScheme == .light ? 0.5 : 0.32) }
+        return colorScheme == .light ? Color.black.opacity(0.18) : Color.white.opacity(0.09)
     }
 
     var body: some View {
@@ -156,7 +157,7 @@ private struct TaskMediaDropChoiceCard: View {
             .frame(maxWidth: .infinity)
             .frame(height: 44)
             .background(shape.fill(lit ? Editorial.accent.opacity(0.14)
-                                       : Color.white.opacity(0.045)))
+                                       : (colorScheme == .light ? Color.black.opacity(0.055) : Color.white.opacity(0.045))))
             .overlay {
                 shape.strokeBorder(borderColor, lineWidth: lit ? 1 : 0.8)
             }

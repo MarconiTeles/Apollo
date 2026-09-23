@@ -10,6 +10,15 @@ UNIVERSAL="${2:-}"
 APP_DISPLAY_NAME="Apollo"
 REVIEW_PACKAGE_DIR="../apollo-review-swift"
 
+# SDK adoption is distinct from minimum OS support. Package.swift links the
+# main executable with the macOS 27 design; building with older headers must
+# not produce an executable that falsely advertises that SDK.
+APOLLO_SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+if [ "${APOLLO_SDK_VERSION%%.*}" -lt 27 ]; then
+    echo "ERROR: Apollo requires the macOS 27 SDK or newer (found $APOLLO_SDK_VERSION)." >&2
+    exit 1
+fi
+
 if [ "$UNIVERSAL" = "--universal" ]; then
     echo "Building $APP_DISPLAY_NAME ($CONFIG, universal arm64 + x86_64)..."
     # SwiftPM's output layout depends on the build engine. Query it rather
@@ -49,6 +58,14 @@ else
     REVIEW_BIN_DIR="$(swift build --package-path "$REVIEW_PACKAGE_DIR" -c "$CONFIG" --show-bin-path)"
     REVIEW_BIN="$REVIEW_BIN_DIR/ApolloReview"
 fi
+# Inspect every architecture before packaging/signing. A successful compile
+# alone does not prove that AppKit will select the current native design.
+xcrun vtool -show-build "$BIN" | awk '
+    $1 == "minos" { if ($2 != "26.0") invalid = 1 }
+    $1 == "sdk" { count++; if ($2 != "27.0") invalid = 1 }
+    END { if (count == 0 || invalid) exit 1 }
+' || { echo "ERROR: Expected macOS 26 minimum / SDK 27 in every Apollo slice." >&2; exit 1; }
+
 APP="build/${APP_DISPLAY_NAME}.app"
 
 # Compile the app icon (Icon Composer .icon → Assets.car + AppIcon.icns) if the
@@ -106,6 +123,10 @@ chmod +x "$REVIEW_HELPER/Contents/MacOS/ApolloReview"
 # Apollo bundle. This matters for crash reports and installed-build audits.
 MAIN_SHORT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 MAIN_BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
+MAIN_MINIMUM_OS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")"
+[ "$MAIN_MINIMUM_OS" = "26.0" ] || { echo "ERROR: Apollo requires macOS 26 minimum in Info.plist." >&2; exit 1; }
+/usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion $MAIN_MINIMUM_OS" \
+    "$REVIEW_HELPER/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $MAIN_SHORT_VERSION" \
     "$REVIEW_HELPER/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $MAIN_BUILD_VERSION" \
