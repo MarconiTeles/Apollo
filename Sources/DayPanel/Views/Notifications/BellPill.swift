@@ -57,9 +57,12 @@ struct BellPill: View {
         .padding(.vertical, 16)
         .frame(minHeight: 58)
         .fixedSize(horizontal: true, vertical: false)
-        .officialHeaderMaterial(in: RoundedRectangle(
-            cornerRadius: Editorial.notificationCapsuleRadius, style: .continuous
-        ))
+        .background {
+            OfficialHeaderMaterial(shape: RoundedRectangle(
+                cornerRadius: Editorial.notificationCapsuleRadius, style: .continuous
+            ))
+            .shadow(color: .black.opacity(0.22), radius: 12, x: 0, y: 5)
+        }
         .contentShape(RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
                                        style: .continuous))
         .capsuleHoverLift(tint: toneColor, scaleX: 1.008, scaleY: 1.025)
@@ -129,9 +132,12 @@ struct BellUploadPill: View {
         .padding(.trailing, 14)
         .padding(.vertical, 14)
         .frame(minHeight: 72)
-        .officialHeaderMaterial(in: RoundedRectangle(
-            cornerRadius: Editorial.notificationCapsuleRadius, style: .continuous
-        ))
+        .background {
+            OfficialHeaderMaterial(shape: RoundedRectangle(
+                cornerRadius: Editorial.notificationCapsuleRadius, style: .continuous
+            ))
+            .shadow(color: .black.opacity(0.22), radius: 12, x: 0, y: 5)
+        }
         .contentShape(RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
                                        style: .continuous))
         .capsuleHoverLift(tint: Editorial.ink, scaleX: 1.006, scaleY: 1.018)
