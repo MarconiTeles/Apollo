@@ -1,0 +1,49 @@
+2026-09-23 08:21:39.689 DayPanel[98253:1381974] APOLLO-AUTOSCROLL armed
+2026-09-23 08:21:39.936 DayPanel[98253:1381974] APOLLO-TREE NSViewBackingLayer bgA=-1.00 op=1.00 contents=0 filters=[] size=1660x93
+2026-09-23 08:21:39.936 DayPanel[98253:1381974] APOLLO-TREE   CALayer bgA=-1.00 op=1.00 contents=0 filters=[] size=1660x93
+2026-09-23 08:21:39.937 DayPanel[98253:1381974] APOLLO-TREE     CALayer bgA=0.00 op=1.00 contents=0 filters=[] size=1660x93
+2026-09-23 08:21:39.937 DayPanel[98253:1381974] APOLLO-TREE     CAChameleonLayer bgA=0.00 op=0.10 contents=0 filters=[] size=1660x93
+2026-09-23 08:21:39.942 DayPanel[98253:1381974] [Apollo] bootstrap auth status=2 localFlag=1
+2026-09-23 08:21:40.691 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=116 BoardCardRow=116 BoardLabelsTrack=8 ContentView=7 EditorialBoardView=7 EditorialSidebar=7
+2026-09-23 08:21:43.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=29 BoardCardRow=58 BoardLabelsTrack=2 ContentView=2 EditorialBoardView=2 EditorialSidebar=2
+2026-09-23 08:21:48.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=194 BoardCardRow=194 BoardLabelsTrack=4 ContentView=4 EditorialBoardView=4 EditorialSidebar=4
+2026-09-23 08:21:49.692 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=88 BoardCardRow=88 BoardLabelsTrack=2 ContentView=2 EditorialBoardView=2 EditorialSidebar=2
+2026-09-23 08:21:50.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=44 BoardCardRow=44 BoardLabelsTrack=1 ContentView=1 EditorialBoardView=1 EditorialSidebar=1
+2026-09-23 08:21:51.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=88 BoardCardRow=88 BoardLabelsTrack=2 ContentView=2 EditorialBoardView=2 EditorialSidebar=2
+2026-09-23 08:21:52.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=80 BoardCardRow=80 BoardLabelsTrack=2 ContentView=2 EditorialBoardView=2 EditorialSidebar=2
+2026-09-23 08:21:53.689 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=72 BoardCardRow=72 BoardLabelsTrack=2 ContentView=2 EditorialBoardView=2 EditorialSidebar=2
+2026-09-23 08:21:54.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=72 BoardCardRow=72 BoardLabelsTrack=2 ContentView=2 EditorialBoardView=2 EditorialSidebar=2
+2026-09-23 08:21:56.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=36 BoardCardRow=36 BoardLabelsTrack=1 ContentView=1 EditorialBoardView=1 EditorialSidebar=1
+2026-09-23 08:21:57.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=36 BoardCardRow=36 BoardLabelsTrack=1 ContentView=1 EditorialBoardView=1 EditorialSidebar=1
+2026-09-23 08:21:59.720 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=36 BoardCardRow=36 BoardLabelsTrack=1 ContentView=1 EditorialBoardView=1 EditorialSidebar=1
+2026-09-23 08:22:00.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=36 BoardCardRow=36 BoardLabelsTrack=1 ContentView=1 EditorialBoardView=1 EditorialSidebar=1
+2026-09-23 08:22:01.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=72 BoardCardRow=72 BoardLabelsTrack=2 ContentView=2 EditorialBoardView=2 EditorialSidebar=2
+2026-09-23 08:22:02.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=72 BoardCardRow=72 BoardLabelsTrack=2 ContentView=2 EditorialBoardView=2 EditorialSidebar=2
+2026-09-23 08:22:03.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=144 BoardCardRow=144 BoardLabelsTrack=4 ContentView=4 EditorialBoardView=4 EditorialSidebar=4
+2026-09-23 08:22:12.513 DayPanel[98253:1381974] APOLLO-TintlessVEV filtro: class=CAFilter name=sdrNormalize inputRadius=-
+2026-09-23 08:22:12.514 DayPanel[98253:1381974] APOLLO-TintlessVEV filtro: class=CAFilter name=gaussianBlur inputRadius=30
+2026-09-23 08:22:12.514 DayPanel[98253:1381974] APOLLO-TintlessVEV filtro: class=CAFilter name=colorSaturate inputRadius=-
+2026-09-23 08:22:12.514 DayPanel[98253:1381974] APOLLO-TintlessVEV backdrop scale 0.125 -> 1.0
+2026-09-23 08:22:12.691 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=72 BoardCardRow=72 BoardLabelsTrack=2 ContentView=2 EditorialBoardView=2 EditorialSidebar=2
+2026-09-23 08:22:25.746 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=108 BoardCardRow=108 BoardLabelsTrack=3 ContentView=3 EditorialBoardView=3 EditorialSidebar=3
+2026-09-23 08:22:41.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=36 BoardCardRow=36 BoardLabelsTrack=1 ContentView=1 EditorialBoardView=1 EditorialSidebar=1
+2026-09-23 08:22:42.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=72 BoardCardRow=72 BoardLabelsTrack=2 ContentView=2 EditorialBoardView=2 EditorialSidebar=2
+2026-09-23 08:22:56.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=108 BoardCardRow=108 BoardLabelsTrack=3 ContentView=3 EditorialBoardView=3 EditorialSidebar=3
+2026-09-23 08:23:12.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=108 BoardCardRow=108 BoardLabelsTrack=3 ContentView=3 EditorialBoardView=3 EditorialSidebar=3
+2026-09-23 08:23:20.691 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=108 BoardCardRow=108 BoardLabelsTrack=3 ContentView=3 EditorialBoardView=3 EditorialSidebar=3
+2026-09-23 08:23:34.690 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=36 BoardCardRow=36 BoardLabelsTrack=1 ContentView=1 EditorialBoardView=1 EditorialSidebar=1
+2026-09-23 08:23:40.531 DayPanel[98253:1381974] APOLLO-AUTOSCROLL start hit=PlatformGroupContainer scroll=Optional(SwiftUI.HostingScrollView) offset=0,-113
+2026-09-23 08:23:40.698 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=2 BoardCardRow=2
+2026-09-23 08:23:40.798 DayPanel[98253:1381974] [Apollo][info] Review restore: 240 registros, 240 confiáveis (ApolloRuntime/TaskReviewUpdateStore.swift:201)
+2026-09-23 08:23:40.823 DayPanel[98253:1381974] [Apollo][info] Review restore: 240 latches mantidos após saneamento (ApolloRuntime/TaskReviewUpdateStore.swift:1025)
+2026-09-23 08:23:41.696 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=5 BoardCardRow=5
+2026-09-23 08:23:42.692 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=94 BoardCardRow=94 BoardLabelsTrack=2 ContentView=2 EditorialBoardView=2 EditorialSidebar=2
+2026-09-23 08:23:43.692 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=3 BoardCardRow=3
+2026-09-23 08:23:44.692 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=5 BoardCardRow=5
+2026-09-23 08:23:45.692 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=5 BoardCardRow=5
+2026-09-23 08:23:46.696 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=2 BoardCardRow=2
+2026-09-23 08:23:47.697 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=5 BoardCardRow=5
+2026-09-23 08:23:48.696 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=6 BoardCardRow=6
+2026-09-23 08:23:49.692 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=128 BoardCardRow=128 BoardLabelsTrack=3 ContentView=3 EditorialBoardView=3 EditorialSidebar=3
+2026-09-23 08:23:50.538 DayPanel[98253:1381974] APOLLO-AUTOSCROLL stop ticks=1088 offset=0,688 range=-115..934
+2026-09-23 08:23:50.691 DayPanel[98253:1381974] APOLLO-COUNT BoardCard=5 BoardCardRow=5

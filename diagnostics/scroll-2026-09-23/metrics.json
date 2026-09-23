@@ -1,0 +1,50 @@
+[
+  {
+    "variant": "board-A",
+    "cpu": {
+      "25073": 59.3,
+      "419": 72.1
+    },
+    "gpu_total": 63
+  },
+  {
+    "variant": "board-B-effect-hidden",
+    "cpu": {
+      "30022": 73.3,
+      "419": 43.2
+    },
+    "gpu_total": 24.6
+  },
+  {
+    "variant": "board-C-noheader",
+    "cpu": {
+      "31080": 91.6,
+      "419": 43.8
+    },
+    "gpu_total": 24.9
+  },
+  {
+    "variant": "list-A",
+    "cpu": {
+      "25073": 28.3,
+      "419": 68.0
+    },
+    "gpu_total": 64.8
+  },
+  {
+    "variant": "list-B-effect-hidden",
+    "cpu": {
+      "30022": 35.3,
+      "419": 43.7
+    },
+    "gpu_total": 24.9
+  },
+  {
+    "variant": "list-C-noheader",
+    "cpu": {
+      "31080": 38.5,
+      "419": 44.9
+    },
+    "gpu_total": 25.3
+  }
+]

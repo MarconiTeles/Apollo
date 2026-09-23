@@ -15,11 +15,18 @@ final class TaskReviewUpdateStore: ObservableObject {
     typealias FullTaskFetcher = (String) async -> CUTask?
     typealias CatalogFetcher = (String) -> TaskMediaCatalog?
 
-    struct Update {
+    struct Update: Equatable {
         let taskId: String
         let attachment: CUTask.Attachment
         let activeAtt: String
         let meta: ReviewBackend.Meta
+
+        static func == (lhs: Update, rhs: Update) -> Bool {
+            // Timestamp equality alone is not payload equality: approval,
+            // title, counts or the evaluated version can change at that instant.
+            lhs.meta.exists == rhs.meta.exists
+                && PersistedUpdate(lhs) == PersistedUpdate(rhs)
+        }
 
         /// Prefer the current server title only when it carries real identity.
         /// Older/legacy review blobs were created with generic placeholders such
@@ -50,7 +57,9 @@ final class TaskReviewUpdateStore: ObservableObject {
     /// reconstruct this latch from `reviewSeen`/`reviewObserved` after a
     /// relaunch. Persisting the latch separately guarantees that opening or
     /// closing Apollo never consumes VER REVIEW.
-    private struct PersistedUpdate: Codable {
+    // Immutable value snapshot. Attachment is itself an immutable value of
+    // Strings/Ints; no actor-owned reference crosses into the writer queue.
+    private struct PersistedUpdate: Codable, Hashable, @unchecked Sendable {
         let taskId: String
         let attachment: CUTask.Attachment
         let activeAtt: String
@@ -163,13 +172,18 @@ final class TaskReviewUpdateStore: ObservableObject {
     private let reviewedDisplayDuration: TimeInterval
     private let defaults: UserDefaults
     private let pendingUpdatesKey = "taskReviewPendingUpdates.v1"
+    private let persistence: Persistence
 
     init(reviewedDisplayDuration: TimeInterval = 2,
          defaults: UserDefaults = .standard,
          fullTaskFetcher: FullTaskFetcher? = nil,
-         catalogFetcher: CatalogFetcher? = nil) {
+         catalogFetcher: CatalogFetcher? = nil,
+         persistenceDelay: TimeInterval = 0.075) {
         self.reviewedDisplayDuration = reviewedDisplayDuration
         self.defaults = defaults
+        self.persistence = Persistence(defaults: defaults,
+                                       key: "taskReviewPendingUpdates.v1",
+                                       delay: persistenceDelay)
         self.catalogFetcher = catalogFetcher
             ?? { TaskMediaTransferStore.persistedCatalog(for: $0) }
         if let fullTaskFetcher {
@@ -199,7 +213,7 @@ final class TaskReviewUpdateStore: ObservableObject {
                                                        from: data) {
                 let trusted = records.filter(\.isTrustedPendingActivity)
                 Log.info("Review restore: \(records.count) registros, \(trusted.count) confiáveis")
-                restorePersistedUpdates(trusted.map(\.update))
+                restorePersistedUpdates(records)
             } else {
                 // A decode failure must NEVER silently wipe every pendency on
                 // the next persist. Keep the raw data untouched and loud.
@@ -253,9 +267,10 @@ final class TaskReviewUpdateStore: ObservableObject {
             meta: meta
         )
         let newKey = Self.pendingKey(for: refreshed)
-        if oldKey != newKey { updatesByTask[taskId]?.removeValue(forKey: oldKey) }
-        updatesByTask[taskId]?[newKey] = refreshed
-        persistPendingUpdates()
+        var next = bucket
+        if oldKey != newKey { next.removeValue(forKey: oldKey) }
+        next[newKey] = refreshed
+        replacePendingBucket(next, taskId: taskId)
         return true
     }
 
@@ -293,18 +308,14 @@ final class TaskReviewUpdateStore: ObservableObject {
         }
 
         if !meta.hasReviewerActivityEvidence {
-            for key in matchingKeys {
-                updatesByTask[taskId]?.removeValue(forKey: key)
-            }
-            if updatesByTask[taskId]?.isEmpty == true {
-                updatesByTask.removeValue(forKey: taskId)
-            }
+            var next = bucket
+            for key in matchingKeys { next.removeValue(forKey: key) }
+            replacePendingBucket(next, taskId: taskId)
             ReviewBackend.markObserved(
                 att: ReviewBackend.observationKey(att: activeAtt,
                                                   versionId: exactVersion),
                 meta: meta
             )
-            persistPendingUpdates()
             return
         }
 
@@ -313,11 +324,12 @@ final class TaskReviewUpdateStore: ObservableObject {
             activeAtt: activeAtt, meta: meta
         ))
         let exactKey = Self.pendingKey(for: exact)
+        var next = bucket
         for key in matchingKeys where key != exactKey {
-            updatesByTask[taskId]?.removeValue(forKey: key)
+            next.removeValue(forKey: key)
         }
-        updatesByTask[taskId, default: [:]][exactKey] = exact
-        persistPendingUpdates()
+        next[exactKey] = exact
+        replacePendingBucket(next, taskId: taskId)
     }
 
     /// Background review polling is independent from the task-list page. Feed
@@ -578,11 +590,9 @@ final class TaskReviewUpdateStore: ObservableObject {
                                         mediaUrl: mediaUrl, reviewId: reviewId,
                                         versionId: versionId)
         guard !keys.isEmpty else { return }
-        for key in keys { updatesByTask[taskId]?.removeValue(forKey: key) }
-        if updatesByTask[taskId]?.isEmpty == true {
-            updatesByTask.removeValue(forKey: taskId)
-        }
-        persistPendingUpdates()
+        var next = updatesByTask[taskId, default: [:]]
+        for key in keys { next.removeValue(forKey: key) }
+        replacePendingBucket(next, taskId: taskId)
     }
 
     @discardableResult
@@ -627,18 +637,16 @@ final class TaskReviewUpdateStore: ObservableObject {
                                    commentCount: update.meta.commentCount,
                                    status: update.meta.status)
         }
-        for key in consumableKeys {
-            updatesByTask[update.taskId]?.removeValue(forKey: key)
-        }
-        if updatesByTask[update.taskId]?.isEmpty == true {
-            updatesByTask.removeValue(forKey: update.taskId)
-        }
-        persistPendingUpdates()
+        var next = updatesByTask[update.taskId, default: [:]]
+        for key in consumableKeys { next.removeValue(forKey: key) }
+        replacePendingBucket(next, taskId: update.taskId, immediately: true)
         // If sibling videos still need review, keep the task-level VER REVIEW
         // capsule alive and do not cover it with the transient success state.
         guard updatesByTask[update.taskId]?.isEmpty != false else { return true }
         reviewedExpiryTasks[update.taskId]?.cancel()
-        reviewedTaskIds.insert(update.taskId)
+        if !reviewedTaskIds.contains(update.taskId) {
+            reviewedTaskIds.insert(update.taskId)
+        }
 
         let duration = max(0, reviewedDisplayDuration)
         reviewedExpiryTasks[update.taskId] = Task { [weak self] in
@@ -780,6 +788,7 @@ final class TaskReviewUpdateStore: ObservableObject {
             }
             let key = Self.pendingKey(for: update)
             let existing = updatesByTask[taskId]?[key]
+            var next = updatesByTask[taskId, default: [:]]
             // A physical replacement may have been latched before the media
             // catalog finished loading. Once its stable lineage is known,
             // remove those aliases before inserting the canonical row.
@@ -790,12 +799,12 @@ final class TaskReviewUpdateStore: ObservableObject {
                 reviewId: update.meta.reviewId,
                 versionId: Self.authoritativeVersion(update.meta)
             ) where alias != key {
-                updatesByTask[taskId]?.removeValue(forKey: alias)
+                next.removeValue(forKey: alias)
             }
             if existing == nil || Self.isNewer(update, than: existing!) {
-                updatesByTask[taskId, default: [:]][key] = update
+                next[key] = update
             }
-            persistPendingUpdates()
+            replacePendingBucket(next, taskId: taskId)
         } else if updatesByTask[taskId]?.isEmpty == false {
             // Once an unseen review has been published into the row, it is
             // deliberately latched until the explicit
@@ -809,17 +818,114 @@ final class TaskReviewUpdateStore: ObservableObject {
         }
     }
 
-    private func persistPendingUpdates() {
+    private func replacePendingBucket(_ bucket: [String: Update], taskId: String,
+                                      immediately: Bool = false) {
+        guard updatesByTask[taskId, default: [:]] != bucket else { return }
+        // Mutate a local copy: nested @Published dictionary writes otherwise
+        // emit once per removed alias, including removals that changed nothing.
+        var next = updatesByTask
+        next[taskId] = bucket.isEmpty ? nil : bucket
+        updatesByTask = next
+        persistPendingUpdates(immediately: immediately)
+    }
+
+    private func persistPendingUpdates(immediately: Bool = false) {
         let records = updatesByTask.values.flatMap(\.values)
             .map(PersistedUpdate.init)
-            .sorted {
-                if $0.taskId == $1.taskId { return $0.activeAtt < $1.activeAtt }
-                return $0.taskId < $1.taskId
+        persistence.submit(records, immediately: immediately)
+    }
+
+    /// Wait for the latest snapshot without encoding or blocking on MainActor.
+    /// Used by shutdown coordination and tests simulating a process relaunch.
+    func flushPendingPersistence() async {
+        await persistence.flush()
+    }
+
+    /// Application termination cannot await the debounce. Only an outstanding
+    /// changed snapshot is written; an idle store does no serialization work.
+    func flushPersistenceOnTermination() {
+        persistence.flushSynchronously()
+    }
+
+    /// One serial executor owns pending snapshots and writes. Scheduling the
+    /// debounce here (not on MainActor) also preserves its order against a
+    /// critical acknowledgement, even if an older write is already in flight.
+    private final class Persistence: @unchecked Sendable {
+        private static let queue = DispatchQueue(label: "apollo.review.pending-persistence",
+                                                  qos: .utility)
+        private let defaults: UserDefaults
+        private let key: String
+        private let delay: TimeInterval
+        // Accessed exclusively on queue, never from the store's actor.
+        private var pending: [PersistedUpdate]?
+        private var generation: UInt64 = 0
+        private var lastWritten: Set<PersistedUpdate>?
+
+        init(defaults: UserDefaults, key: String, delay: TimeInterval) {
+            self.defaults = defaults
+            self.key = key
+            self.delay = max(0, delay)
+        }
+
+        func submit(_ snapshot: [PersistedUpdate], immediately: Bool) {
+            Self.queue.async {
+                self.pending = snapshot
+                self.generation &+= 1
+                let generation = self.generation
+                Self.queue.asyncAfter(deadline: .now() + self.delay) {
+                    guard self.generation == generation else { return }
+                    self.writePending()
+                }
             }
-        if records.isEmpty {
-            defaults.removeObject(forKey: pendingUpdatesKey)
-        } else if let data = try? JSONEncoder().encode(records) {
-            defaults.set(data, forKey: pendingUpdatesKey)
+            if immediately { flushSynchronously() }
+        }
+
+        func flush() async {
+            await withCheckedContinuation { continuation in
+                Self.queue.async {
+                    self.writePending()
+                    continuation.resume()
+                }
+            }
+        }
+
+        func flushSynchronously() {
+            // queue.sync may execute on the calling (main) thread. Enqueue
+            // instead so sorting/JSON always run on the worker; only critical
+            // completion/termination waits for the durability barrier.
+            let completed = DispatchSemaphore(value: 0)
+            Self.queue.async {
+                self.writePending()
+                completed.signal()
+            }
+            completed.wait()
+        }
+
+        private func writePending() {
+            guard let snapshot = pending else { return }
+            let identity = Set(snapshot)
+            guard identity != lastWritten else {
+                pending = nil
+                return
+            }
+            do {
+                if snapshot.isEmpty {
+                    defaults.removeObject(forKey: key)
+                } else {
+                    let records = snapshot.sorted {
+                        if $0.taskId != $1.taskId { return $0.taskId < $1.taskId }
+                        if $0.activeAtt != $1.activeAtt { return $0.activeAtt < $1.activeAtt }
+                        return ($0.evaluatedVersionId ?? "") < ($1.evaluatedVersionId ?? "")
+                    }
+                    defaults.set(try JSONEncoder().encode(records), forKey: key)
+                }
+                lastWritten = identity
+                pending = nil
+            } catch {
+                // Preserve the last durable file and pending snapshot; a later
+                // flush can retry instead of silently consuming the latch.
+                Log.error("Review persist: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -981,13 +1087,14 @@ final class TaskReviewUpdateStore: ObservableObject {
         return Array(candidates.values)
     }
 
-    private func restorePersistedUpdates(_ records: [Update]) {
+    private func restorePersistedUpdates(_ records: [PersistedUpdate]) {
         struct Restored {
             let update: Update
             let wasCanonical: Bool
         }
         var restoredByTask: [String: [String: Restored]] = [:]
-        for record in records {
+        for persisted in records where persisted.isTrustedPendingActivity {
+            let record = persisted.update
             // Normalization never invents a version: a record that does not
             // know which version was evaluated stays version-less.
             let normalized = canonicalized(record)
@@ -1021,7 +1128,11 @@ final class TaskReviewUpdateStore: ObservableObject {
         }
         let restoredCount = updatesByTask.values.map(\.count).reduce(0, +)
         Log.info("Review restore: \(restoredCount) latches mantidos após saneamento")
-        persistPendingUpdates()
+        let normalized = updatesByTask.values.flatMap(\.values).map(PersistedUpdate.init)
+        if normalized.count != records.count || Set(normalized) != Set(records) {
+            // Migration must finish before a new store can read the old latch.
+            persistence.submit(normalized, immediately: true)
+        }
     }
 
     private func canonicalized(_ update: Update) -> Update {

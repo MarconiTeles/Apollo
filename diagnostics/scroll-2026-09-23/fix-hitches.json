@@ -1,0 +1,9 @@
+{
+  "hitches_by_process": {
+    "DayPanel (61494)": 587
+  },
+  "apollo_hitches": 587,
+  "apollo_hitches_over_50ms": 3,
+  "max_hitch_ms": 125.0,
+  "note": "Instrumented 15-second automated board scroll; hitch durations are not frame durations or FPS."
+}
