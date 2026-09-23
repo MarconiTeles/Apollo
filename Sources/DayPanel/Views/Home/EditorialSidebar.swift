@@ -95,7 +95,7 @@ struct EditorialSidebar: View {
         .background {
             if Materials.tier == .solid {
                 shape.fill(Editorial.panelDeep)
-                    .colorMultiply(Color(white: darkenSidebarMaterial ? 0.4735 : 1))
+                    .colorMultiply(Color(white: darkenSidebarMaterial ? 0.31555 : 1))
             }
         }
         .modifier(SidebarGlassSurface(shape: shape, darken: darkenSidebarMaterial))
@@ -457,7 +457,7 @@ private struct SidebarGlassSurface: ViewModifier {
         } else if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
             if #available(macOS 27.0, *), darken {
                 content.background {
-                    SidebarLuminanceGlass(cornerRadius: shape.cornerSize.width, gain: 0.4735)
+                    SidebarLuminanceGlass(cornerRadius: shape.cornerSize.width, gain: 0.31555)
                 }
             } else {
                 content.glassEffect(.regular, in: shape)
@@ -465,7 +465,7 @@ private struct SidebarGlassSurface: ViewModifier {
         } else if darken {
             content.background {
                 shape.fill(.ultraThinMaterial)
-                    .colorMultiply(Color(white: 0.4735))
+                    .colorMultiply(Color(white: 0.31555))
             }
         } else {
             content.background(.ultraThinMaterial, in: shape)
