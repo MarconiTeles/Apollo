@@ -151,7 +151,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
                 }
             }
         )
-        let host = NSHostingController(rootView: view)
+        let host = NSHostingController(rootView: view.focusEffectDisabled())
         // Transparent host so the SwiftUI rounded card sits
         // on top of the system shadow without a square
         // backing artifact behind the corners.

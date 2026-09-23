@@ -33,13 +33,9 @@ enum SidebarRoute: Hashable {
 
 struct EditorialSidebar: View {
     @EnvironmentObject var appState: AppState
-    @Environment(\.colorScheme) private var colorScheme
-    private let sidebarCornerRadius: CGFloat =
-        ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 ? 12 : 16
-    private var darkenSidebarMaterial: Bool {
-        colorScheme == .dark
-            && ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27
-    }
+
+    /// Width of the system sidebar column that hosts this view.
+    static let columnWidth: CGFloat = 220
 
     /// Local selection. The sidebar can drive routing once the
     /// dashboard body migrates; for now it's purely visual.
@@ -62,65 +58,28 @@ struct EditorialSidebar: View {
     @State private var pinnedLists: [PinnedLists.Entry] = PinnedLists.load()
 
     var body: some View {
-        // PANE FLUTUANTE de Liquid Glass — a mesma implementação
-        // do painel do MINIMAL TP: card arredondado inset das
-        // bordas, vidro REAL (glassEffect) no macOS 26 sobre o
-        // conteúdo vivo, e o conteúdo do quadro rola POR TRÁS
-        // (o board ScrollView é full-width; os cards passam sob
-        // o pane e refratam através do vidro). Tiers:
-        //   A  glassEffect .regular tintado accent@0.08
-        //   B  ultraThinMaterial + fio de luz
-        //   C  panelDeep sólido + hairline (Reduce Transparency)
-        let shape = RoundedRectangle(cornerRadius: sidebarCornerRadius, style: .continuous)
+        // Only the content. The background, edges, corners, window buttons
+        // and collapse behaviour come from the system sidebar column that
+        // hosts this view (NavigationSplitView in ContentView), as in Finder.
         VStack(spacing: 0) {
-            // 44pt native traffic-light lane + 30pt breathing room before
-            // the first section label.
+            // Native traffic-light lane. As in Finder, the first section
+            // label sits right below the window buttons (no wordmark).
             Color.clear
-                .frame(height: 74)
-                .overlay(alignment: .bottomLeading) {
-                    Text("APOLLO")
-                        .font(.system(size: 12, weight: .semibold))
-                        .tracking(2.8)
-                        .foregroundStyle(Editorial.inkSoft)
-                        .padding(.leading, 20)
-                        .padding(.bottom, 8)
-                        .accessibilityLabel("Apollo")
-                }
+                .frame(height: 52)
             navList
             userFooter
         }
-        .frame(width: 220)
-        // Keep the material separate from the foreground when adjusting its
-        // luminance, so text, icons and selected rows retain their own colors.
-        .background {
-            if Materials.tier == .solid {
-                shape.fill(Editorial.panelDeep)
-                    .colorMultiply(Color(white: darkenSidebarMaterial ? 0.31555 : 1))
-            }
-        }
-        .modifier(SidebarGlassSurface(shape: shape, darken: darkenSidebarMaterial))
-        .clipShape(shape)
-        .overlay {
-            if Materials.tier != .solid {
-                shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
-                    .allowsHitTesting(false)
-            } else {
-                shape.strokeBorder(Editorial.rule, lineWidth: 1)
-                    .allowsHitTesting(false)
-            }
-        }
-        .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
-        .padding(.leading, 10)
-        .padding(.vertical, 10)
+        .frame(maxHeight: .infinity)
+        // The traffic-light lane above is measured from the window's top
+        // edge, so the column content starts under the title bar.
+        .ignoresSafeArea(.container, edges: .top)
         .apolloStudioNode("shell.sidebar",
                           title: "Painel lateral",
                           kind: .sidebar,
                           parent: "app.root",
                           properties: [
-                            .init(kind: .width, title: "Largura", value: 220),
-                            .init(kind: .cornerRadius, title: "Raio", value: Double(sidebarCornerRadius)),
-                            .init(kind: .shadowRadius, title: "Sombra", value: 18),
-                            .init(kind: .material, title: "Material", token: "Materials.sidebar"),
+                            .init(kind: .width, title: "Largura", value: Double(Self.columnWidth)),
+                            .init(kind: .material, title: "Material", token: "system.sidebar"),
                           ])
         // Re-read the pinned-lists store whenever any UserDefaults
         // key changes (cheap — ~5 entries, JSON-decoded). Covers
@@ -334,6 +293,7 @@ struct EditorialSidebar: View {
             }
         }
         .buttonStyle(.plain)
+        .focusable(false)
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -441,41 +401,19 @@ struct EditorialSidebar: View {
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────
-// MARK: - Sidebar glass surface
-// ────────────────────────────────────────────────────────────────────────
-
-/// Native sidebar material, with a luminance-only adjustment in macOS 27 dark
-/// mode. No tint or additional opaque layer is placed over the glass.
-private struct SidebarGlassSurface: ViewModifier {
-    let shape: RoundedRectangle
-    let darken: Bool
-
-    func body(content: Content) -> some View {
-        if Materials.tier == .solid {
-            content
-        } else if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
-            if #available(macOS 27.0, *), darken {
-                content.background {
-                    SidebarLuminanceGlass(cornerRadius: shape.cornerSize.width, gain: 0.31555)
-                }
-            } else {
-                content.glassEffect(.regular, in: shape)
-            }
-        } else if darken {
-            content.background {
-                shape.fill(.ultraThinMaterial)
-                    .colorMultiply(Color(white: 0.31555))
-            }
-        } else {
-            content.background(.ultraThinMaterial, in: shape)
-        }
-    }
-}
-
 // ────────────────────────────────────────────────────────────────────
 // MARK: Section + rows
 // ────────────────────────────────────────────────────────────────────
+
+/// Shared by every sidebar row — navigation, pinned lists and the embedded
+/// filter rows — so all of them keep the same icon size and vertical pitch.
+enum SidebarRowMetrics {
+    static let iconSize: CGFloat = 15.4     // 14pt + 10%
+    static let iconFrame: CGFloat = 20
+    static let iconSpacing: CGFloat = 9
+    static let contentHeight: CGFloat = 19
+    static let verticalPadding: CGFloat = 6
+}
 
 private struct SidebarSection<Content: View>: View {
     let label: String
@@ -556,14 +494,13 @@ private struct SidebarNavRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(alignment: .center, spacing: 9) {
+            HStack(alignment: .center, spacing: SidebarRowMetrics.iconSpacing) {
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .regular))
+                    .font(.system(size: SidebarRowMetrics.iconSize, weight: .regular))
                     .symbolRenderingMode(.monochrome)
-                    .foregroundStyle(disabled ? Editorial.inkFaint
-                                              : (isActive ? Editorial.accent
-                                                          : Editorial.inkMute))
-                    .frame(width: 18, alignment: .center)
+                    // Finder-style: every enabled icon carries the accent.
+                    .foregroundStyle(disabled ? Editorial.inkFaint : Editorial.accent)
+                    .frame(width: SidebarRowMetrics.iconFrame, alignment: .center)
                     .accentGlow(isActive && !disabled)
                 Text(label)
                     .font(.system(size: 13, weight: isActive ? .medium : .regular))
@@ -584,8 +521,9 @@ private struct SidebarNavRow: View {
                         .fixedSize(horizontal: true, vertical: false)
                 }
             }
+            .frame(minHeight: SidebarRowMetrics.contentHeight)
             .padding(.horizontal, 6)
-            .padding(.vertical, 6)
+            .padding(.vertical, SidebarRowMetrics.verticalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             // Hover wash (non-active rows only).
             .background(
@@ -601,6 +539,9 @@ private struct SidebarNavRow: View {
                                            style: .continuous))
         }
         .buttonStyle(.plain)
+        // Mouse-driven rows: never take keyboard focus (no focus ring).
+        .focusable(false)
+        .focusEffectDisabled()
         // The visual row already expands through its HStack, but SwiftUI can
         // preserve the Button's intrinsic hit region when the plain style is
         // used. Expand the control itself so every visible point in the row —
@@ -645,14 +586,13 @@ private struct SidebarDotRow: View {
 
     var body: some View {
         Button { onTap?() } label: {
-            HStack(spacing: 9) {
+            HStack(spacing: SidebarRowMetrics.iconSpacing) {
                 Image(systemName: "list.bullet")
-                    .font(.system(size: 14, weight: .regular))
-                    // Ícones de lista SEM tint por cor de lista: neutros em
-                    // repouso; só o item SELECIONADO usa a cor de realce do
-                    // macOS (accentColor), padrão Finder.
-                    .foregroundStyle(isActive ? Editorial.accent : Editorial.inkMute)
-                    .frame(width: 18, alignment: .center)
+                    .font(.system(size: SidebarRowMetrics.iconSize, weight: .regular))
+                    // Ícones de lista SEM tint por cor de lista: todos na cor
+                    // de realce do macOS (accentColor), padrão Finder.
+                    .foregroundStyle(Editorial.accent)
+                    .frame(width: SidebarRowMetrics.iconFrame, alignment: .center)
                     .accentGlow(isActive)
                 Text(label)
                     .font(.system(size: 13, weight: isActive ? .medium : .regular))
@@ -669,8 +609,9 @@ private struct SidebarDotRow: View {
                         .fixedSize(horizontal: true, vertical: false)
                 }
             }
+            .frame(minHeight: SidebarRowMetrics.contentHeight)
             .padding(.horizontal, 6)
-            .padding(.vertical, 6)
+            .padding(.vertical, SidebarRowMetrics.verticalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             // Hover wash (non-active rows only).
             .background(
@@ -686,6 +627,8 @@ private struct SidebarDotRow: View {
                                            style: .continuous))
         }
         .buttonStyle(.plain)
+        .focusable(false)
+        .focusEffectDisabled()
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 8,
                                        style: .continuous))

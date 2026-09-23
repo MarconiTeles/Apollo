@@ -536,6 +536,7 @@ struct TaskFilterPopover: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         let expanded = expandedSections.contains(title)
+        let embedded = mode == .embedded
         return VStack(alignment: .leading, spacing: 6) {
             Button {
                 withAnimation(.spring(duration: 0.26, bounce: 0.18)) {
@@ -546,11 +547,14 @@ struct TaskFilterPopover: View {
                     }
                 }
             } label: {
-                HStack(alignment: .center, spacing: 8) {
+                HStack(alignment: .center,
+                       spacing: embedded ? SidebarRowMetrics.iconSpacing : 8) {
                     Image(systemName: systemImage)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Editorial.inkMute)
-                        .frame(width: 18, alignment: .center)
+                        // Sidebar: 13pt + 10%, accent on every row (Finder).
+                        .font(.system(size: embedded ? 14.3 : 13, weight: .medium))
+                        .foregroundStyle(embedded ? Editorial.accent : Editorial.inkMute)
+                        .frame(width: embedded ? SidebarRowMetrics.iconFrame : 18,
+                               alignment: .center)
                     Text(title)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Editorial.ink)
@@ -560,8 +564,10 @@ struct TaskFilterPopover: View {
                         .foregroundStyle(Editorial.inkFaint)
                         .rotationEffect(.degrees(expanded ? 0 : -90))
                 }
+                // Embedded rows share the sidebar navigation rows' pitch.
+                .frame(minHeight: embedded ? SidebarRowMetrics.contentHeight : 0)
                 .padding(.horizontal, 6)
-                .padding(.vertical, 5)
+                .padding(.vertical, embedded ? SidebarRowMetrics.verticalPadding : 5)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

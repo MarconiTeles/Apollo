@@ -11,7 +11,9 @@
 #   --board-fixtures=169 --route=board --board-renderer=swiftui --appearance=light
 #
 # Never touches /Applications/Apollo.app, the Sparkle feed/appcast, releases or
-# production secrets. Optional env:
+# production secrets. Other DEV variants reuse this script by overriding
+# APOLLO_DEV_APP_NAME, APOLLO_DEV_BUNDLE_ID, APOLLO_DEV_OUT_DIR and
+# APOLLO_DEV_MANIFEST_NAME (see script/build_dev_sidebar_macos27.sh). Optional env:
 #   APOLLO_DEV_SIGNING_ID          signing identity (default: Developer ID if
 #                                  present, else ad-hoc "-")
 #   APOLLO_OLLAMA_RUNTIME_SOURCE   existing ollama binary to seed build/ollama-runtime
@@ -30,9 +32,9 @@ case "${1:-}" in
     *) echo "Usage: $0 [--build-only | --run [args...] | --launch-only [args...]]" >&2; exit 2 ;;
 esac
 
-BUNDLE_ID="com.painellunar.app.dev.board-appkit"
-APP_NAME="Apollo DEV Board AppKit"
-OUT_DIR="build/dev-board-appkit"
+BUNDLE_ID="${APOLLO_DEV_BUNDLE_ID:-com.painellunar.app.dev.board-appkit}"
+APP_NAME="${APOLLO_DEV_APP_NAME:-Apollo DEV Board AppKit}"
+OUT_DIR="${APOLLO_DEV_OUT_DIR:-build/dev-board-appkit}"
 APP="$OUT_DIR/$APP_NAME.app"
 ABS_APP="$ROOT/$APP"
 WORK_DIR="$OUT_DIR/work"
@@ -41,7 +43,8 @@ REVIEW_SCRATCH="$ROOT/.build-dev-review"
 REVIEW_DIR="$ROOT/../apollo-review-swift"
 CONFIG="release"
 SWIFT_FLAGS="-Xswiftc -DAPOLLO_DEV"
-MANIFEST_NAME="DEV-board-appkit-manifest.json"
+MANIFEST_NAME="${APOLLO_DEV_MANIFEST_NAME:-DEV-board-appkit-manifest.json}"
+FINAL_MANIFEST_NAME="${MANIFEST_NAME%.json}.final.json"
 DEVELOPER_ID="Developer ID Application: Marconi Lima (CU544M36UD)"
 
 stop_previous_dev_instance() {
@@ -156,7 +159,8 @@ export M_APP="$APP" M_ROOT="$ROOT" M_REVIEW_DIR="$REVIEW_DIR" M_CONFIG="$CONFIG"
        M_FLAGS="$SWIFT_FLAGS" M_BUNDLE_ID="$BUNDLE_ID" M_SIGNING_ID="$SIGNING_ID" \
        M_PRE_VERIFY_RC="$PRE_VERIFY_RC" M_PRE_VERIFY_OUT="$PRE_VERIFY_OUT" \
        M_UNSIGNED_BIN="$UNSIGNED_BIN" M_UNSIGNED_REVIEW_BIN="$UNSIGNED_REVIEW_BIN" \
-       M_SCRATCH="$SCRATCH"
+       M_SCRATCH="$SCRATCH" M_APP_NAME="$APP_NAME" \
+       M_FINAL_MANIFEST="$OUT_DIR/$FINAL_MANIFEST_NAME"
 python3 - "$MANIFEST_TMP" <<'PY'
 import hashlib, json, os, subprocess, sys, datetime
 
@@ -213,7 +217,7 @@ signature = next((l.split("=", 1)[1] for l in cs.splitlines() if l.startswith("S
 
 manifest = {
     "schema": 1,
-    "app": "Apollo DEV Board AppKit",
+    "app": os.environ["M_APP_NAME"],
     "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
     "bundle_id": os.environ["M_BUNDLE_ID"],
     "helper_bundle_id": sh("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleIdentifier",
@@ -254,7 +258,7 @@ manifest = {
         "note": ("This manifest is sealed into the bundle by re-signing the outer "
                  "app, which rewrites the main executable's signature. The final "
                  "signed SHA-256 and verification are in the sidecar "
-                 "build/dev-board-appkit/DEV-board-appkit-manifest.final.json."),
+                 + os.environ["M_FINAL_MANIFEST"] + "."),
     },
     "launch_arguments": {
         "--board-renderer": "swiftui | appkit",
@@ -277,7 +281,7 @@ codesign --force --options runtime --timestamp \
     --sign "$SIGNING_ID" --entitlements "$SIGNED_ENTS" "$APP" > /dev/null
 
 FINAL_VERIFY_OUT="$(codesign --verify --deep --strict "$APP" 2>&1)" && FINAL_VERIFY_RC=0 || FINAL_VERIFY_RC=$?
-python3 - "$MANIFEST_TMP" "$OUT_DIR/DEV-board-appkit-manifest.final.json" \
+python3 - "$MANIFEST_TMP" "$OUT_DIR/$FINAL_MANIFEST_NAME" \
     "$APP/Contents/MacOS/DayPanel" "$FINAL_VERIFY_RC" "$FINAL_VERIFY_OUT" <<'PY'
 import hashlib, json, sys
 src, dst, exe, rc, out = sys.argv[1:6]
@@ -296,7 +300,7 @@ echo "  ✓ codesign --verify --deep --strict OK ($SIGNING_ID)"
 echo ""
 echo "✓ Built $APP"
 echo "  Manifest: $APP/Contents/Resources/$MANIFEST_NAME"
-echo "  Final:    $OUT_DIR/DEV-board-appkit-manifest.final.json"
+echo "  Final:    $OUT_DIR/$FINAL_MANIFEST_NAME"
 
 if [ "$MODE" = "run" ]; then
     launch_dev

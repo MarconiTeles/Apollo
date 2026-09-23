@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CoreImage
 
 // SwiftUI's `.ultraThinMaterial` is the lightest of the bundled materials,
 // but it still applies a fairly heavy Gaussian blur. NSVisualEffectView
@@ -23,6 +24,12 @@ struct VisualEffectView: NSViewRepresentable {
     /// raio nativo; 0.5 = metade do blur. Escalado sobre o valor-base capturado
     /// uma vez, então é idempotente entre layouts.
     var blurScale:    CGFloat                         = 1.0
+    /// Multiplies the opacity of the material's own fill layer (1 = native).
+    /// Keeps the material; lower values make it more translucent.
+    var tintOpacity:  CGFloat                         = 1.0
+    /// Multiplies the opacity of the material's blend-mode layer (lighten in
+    /// dark, darken in light; 1 = native).
+    var blendOpacity: CGFloat                         = 1.0
     func makeNSView(context: Context) -> NSVisualEffectView {
         // SEMPRE hit-test-transparente: estes materiais são decorativos
         // (backgrounds de barras/painéis). Como NSViews reais dentro do
@@ -31,9 +38,12 @@ struct VisualEffectView: NSViewRepresentable {
         // scroll travado). hitTest nil deixa tudo passar; os controles
         // SwiftUI por cima seguem funcionando normalmente.
         let v: NSVisualEffectView
-        if stripTint {
+        if stripTint || blurScale != 1.0 || tintOpacity != 1.0 || blendOpacity != 1.0 {
             let t = TintlessVisualEffectView()
+            t.stripsTint = stripTint
             t.blurScale = blurScale
+            t.tintOpacity = tintOpacity
+            t.blendOpacity = blendOpacity
             v = t
         } else {
             v = PassthroughVisualEffectView()
@@ -56,7 +66,10 @@ struct VisualEffectView: NSViewRepresentable {
         v.blendingMode = blendingMode
         v.state        = state
         if let tintless = v as? TintlessVisualEffectView {
+            tintless.stripsTint = stripTint
             tintless.blurScale = blurScale
+            tintless.tintOpacity = tintOpacity
+            tintless.blendOpacity = blendOpacity
             tintless.clearTintLayers()
         }
     }
@@ -88,6 +101,70 @@ extension View {
     }
 }
 
+/// Material dos headers de página (e superfícies que devem casar com eles,
+/// como o seletor de listas): material nativo de sidebar — o do painel
+/// lateral —, 30% mais escuro no modo escuro e com o blur do conteúdo por trás reduzido duas
+/// vezes em 60% (raio × 0.4 × 0.4 = 0.16).
+struct AppHeaderMaterial: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        if colorScheme == .dark {
+            // Dark: approved look — native `.sidebar`, blur × 0.16, 30% black.
+            VisualEffectView(material: .sidebar,
+                             blendingMode: .withinWindow,
+                             state: .followsWindowActiveState,
+                             blurScale: 0.16)
+                .overlay(Color.black.opacity(0.3))
+        } else {
+            // Light: the sidebar panel's own material (NSGlassEffectView,
+            // keeps its blur when the window is inactive), pulled to white.
+            PanelGlassMaterial(gain: 0.4, bias: 0.6)
+        }
+    }
+}
+
+/// NSGlassEffectView — the material of the sidebar column — with an RGB
+/// colour matrix (alpha untouched). Decorative only: never hit-tests.
+struct PanelGlassMaterial: NSViewRepresentable {
+    let gain: CGFloat
+    let bias: CGFloat
+
+    func makeNSView(context: Context) -> Host { Host() }
+
+    func updateNSView(_ view: Host, context: Context) {
+        view.update(gain: gain, bias: bias)
+    }
+
+    final class Host: NSView {
+        private let glass = NSGlassEffectView()
+
+        init() {
+            super.init(frame: .zero)
+            wantsLayer = true
+            glass.style = .regular
+            glass.cornerRadius = 0
+            glass.autoresizingMask = [.width, .height]
+            glass.frame = bounds
+            addSubview(glass)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        func update(gain: CGFloat, bias: CGFloat) {
+            guard let matrix = CIFilter(name: "CIColorMatrix") else { return }
+            matrix.setValue(CIVector(x: gain, y: 0, z: 0, w: 0), forKey: "inputRVector")
+            matrix.setValue(CIVector(x: 0, y: gain, z: 0, w: 0), forKey: "inputGVector")
+            matrix.setValue(CIVector(x: 0, y: 0, z: gain, w: 0), forKey: "inputBVector")
+            matrix.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
+            matrix.setValue(CIVector(x: bias, y: bias, z: bias, w: 0), forKey: "inputBiasVector")
+            layer?.filters = [matrix]
+        }
+    }
+}
+
 /// Bottom of the active route's complete header in ContentView coordinates.
 struct HeaderBottomPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat { 52 }
@@ -106,22 +183,10 @@ private struct FinderHeaderMaterialModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.background(alignment: .topLeading) {
             GeometryReader { proxy in
-                // Header = blur nativo MAIS LEVE. `.fullScreenUI` tem o menor
-                // véu-base dos materiais (junto do underWindowBackground);
-                // `.withinWindow` desfoca o conteúdo da janela (os cards atrás)
-                // e `stripTint: true` tira a camada de cor/vibrancy — sobra o
-                // blur mais limpo que o nativo permite.
-                VisualEffectView(material: .fullScreenUI,
-                                 blendingMode: .withinWindow,
-                                 state: .followsWindowActiveState,
-                                 stripTint: true,
-                                 blurScale: 5.0 / 30.0) // raio 5 (nativo = 30)
+                AppHeaderMaterial()
                     // DEV-only attribution switch (`--board-diag=noheadermaterial`);
                     // never a delivery state. Always visible outside APOLLO_DEV.
                     .opacity(BoardDiag.has("noheadermaterial") ? 0 : 1)
-                    // Tint da cor do fundo (paper) por cima do blur — o véu
-                    // que separa o header do conteúdo, na cor do canvas.
-                    .overlay(Editorial.paper.opacity(0.85))
                     .frame(width: proxy.size.width + leadingExtension + trailingExtension,
                            height: proxy.size.height + topExtension + bottomExtension)
                     // Linha do FIM DO HEADER: desenhada no fim REAL do material
@@ -189,6 +254,15 @@ final class TintlessVisualEffectView: NSVisualEffectView {
 
     /// Fator do raio do blur (1.0 = nativo, 0.5 = metade).
     var blurScale: CGFloat = 1.0
+    /// false = mantém a cor/vibrancy nativa do material e só escala o blur.
+    var stripsTint = true
+    /// Com `stripsTint == false`: fator sobre a opacidade das layers de tint
+    /// nativas (1 = nativo). Mesmo material, mais translúcido.
+    var tintOpacity: CGFloat = 1.0
+    /// Idem para a layer com blend mode (lighten no escuro, darken no claro).
+    var blendOpacity: CGFloat = 1.0
+    /// Opacidade nativa de cada layer de tint, para escalar de forma idempotente.
+    private var baseTintOpacity: [ObjectIdentifier: Float] = [:]
     /// Raio nativo capturado na primeira passada, para escalar de forma
     /// idempotente (não encolher a cada layout).
     private var baseBlurRadius: CGFloat?
@@ -234,10 +308,15 @@ final class TintlessVisualEffectView: NSVisualEffectView {
         // Só despeja quando a árvore do material já foi montada pelo AppKit
         // (dump precoce mostrava apenas a backing layer vazia 0x0).
         if !Self.didDumpTree, !(root.sublayers ?? []).isEmpty,
-           root.bounds.width > 0 {
+           root.bounds.width > 0, Self.containsBackdrop(root) {
             Self.didDumpTree = true
             dumpTree(root, depth: 0)
         }
+    }
+
+    private static func containsBackdrop(_ node: CALayer) -> Bool {
+        if NSStringFromClass(type(of: node)).contains("Backdrop") { return true }
+        return (node.sublayers ?? []).contains { containsBackdrop($0) }
     }
 
     /// Dump único da árvore de layers do material — cada linha mostra quem
@@ -251,8 +330,11 @@ final class TintlessVisualEffectView: NSVisualEffectView {
         let fnames = (node.filters ?? []).compactMap {
             ($0 as AnyObject).value(forKey: "name") as? String
         }.joined(separator: ",")
-        NSLog("APOLLO-TREE %@%@ bgA=%.2f op=%.2f contents=%d filters=[%@] size=%.0fx%.0f",
-              pad, cls, bgA, node.opacity, hasContents ? 1 : 0, fnames,
+        let comp = node.compositingFilter.map { String(describing: ($0 as AnyObject).value(forKey: "name") ?? $0) } ?? "-"
+        let rgb = node.backgroundColor.flatMap { NSColor(cgColor: $0)?.usingColorSpace(.sRGB) }
+            .map { String(format: "%.3f,%.3f,%.3f", $0.redComponent, $0.greenComponent, $0.blueComponent) } ?? "-"
+        NSLog("APOLLO-TREE %@%@ bgA=%.2f rgb=%@ comp=%@ op=%.2f contents=%d filters=[%@] size=%.0fx%.0f",
+              pad, cls, bgA, rgb, comp, node.opacity, hasContents ? 1 : 0, fnames,
               node.bounds.width, node.bounds.height)
         for s in node.sublayers ?? [] { dumpTree(s, depth: depth + 1) }
     }
@@ -304,7 +386,7 @@ final class TintlessVisualEffectView: NSVisualEffectView {
                     // a layer tree → novo layout → nova passada → LOOP que
                     // saturava a main thread (scroll "travado" perto de
                     // qualquer material).
-                    if hasNonBlur, !kept.isEmpty { sub.filters = kept }
+                    if stripsTint, hasNonBlur, !kept.isEmpty { sub.filters = kept }
                     // Core Animation COPIA os filtros ao atribuí-los à layer —
                     // mutar o objeto original é no-op. O caminho documentado
                     // pra alterar parâmetro de filtro JÁ ANEXADO é via keyPath
@@ -329,6 +411,15 @@ final class TintlessVisualEffectView: NSVisualEffectView {
                         NSLog("APOLLO-TintlessVEV backdrop scale %@ -> 1.0",
                               String(describing: curScale))
                     }
+                }
+            } else if !stripsTint {
+                // Keep the native tint layer; only scale its opacity.
+                if let bg = sub.backgroundColor, bg.alpha > 0 {
+                    let id = ObjectIdentifier(sub)
+                    if baseTintOpacity[id] == nil { baseTintOpacity[id] = sub.opacity }
+                    let factor = sub.compositingFilter == nil ? tintOpacity : blendOpacity
+                    let target = (baseTintOpacity[id] ?? 1) * Float(factor)
+                    if abs(sub.opacity - target) > 0.001 { sub.opacity = target }
                 }
             } else {
                 // Tint/vibrancy overlay layer — wipe its colour and any

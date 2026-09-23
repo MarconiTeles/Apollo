@@ -95,7 +95,8 @@ enum ApolloDevLaunchOptions {
     static var windowTitle: String {
         isFixtureMode
             ? "Apollo DEV · DADOS DE TESTE (\(boardFixtureCount ?? 0) tarefas)"
-            : "Apollo DEV Board AppKit"
+            : (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+                ?? "Apollo DEV")
     }
 
     /// Builds the offline fixture `AppState`, or `nil` when

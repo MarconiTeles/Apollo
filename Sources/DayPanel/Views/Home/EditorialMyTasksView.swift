@@ -217,13 +217,9 @@ struct EditorialMyTasksView: View {
                     .frame(height: 30)
             }
         }
-        // ContentView keeps this route's usable table canvas 220pt to the
-        // right of the floating sidebar. The material itself must not inherit
-        // that inset: it is one continuous Finder-style band behind the pane.
-        .finderHeaderMaterial(leadingExtension: 220)
+        .finderHeaderMaterial()
         .overlay(alignment: .bottom) {
             Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
-                .padding(.leading, -220)
         }
     }
 

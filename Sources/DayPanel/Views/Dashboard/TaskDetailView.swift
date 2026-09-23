@@ -2667,7 +2667,11 @@ struct SubtaskRow: View, Equatable {
         return "circle"
     }
 
-    var body: some View {
+    // Hosted in its own NSHostingView (TaskCollectionView), outside the
+    // ContentView root, so it opts out of focus rings itself.
+    var body: some View { rowButton.focusEffectDisabled() }
+
+    private var rowButton: some View {
         Button {
             // Two routes depending on the surrounding context:
             //

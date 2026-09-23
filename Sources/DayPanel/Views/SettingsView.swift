@@ -1911,7 +1911,14 @@ struct CUListPickerSheet: View {
         Group {
             if compact { compactBody } else { wideBody }
         }
-        .popupGlass(in: shape)
+        // Same material as the page headers. Only the background is clipped
+        // (a clipped nested ScrollView trips the macOS 26 corner assert).
+        .background(AppHeaderMaterial().clipShape(shape))
+        .overlay {
+            shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.35), radius: 30, y: 14)
         .task { await loadWorkspaces() }
     }
 

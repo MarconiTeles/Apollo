@@ -99,6 +99,10 @@ struct ContentView: View {
     /// The release app still reaches this view exclusively through `init()`.
     private let previewMode: Bool
 
+    /// True only in the main window, whose NSHostingController bridges
+    /// SwiftUI toolbars into the NSWindow toolbar.
+    @Environment(\.apolloUsesWindowToolbar) private var usesWindowToolbar
+
     init() {
         previewMode = false
     }
@@ -149,47 +153,33 @@ struct ContentView: View {
     var body: some View {
         GeometryReader { windowGeo in
             ZStack(alignment: .topTrailing) {
-                // Editorial canvas was painted full-window here
-                // before — with the Editorial+ sidebar's Liquid
-                // Glass pane we want the window genuinely
-                // translucent under the sidebar column, so the
-                // paper fill is moved down into the chrome side
-                // (see the ZStack wrapping `Group` below) and
-                // the sidebar gets `Color.clear` as its surface.
                 Color.clear.ignoresSafeArea()
 
-                // ── Paper backstop ──────────────────────────────
-                // OUTERMOST paper layer, painted full-window edge-
-                // to-edge (right of the 220pt sidebar column) so
-                // it covers the macOS title-bar zone too. Lives
-                // here — NOT nested inside the chrome ZStack —
-                // because nested `.ignoresSafeArea` doesn't always
-                // overflow when the parent ZStack's bounds are
-                // already pinned by its own siblings. As a direct
-                // child of the outermost ZStack with its own
-                // `.ignoresSafeArea()`, the rectangle paints from
-                // window y=0 down (covering the transparent title
-                // bar) and prevents the desktop wallpaper from
-                // bleeding through as a coloured aurora.
-                // Keep the app canvas behind the sidebar. Native Liquid Glass
-                // must refract Apollo's own content, not the desktop wallpaper:
-                // exposing the window here pulled cyan/yellow scenery into the
-                // pane and destroyed the neutral 1:1 sidebar design.
-                Rectangle()
-                    .fill(Editorial.paper)
-                    .ignoresSafeArea()
-
-                // Editorial+ redesign: the sidebar floats on TOP of
-                // the chrome (ZStack overlay) instead of sharing an
-                // HStack column with it. This lets the dashboard /
-                // board content extend EDGE-TO-EDGE and pass behind
-                // the Liquid Glass pane — through the translucent
-                // material the user sees the page's actual content
-                // (cards, paper, toolbar) instead of just the
-                // desktop. The toolbar's pill cluster carries a
-                // leading inset equal to the sidebar's column width
-                // so the trailing buttons aren't hidden under it.
-                ZStack(alignment: .topLeading) {
+                // Finder-style layout (macOS 27): the system sidebar column
+                // draws its own background, edges, corners and window
+                // buttons. The chrome lives in the detail column and starts
+                // after it, so nothing scrolls underneath the sidebar.
+                NavigationSplitView {
+                    EditorialSidebar(
+                        active: $sidebarRoute,
+                        listFilter: $sidebarListFilter,
+                        onOpenPalette: {
+                            NSApp.sendAction(Selector(("toggleCommandPalette:")),
+                                             to: nil, from: nil)
+                        },
+                        onOpenSettings: { showSettings = true }
+                    )
+                    .environmentObject(appState)
+                    .allowsHitTesting(!anyPopupOpen)
+                    .frame(width: EditorialSidebar.columnWidth)
+                    .navigationSplitViewColumnWidth(min: EditorialSidebar.columnWidth,
+                                                    ideal: EditorialSidebar.columnWidth,
+                                                    max: EditorialSidebar.columnWidth)
+                    .toolbar(removing: .sidebarToggle)
+                    // Each split-view column is hosted separately; the root
+                    // modifier doesn't reach it. No focus rings here either.
+                    .focusEffectDisabled()
+                } detail: {
 
                 // Layers 1–4 below are the "dashboard" — everything
                 // sitting under the popup z-stack. We wrap them in
@@ -238,7 +228,6 @@ struct ContentView: View {
                     if sidebarRoute != .board && sidebarRoute != .tasks
                         && sidebarRoute != .today && sidebarRoute != .assignedComments {
                         FrostedStrip(barHeight: 52, fadeExtent: 60)
-                            .padding(.leading, 220)
                     }
 
                     // 3. Task filter bar — above the strip so
@@ -282,52 +271,19 @@ struct ContentView: View {
                             }
                             .frame(maxHeight: .infinity, alignment: .top)
                         }
-                        // Match `dashboardSplit`'s 220pt leading
-                        // inset so the GeometryReader sees the same
-                        // rect the timeline+task split occupies —
-                        // otherwise the filter bar's timelineW math
-                        // (based on the full window) drifts and the
-                        // pills land over the timeline column.
-                        .padding(.leading, 220)
                     }
 
-                    // 4. Toolbar — TOPMOST layer; pills stay
-                    //    sharp / unblurred on top of the
-                    //    FrostedStrip below them. Height
-                    //    52pt — matches the title-bar
-                    //    height bumped by the empty
-                    //    NSToolbar in AppDelegate, so macOS
-                    //    centres the traffic-light buttons
-                    //    on the same Y as our pills.
-                    toolbar
-                        // Inset the toolbar's pill cluster by the
-                        // sidebar's column width so "+ Evento" /
-                        // "Hoje" / list picker etc. aren't hidden
-                        // under the floating Liquid Glass pane.
-                        // The WindowDragArea below spans the FULL
-                        // toolbar width so the title-bar region
-                        // over the sidebar still drags the window
-                        // (and the macOS traffic lights stay
-                        // clickable via the sidebar's 44pt inset).
-                        .padding(.leading, 220)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: 52, alignment: .center)
-                        // Make the toolbar band drag the window.
-                        // `WindowDragArea` is a transparent NSView
-                        // whose `mouseDownCanMoveWindow = true`
-                        // tells AppKit "treat clicks here as
-                        // window drag." Sits as a background so
-                        // the interactive pills (Evento / Hoje /
-                        // ListPicker / Filtros / Search / …)
-                        // catch their own clicks first; only the
-                        // gaps between them — which were
-                        // previously eating mouseDown into the
-                        // dashboard or doing nothing — now drag
-                        // the window. Fixes the symptom where
-                        // only the right portion of the bar
-                        // happened to drag (it had less SwiftUI
-                        // chrome covering the title-bar region).
-                        .background(WindowDragArea())
+                    // 4. In-view toolbar — only for hosts without a window
+                    //    toolbar (menu-bar popover, previews, Studio). The
+                    //    main window uses the native toolbar (`windowToolbar`).
+                    if !usesWindowToolbar {
+                        toolbar
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(height: 52, alignment: .center)
+                            // Transparent NSView with `mouseDownCanMoveWindow`:
+                            // gaps between the controls drag the window.
+                            .background(WindowDragArea())
+                    }
                 }
                 .allowsHitTesting(!anyPopupOpen)
 
@@ -347,25 +303,32 @@ struct ContentView: View {
                     }
                     .allowsHitTesting(false)
                 }  // close inner ZStack(alignment: .top) — chrome
-
-                    // Sidebar overlay — fixed 220pt column at the
-                    // leading edge of the ZStack. Underneath the
-                    // Liquid Glass material it pulls vibrancy from
-                    // whatever paints behind in the chrome ZStack
-                    // (Editorial.paper + toolbar + the active main
-                    // view), so content visibly flows under it.
-                    EditorialSidebar(
-                        active: $sidebarRoute,
-                        listFilter: $sidebarListFilter,
-                        onOpenPalette: {
-                            NSApp.sendAction(Selector(("toggleCommandPalette:")),
-                                             to: nil, from: nil)
-                        },
-                        onOpenSettings: { showSettings = true }
-                    )
-                    .environmentObject(appState)
-                    .allowsHitTesting(!anyPopupOpen)
-                }  // close outer ZStack — chrome | sidebar overlay
+                // Paper covers the detail column up to the window's top edge
+                // (under the transparent title bar), never the sidebar.
+                .background {
+                    Rectangle()
+                        .fill(Editorial.paper)
+                        .ignoresSafeArea()
+                }
+                .ignoresSafeArea(.container, edges: .top)
+                .focusEffectDisabled()
+                .toolbar {
+                    if usesWindowToolbar { windowToolbar }
+                }
+                .navigationTitle(usesWindowToolbar ? pageTitle : "")
+                // Toasts drop in below the head bar whichever toolbar is used.
+                .onChange(of: appState.toastQueue) { _, queue in
+                    showNextToast(from: queue)
+                }
+                // Invisible ⌘R sync trigger (zero-size background).
+                .background(
+                    Button { Task { await appState.sync() } } label: { EmptyView() }
+                        .buttonStyle(.plain)
+                        .opacity(0)
+                        .accessibilityHidden(true)
+                        .keyboardShortcut("r", modifiers: .command)
+                )
+                }  // close NavigationSplitView — sidebar | chrome
 
                 // 5. Event detail overlay — scales up from the tapped pill
                 //    with a spring-bounce. Explicit `.zIndex(1000)` so
@@ -823,6 +786,8 @@ struct ContentView: View {
         )
         // Push the toolbar up into the macOS title bar (alongside traffic lights)
         .ignoresSafeArea(.container, edges: .top)
+        // No focus rings anywhere in Apollo (propagates to every descendant).
+        .focusEffectDisabled()
         // (Specular branco no topo REMOVIDO — era resquício do
         // Liquid Glass antigo e lia como uma "sombra branca" sobre
         // o canvas escuro do Studio Glass. Profundidade agora vem
@@ -1338,7 +1303,6 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .regular))
             }
         }
-        .buttonStyle(TBButtonStyle())
         .focusEffectDisabled()
         .help("Lista ClickUp atual: \(name) — clique para trocar")
     }
@@ -1386,154 +1350,223 @@ struct ContentView: View {
 
     // MARK: - Glass Toolbar
 
-    private var toolbar: some View {
-        // Type-led toolbar with no independent surface or divider. It
-        // remains visually continuous with the page underneath instead
-        // of reading as a detached header band.
-        HStack(spacing: 26) {
+    // MARK: Toolbar actions (shared by the window toolbar and the in-view bar)
 
-            // (Apollo brand mark removed — leading slot is now
-            //  empty so "+ Evento" sits right at the toolbar's
-            //  leading edge.)
+    private func openNewEvent() {
+        let rect = MouseOriginCapture.currentClickRectInMainWindow()
+        if rect != .zero { newEventOrigin = rect }
+        showNewEvent = true
+    }
 
-            // + Evento
-            Button { showNewEvent = true } label: {
-                Text("+ Evento")
-            }
-            .buttonStyle(TBButtonStyle())
-            .focusEffectDisabled()
-            .help("Novo evento")
-            .captureFrame($newEventOrigin)
-            .padding(.leading, 10)
+    private func openNewTask() {
+        let rect = MouseOriginCapture.currentClickRectInMainWindow()
+        if rect != .zero { newTaskOrigin = rect }
+        showNewTask = true
+    }
 
-            Button { showNewTask = true } label: {
-                Text("+ Tarefa")
-            }
-            .buttonStyle(TBButtonStyle())
-            .focusEffectDisabled()
-            .help("Nova tarefa")
-            .accessibilityIdentifier("newTaskButton")
-            .captureFrame($newTaskOrigin)
+    private func openSearch() {
+        NSApp.sendAction(Selector(("toggleCommandPalette:")), to: nil, from: nil)
+    }
 
-            // Hoje — jump to today + resync
-            Button {
-                dateDirection = appState.selectedDate < Date() ? 1 : -1
-                withAnimation(.spring(duration: 0.35)) {
-                    appState.selectedDate = Date()
+    private func toggleNotifications() {
+        let rect = MouseOriginCapture.currentClickRectInMainWindow()
+        notifsOpenPoint = rect == .zero
+            ? CGPoint(x: notifsOrigin.midX, y: notifsOrigin.midY)
+            : CGPoint(x: rect.midX, y: rect.midY)
+        withAnimation(.spring(duration: 0.55, bounce: 0.13)) {
+            showNotifs.toggle()
+        }
+    }
+
+    private func openSettings() {
+        let rect = MouseOriginCapture.currentClickRectInMainWindow()
+        if rect != .zero { settingsOrigin = rect }
+        showSettings = true
+    }
+
+    /// The toast is not painted over the bell — it drops in BELOW the head
+    /// bar (see the top-trailing overlay in `body`). This only feeds it.
+    private func showNextToast(from queue: [AppNotification]) {
+        guard let next = queue.last else { return }
+        bellPillTask?.cancel()
+        withAnimation(.spring(duration: 0.4, bounce: 0.22)) {
+            bellPillNotif = next
+        }
+        bellPillTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_500_000_000)
+            if !Task.isCancelled { collapseBellPill() }
+        }
+        Task { @MainActor in appState.toastQueue.removeAll() }
+    }
+
+    // MARK: Window toolbar (native macOS 27 Liquid Glass, Finder pattern)
+
+    /// Icon-only items on the system toolbar: the system draws the glass,
+    /// the shared capsules per group, sizes, hover and pressed states.
+    /// Filters live in the sidebar's FILTROS section, so there is no
+    /// second entry point for them here.
+    @ToolbarContentBuilder
+    private var windowToolbar: some ToolbarContent {
+        // Finder layout: creation actions at the leading edge, followed by
+        // the page title (`navigationTitle`); everything else is anchored
+        // to the trailing edge. Each group draws its own glass capsule
+        // (`ToolbarGlassGroup`) so dark mode can use a darker glass than the
+        // system's shared toolbar background allows.
+        ToolbarItem(placement: .navigation) {
+            ToolbarGlassGroup {
+                Button(action: openNewEvent) {
+                    Label("Novo evento", systemImage: "calendar.badge.plus")
                 }
-                appState.todayJumpToken &+= 1
-                Task { await appState.sync() }
-            } label: {
-                Text("Hoje")
+                .help("Novo evento")
+                Button(action: openNewTask) {
+                    Label("Nova tarefa", systemImage: "square.and.pencil")
+                }
+                .help("Nova tarefa")
+                .accessibilityIdentifier("newTaskButton")
             }
-            .buttonStyle(TBButtonStyle())
-            .focusEffectDisabled()
+            .toolbarControl(disabled: anyPopupOpen)
+        }
+        .sharedBackgroundVisibility(.hidden)
 
-            // {Active list} ⌄ — opens the same picker Settings uses
-            if appState.clickUpAuthService.isConnected {
-                listPickerPill
+        ToolbarSpacer(.flexible)
+
+        if appState.clickUpAuthService.isConnected {
+            ToolbarItem {
+                ToolbarGlassGroup { listPickerToolbarButton }
+                    .toolbarControl(disabled: anyPopupOpen)
             }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.fixed)
+        }
+
+        ToolbarItem {
+            ToolbarGlassGroup {
+                Button(action: openSearch) {
+                    Label("Buscar", systemImage: "magnifyingglass")
+                }
+                .help("Buscar (⌘K)")
+                Button(action: toggleNotifications) {
+                    Label("Notificações", systemImage: "bell")
+                        .overlay(alignment: .topTrailing) {
+                            if appState.unreadNotifications > 0 {
+                                ToolbarBadge(count: appState.unreadNotifications)
+                            }
+                        }
+                }
+                .help("Notificações")
+                Button(action: openSettings) {
+                    Label("Ajustes", systemImage: "gearshape")
+                }
+                .help("Ajustes")
+            }
+            .toolbarControl(disabled: anyPopupOpen)
+        }
+        .sharedBackgroundVisibility(.hidden)
+
+        if sidebarRoute == .tasks || sidebarRoute == .board {
+            ToolbarSpacer(.fixed)
+            // Keeps its own accent capsule and "Minhas tarefas" label.
+            ToolbarItem {
+                MyTasksFilterToggle(filters: $appState.taskFilters,
+                                    auth: appState.clickUpAuthService)
+                    .toolbarControl(disabled: anyPopupOpen)
+            }
+            .sharedBackgroundVisibility(.hidden)
+        }
+    }
+
+    /// Page title shown in the window toolbar, next to the leading items.
+    private var pageTitle: String {
+        switch sidebarRoute {
+        case .today: "Inbox"
+        case .tasks: "Tarefas"
+        case .board: "Quadro"
+        case .assignedComments: "Comentários"
+        case .done: "Concluídas"
+        case .ai: "Apollo"
+        }
+    }
+
+    /// Finder view-picker style: glyph + small chevron, opening the list
+    /// picker sheet. The current list name lives in the tooltip.
+    private var listPickerToolbarButton: some View {
+        let _ = listPickerToken
+        let name = KeychainHelper.load(for: KeychainHelper.Keys.clickupListName)
+            ?? "Lista"
+        return Button {
+            let rect = MouseOriginCapture.currentClickRectInMainWindow()
+            if rect != .zero { listPickerOrigin = rect }
+            showListPicker = true
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "list.bullet.rectangle")
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .padding(.horizontal, 6)
+        }
+        .help("Lista ClickUp atual: \(name) — clique para trocar")
+        .accessibilityLabel("Lista: \(name)")
+    }
+
+    // MARK: In-view toolbar (hosts without a window toolbar: menu-bar
+    // popover, previews and Studio)
+
+    private var toolbar: some View {
+        HStack(spacing: 16) {
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button("+ Evento", action: openNewEvent)
+                        .help("Novo evento")
+                        .captureFrame($newEventOrigin)
+                    Button("+ Tarefa", action: openNewTask)
+                        .help("Nova tarefa")
+                        .captureFrame($newTaskOrigin)
+                    if appState.clickUpAuthService.isConnected {
+                        listPickerPill
+                    }
+                }
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
 
             Spacer(minLength: 0)
 
-            // (Filtros button removed from the toolbar — filters
-            //  now live in the sidebar's FILTROS section,
-            //  collapsibles per category. No need to surface a
-            //  second entry point in the top bar.)
-
-            // Search opens the same command palette as the ⌘K shortcut.
-            Button {
-                NSApp.sendAction(Selector(("toggleCommandPalette:")), to: nil, from: nil)
-            } label: {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 15, weight: .regular))
-            }
-            .buttonStyle(TBIconButtonStyle())
-            .focusEffectDisabled()
-            .help("Buscar (⌘K)")
-            .accessibilityLabel("Buscar")
-
-            // Apollo IA — REMOVIDO desta build (entry point da toolbar
-            // retirado a pedido). O overlay/serviço continuam no código, mas
-            // sem gatilho de UI `showAIChat` nunca vira true. Reverter =
-            // restaurar este botão.
-
-            // 🔔 — notifications; cinnabar count badge (prototype)
-            Button {
-                let rect = MouseOriginCapture.currentClickRectInMainWindow()
-                notifsOpenPoint = rect == .zero
-                    ? CGPoint(x: notifsOrigin.midX, y: notifsOrigin.midY)
-                    : CGPoint(x: rect.midX, y: rect.midY)
-                withAnimation(.spring(duration: 0.55, bounce: 0.13)) {
-                    showNotifs.toggle()
-                }
-            } label: {
-                Image(systemName: "bell")
-                    .font(.system(size: 15, weight: .regular))
-                    .overlay(alignment: .topTrailing) {
-                        if appState.unreadNotifications > 0 {
-                            TBBadge(count: appState.unreadNotifications)
-                        }
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button(action: openSearch) { Image(systemName: "magnifyingglass") }
+                        .help("Buscar (⌘K)")
+                        .accessibilityLabel("Buscar")
+                    Button(action: toggleNotifications) {
+                        Image(systemName: "bell")
+                            .overlay(alignment: .topTrailing) {
+                                if appState.unreadNotifications > 0 {
+                                    TBBadge(count: appState.unreadNotifications)
+                                }
+                            }
                     }
-            }
-            .buttonStyle(TBIconButtonStyle())
-            .focusEffectDisabled()
-            .help("Notificações")
-            .captureFrame($notifsOrigin)
-            // The toast is no longer painted over the bell — it
-            // drops in BELOW the head bar (see the top-trailing
-            // overlay in `body`). This handler only feeds it.
-            .onChange(of: appState.toastQueue) { _, queue in
-                guard let next = queue.last else { return }
-                bellPillTask?.cancel()
-                withAnimation(.spring(duration: 0.4, bounce: 0.22)) {
-                    bellPillNotif = next
+                    .help("Notificações")
+                    .captureFrame($notifsOrigin)
+                    Button(action: openSettings) { Image(systemName: "gearshape") }
+                        .help("Ajustes")
+                        .captureFrame($settingsOrigin)
                 }
-                bellPillTask = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 4_500_000_000)
-                    if !Task.isCancelled { collapseBellPill() }
-                }
-                Task { @MainActor in appState.toastQueue.removeAll() }
+                .buttonBorderShape(.circle)
             }
-
-            // ⚙ — settings
-            Button { showSettings = true } label: {
-                Image(systemName: "gear")
-                    .font(.system(size: 15, weight: .regular))
-            }
-            .buttonStyle(TBIconButtonStyle())
-            .focusEffectDisabled()
-            .captureFrame($settingsOrigin)
+            .buttonStyle(.glass)
+            .controlSize(.large)
 
             if sidebarRoute == .tasks || sidebarRoute == .board {
                 Rectangle()
                     .fill(Editorial.rule)
                     .frame(width: 1, height: 22)
-                    .padding(.horizontal, -8)
                 MyTasksFilterToggle(filters: $appState.taskFilters, auth: appState.clickUpAuthService)
-                    .padding(.leading, -11)
+                    .padding(.leading, -5)
             }
         }
-        // Leading kept tight (14pt) so the Apollo brand mark sits
-        // right next to the sidebar's trailing edge. The 220pt
-        // sidebar-clear inset is applied OUTSIDE this HStack
-        // (see `.padding(.leading, 220)` on the toolbar instance
-        // in `body`), so we don't need the legacy 103pt traffic-
-        // light gap here — the sidebar already covers that zone
-        // with its own 44pt traffic-light inset.
-        .padding(.leading, 14)
+        .focusEffectDisabled()
+        .padding(.leading, 20)
         .padding(.trailing, 12)
-        // Invisible ⌘R sync trigger. Lives in a zero-impact
-        // BACKGROUND (not as an HStack child) — as a sibling it
-        // inherited the HStack's 26pt spacing, leaving a big
-        // dead gap to the right of the gear.
-        .background(
-            Button { Task { await appState.sync() } } label: { EmptyView() }
-                .buttonStyle(.plain)
-                .opacity(0)
-                .accessibilityHidden(true)
-                .keyboardShortcut("r", modifiers: .command)
-        )
         .frame(maxHeight: .infinity, alignment: .center)
     }
 
@@ -1546,37 +1579,29 @@ struct ContentView: View {
         //   .board → kanban (EditorialBoardView)
         //   anything else → the legacy split (timeline | tasks)
         //
-        // Both surfaces start with a 220pt leading inset so their
-        // FIRST column / card lines up where it did in the
-        // pre-overlay HStack era (right of the sidebar). Content
-        // that scrolls past that inset slides UNDER the glass and
-        // shows through the translucent material — i.e. the
-        // sidebar reveals content as you scroll past it, but
-        // nothing renders behind-the-glass at rest.
+        // Every surface lives in the detail column, which starts at the
+        // sidebar's trailing edge, so none needs a sidebar inset.
         Group {
             switch sidebarRoute {
             case .board:
                 EditorialBoardView()
                     .environmentObject(appState)
-                    // SEM leading inset: o board agora é full-width
-                    // e o ScrollView horizontal desenha até x=0 —
-                    // os cards arrastados/rolados pra esquerda
-                    // passam POR TRÁS do pane flutuante de vidro
-                    // da sidebar. O recuo visual do conteúdo em
-                    // repouso vem do `contentMargins` interno do
-                    // EditorialBoardView. The 52pt toolbar reserve now lives
+                    // The board keeps drawing edge-to-edge UNDER the system
+                    // sidebar: its view extends into the column's leading
+                    // safe area, and the resting inset comes from the
+                    // `contentMargins` (258pt) inside EditorialBoardView.
+                    .ignoresSafeArea(.container, edges: .leading)
+                    // The 52pt toolbar reserve now lives
                     // inside the board header so one continuous `.titlebar`
                     // material backs both regions without changing geometry.
             case .tasks:
                 EditorialMyTasksView()
                     .environmentObject(appState)
-                    .padding(.leading, 220)
             case .today:
                 editorialHomeView
             case .assignedComments:
                 AssignedCommentsView()
                     .environmentObject(appState)
-                    .padding(.leading, 220)
             default:
                 dashboardSplit
             }
@@ -1613,8 +1638,7 @@ struct ContentView: View {
             EditorialHomeHeader()
                 .environmentObject(appState)
                 .padding(.top, 52)        // clear the toolbar pills
-                .padding(.leading, 220)   // clear the glass sidebar
-                .finderHeaderMaterial(leadingExtension: 220)
+                .finderHeaderMaterial()
                 .overlay(alignment: .bottom) {
                     Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
                 }
@@ -1640,16 +1664,12 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
             }
         }
-        .padding(.leading, 220)
     }
 
     /// The original two-column dashboard (timeline + task list).
     /// Extracted so `mainContent` can switch between this and the
     /// kanban without indenting the split layout under another
-    /// branch. Carries a `220pt` leading inset because the sidebar
-    /// now overlays the chrome — without the inset the timeline's
-    /// event titles would slide BEHIND the Liquid Glass pane and
-    /// the leading half of each title would be occluded.
+    /// branch.
     private var dashboardSplit: some View {
         dashboardSplitBody(skipsLegacyHeaderInsets: false)
     }
@@ -1687,7 +1707,6 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
             }
         }
-        .padding(.leading, 220)
     }
 
 }
@@ -1983,3 +2002,66 @@ private struct IntelligenceEdgeGlow: View {
         .preferredColorScheme(.dark)
 }
 #endif
+
+private extension View {
+    /// Window-toolbar controls: never show the keyboard focus ring, and stay
+    /// inert while an Apollo popup is open.
+    func toolbarControl(disabled: Bool) -> some View {
+        focusable(false)
+            .focusEffectDisabled()
+            .disabled(disabled)
+    }
+}
+
+/// One toolbar group on a Liquid Glass capsule, sized like the system's
+/// shared toolbar backgrounds (36pt tall, ~36pt per icon), 35% darker in
+/// dark mode.
+private struct ToolbarGlassGroup<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        GlassEffectContainer {
+            HStack(spacing: 0) { content }
+                .buttonStyle(ToolbarGlassButtonStyle())
+                .labelStyle(.iconOnly)
+                .padding(.horizontal, 2)
+                .frame(height: 36)
+                // Dark mode: a 40% black layer between the glass and the
+                // icons makes the capsule read ≥35% less whitish (measured).
+                .background {
+                    if colorScheme == .dark {
+                        Capsule().fill(Color.black.opacity(0.4))
+                    }
+                }
+                .glassEffect(.regular.interactive(), in: .capsule)
+        }
+    }
+}
+
+/// Icon cell inside a `ToolbarGlassGroup`.
+private struct ToolbarGlassButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 15, weight: .regular))
+            .foregroundStyle(.primary)
+            .frame(minWidth: 36, minHeight: 36)
+            .contentShape(Rectangle())
+            .opacity(configuration.isPressed ? 0.55 : 1)
+    }
+}
+
+/// Count badge on a toolbar icon (the system `.badge` needs the shared
+/// toolbar background, which the custom glass groups replace).
+private struct ToolbarBadge: View {
+    let count: Int
+    var body: some View {
+        Text("\(min(count, 99))")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 3.5)
+            .frame(minWidth: 14, minHeight: 14)
+            .background(Capsule().fill(Color.red))
+            .offset(x: 7, y: -7)
+    }
+}

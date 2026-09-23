@@ -16,14 +16,20 @@ struct MyTasksFilterToggle: View {
     })
 
     var body: some View {
-        Toggle("Minhas tarefas", isOn: Binding(
-            get: { filters.isMine(userId: auth.userId) },
-            set: { filters.setMine($0, userId: auth.userId) }
-        ))
-        .toggleStyle(.switch)
-        .tint(Self.switchTint)
-        .environment(\.colorScheme, .light)
-        .brightness(filters.isMine(userId: auth.userId) ? 0.22 : 0)
+        // Explicit Text + hidden toggle label: a window toolbar hides the
+        // labels of its controls, and this pill must always show its name.
+        HStack(spacing: 8) {
+            Text("Minhas tarefas")
+            Toggle("Minhas tarefas", isOn: Binding(
+                get: { filters.isMine(userId: auth.userId) },
+                set: { filters.setMine($0, userId: auth.userId) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .tint(Self.switchTint)
+            .environment(\.colorScheme, .light)
+            .brightness(filters.isMine(userId: auth.userId) ? 0.22 : 0)
+        }
         .foregroundStyle(.white)
         .controlSize(.small)
         .font(Editorial.sans(12.5, .medium))
@@ -40,3 +46,4 @@ struct MyTasksFilterToggle: View {
         }
     }
 }
+
