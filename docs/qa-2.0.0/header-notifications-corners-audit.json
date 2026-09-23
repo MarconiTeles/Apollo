@@ -1,0 +1,20 @@
+{
+  "base_commit": "08e43d2de6bdfd6137e68a4d39c94d421c5d85f7",
+  "build": "./build.sh release passed",
+  "signature": "codesign --verify --deep --strict passed; required entitlements verified",
+  "sources_sha256": {
+    "Sources/DayPanel/Views/Common/MyTasksFilterToggle.swift": "468efdbb5f2372780361f87856b64d060e11dfc5da716a161b9713a21c6d3a7a",
+    "Sources/DayPanel/Views/Common/VisualEffectView.swift": "e2ddc753d72eb13823fb4df1d5aec8ea361fa46b6f9588e0b18f454887f8e392",
+    "Sources/DayPanel/Views/ContentView.swift": "e76314b9fecf3a4eacc8ba10a5ea3af103e5fd519b3dd1a9454ee4b86127e322",
+    "Sources/DayPanel/Views/Home/EditorialSidebar.swift": "e6e09514a45fe7375f9f49f6515edd84f1a312df96655ba2ba1ccfa1e2c2db80",
+    "Sources/DayPanel/Views/Notifications/BellPill.swift": "cf4a004ed25dcff3778245df22c52e00639a5f9c7d23dca0678635b4474e8a9b"
+  },
+  "binary_sha256": "ac007084c899c5ce357d379ac4c66160cb77c57d5c8ecbe07ac1a0ad387cdf52",
+  "visual_fixture": "Exact BellPill and VisualEffectView source; isolated fixture models; light/dark; normal/upload; settled gaps 12 points at header heights 52,82,99",
+  "native_window_radius_macos_27": 16,
+  "local_app_pid": 80888,
+  "actual_window_capture": "header-notifications-corners-final-window.png",
+  "published": false,
+  "notarized": false,
+  "actual_window_inspection": "Opened and inspected authenticated app screenshot: sidebar, neutral labels/counts, accent icons, magnifier and native OFF switch present. No toast visible in actual-window capture; toast verification is from the exact-source isolated probe."
+}

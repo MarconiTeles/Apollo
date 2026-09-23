@@ -1,0 +1,11 @@
+{
+  "base_commit": "08e43d2de6bdfd6137e68a4d39c94d421c5d85f7",
+  "build": "./build.sh release passed",
+  "signature": "codesign --verify --deep --strict passed; required entitlements verified",
+  "source_sha256": "468efdbb5f2372780361f87856b64d060e11dfc5da716a161b9713a21c6d3a7a",
+  "binary_sha256": "9219248a91636480b55108ea2dea8c607c534ed3fdf436a94faba5653f149bce",
+  "visual_checks": "Actual source in isolated native process, SDK/deployment 14.0; purple, blue, green; light/dark; OFF/ON; four native NSSwitch states [0,1,0,1]; all screenshots inspected",
+  "enabled_brightness": 0.22,
+  "published": false,
+  "notarized": false
+}

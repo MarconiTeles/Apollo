@@ -88,6 +88,14 @@ extension View {
     }
 }
 
+/// Bottom of the active route's complete header in ContentView coordinates.
+struct HeaderBottomPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat { 52 }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private struct FinderHeaderMaterialModifier: ViewModifier {
     let leadingExtension: CGFloat
     let trailingExtension: CGFloat
@@ -122,6 +130,8 @@ private struct FinderHeaderMaterialModifier: ViewModifier {
                         }
                     }
                     .offset(x: -leadingExtension, y: -topExtension)
+                    .preference(key: HeaderBottomPreferenceKey.self,
+                                value: proxy.frame(in: .named("appWindow")).maxY + bottomExtension)
             }
         }
     }

@@ -46,6 +46,7 @@ struct ContentView: View {
     /// notification arrives. Auto-collapses after a few seconds.
     @State private var bellPillNotif:  AppNotification?
     @State private var bellPillTask:   Task<Void, Never>?
+    @State private var headerBottom: CGFloat = 52
     /// Upload pills can be dismissed independently without cancelling the
     /// transfer. The id only lives for this ContentView session.
     @State private var dismissedUploadPillIDs: Set<UUID> = []
@@ -678,7 +679,7 @@ struct ContentView: View {
                         .zIndex(1200)
                 }
 
-                // Toast — drops in just BELOW the 52pt head bar,
+                // Toast — sits below the complete route header,
                 // top-right, as its own surface (no longer painted
                 // over the bell). Suppressed during welcome /
                 // onboarding so the intro stays clean.
@@ -693,7 +694,7 @@ struct ContentView: View {
                                            _ = dismissedUploadPillIDs.insert(upload.id)
                                        }
                                    })
-                        .padding(.top, 52 + 12)
+                        .padding(.top, max(52, headerBottom) + 12)
                         .padding(.trailing, 18)
                         .transition(.asymmetric(
                             insertion: .offset(y: -8).combined(with: .opacity),
@@ -707,7 +708,7 @@ struct ContentView: View {
                                  showNotifs = true
                              },
                              onDismiss: { collapseBellPill() })
-                        .padding(.top, 52 + 12)
+                        .padding(.top, max(52, headerBottom) + 12)
                         .padding(.trailing, 18)
                         // The outer ZStack is already top-trailing. Do not
                         // inflate this toast to a full-window hit-test layer.
@@ -726,6 +727,7 @@ struct ContentView: View {
                 }
             }
             .coordinateSpace(name: "appWindow")
+            .onPreferenceChange(HeaderBottomPreferenceKey.self) { headerBottom = $0 }
             .environment(\.windowSize, windowGeo.size)
             // When the popup closes, defer-reset the openStyle
             // back to default so the next surface that opens a

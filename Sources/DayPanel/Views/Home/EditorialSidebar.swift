@@ -34,6 +34,8 @@ enum SidebarRoute: Hashable {
 struct EditorialSidebar: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.windowSize) private var windowSize
+    @State private var windowCornerRadius: CGFloat = 16
 
     /// Local selection. The sidebar can drive routing once the
     /// dashboard body migrates; for now it's purely visual.
@@ -65,7 +67,7 @@ struct EditorialSidebar: View {
         //   A  glassEffect .regular tintado accent@0.08
         //   B  ultraThinMaterial + fio de luz
         //   C  panelDeep sólido + hairline (Reduce Transparency)
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: windowCornerRadius, style: .continuous)
         VStack(spacing: 0) {
             // 44pt native traffic-light lane + 30pt breathing room before
             // the first section label.
@@ -84,6 +86,21 @@ struct EditorialSidebar: View {
             userFooter
         }
         .frame(width: 220)
+        .background {
+            if #available(macOS 27.0, *),
+               ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 {
+                Color.clear
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        let frame = proxy.frame(in: .named("appWindow"))
+                        // Query the whole window, not the inset sidebar: the
+                        // requested radius is equal, rather than concentric.
+                        let windowFrame = CGRect(x: -frame.minX, y: -frame.minY,
+                                                 width: windowSize.width,
+                                                 height: windowSize.height)
+                        return proxy.concentricCornerRadii(in: windowFrame)?.topLeading ?? 16
+                    } action: { windowCornerRadius = $0 }
+            }
+        }
         // Keep the sidebar on its dedicated, direct glass path. Wrapping the
         // effect in the shared floating-panel builder inserted an additional
         // view-builder layer that weakened the live backdrop capture and made
@@ -113,7 +130,7 @@ struct EditorialSidebar: View {
                           parent: "app.root",
                           properties: [
                             .init(kind: .width, title: "Largura", value: 220),
-                            .init(kind: .cornerRadius, title: "Raio", value: 16),
+                            .init(kind: .cornerRadius, title: "Raio", value: Double(windowCornerRadius)),
                             .init(kind: .shadowRadius, title: "Sombra", value: 18),
                             .init(kind: .material, title: "Material", token: "Materials.sidebar"),
                           ])

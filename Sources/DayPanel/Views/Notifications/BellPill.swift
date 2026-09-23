@@ -1,15 +1,8 @@
 import SwiftUI
 
-// Dynamic-Island-style notification surface anchored to the bell button.
-// Lives as an overlay aligned to the bell's trailing edge so it can grow
-// LEFTWARD across the toolbar without affecting layout (the bell stays
-// in place; the pill just paints over the gap to its left).
-//
-// The trailing edge reserves space for the bell icon itself.
+// Notification surfaces below the complete route header.
 
 struct BellPill: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     let notification: AppNotification
     let onTap:        () -> Void
     let onDismiss:    () -> Void
@@ -64,16 +57,9 @@ struct BellPill: View {
         .padding(.vertical, 16)
         .frame(minHeight: 58)
         .fixedSize(horizontal: true, vertical: false)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
-                                 style: .continuous),
-            tint: Editorial.notificationGlassTint(for: colorScheme),
-            // O material acompanha o tema; a cor semântica fica apenas no dot.
-            // Não usamos fill sob o vidro porque isso achata a refração nativa.
-            tintOpacity: Editorial.notificationGlassTintOpacity,
-            interactive: false,
-            lightweight: true
-        )
+        .officialHeaderMaterial(in: RoundedRectangle(
+            cornerRadius: Editorial.notificationCapsuleRadius, style: .continuous
+        ))
         .contentShape(RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
                                        style: .continuous))
         .capsuleHoverLift(tint: toneColor, scaleX: 1.008, scaleY: 1.025)
@@ -85,8 +71,6 @@ struct BellPill: View {
 /// transferred. The value is fed by `AppState.uploadActivities`, whose progress
 /// comes from URLSession's byte counters — no timer or simulated percentage.
 struct BellUploadPill: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     let upload: AppState.UploadActivity
     let onTap: () -> Void
     let onDismiss: () -> Void
@@ -145,14 +129,9 @@ struct BellUploadPill: View {
         .padding(.trailing, 14)
         .padding(.vertical, 14)
         .frame(minHeight: 72)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
-                                 style: .continuous),
-            tint: Editorial.notificationGlassTint(for: colorScheme),
-            tintOpacity: Editorial.notificationGlassTintOpacity,
-            interactive: false,
-            lightweight: true
-        )
+        .officialHeaderMaterial(in: RoundedRectangle(
+            cornerRadius: Editorial.notificationCapsuleRadius, style: .continuous
+        ))
         .contentShape(RoundedRectangle(cornerRadius: Editorial.notificationCapsuleRadius,
                                        style: .continuous))
         .capsuleHoverLift(tint: Editorial.ink, scaleX: 1.006, scaleY: 1.018)
