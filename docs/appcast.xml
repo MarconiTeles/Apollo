@@ -5,6 +5,19 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 2.0.5</title>
+      <pubDate>Thu, 24 Sep 2026 21:01:03 +0000</pubDate>
+      <sparkle:version>105</sparkle:version>
+      <sparkle:shortVersionString>2.0.5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Novo Quadro, com capas, menus nativos, busca e arrastar entre colunas. As capas mostram um brilho enquanto carregam e abrem suavemente, e os cards entram em cascata, sem saltos na lista.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v2.0.5/Apollo-2.0.5.zip"
+        sparkle:edSignature="vG7oSg+r0zHJXfGAUIIUhwJ4v+gFXT7DlpqoHdAFmCPXvEX+9gBpNNdcjF1gt9ZrJyLpEo29gIF4IAZgw98XDA=="
+        length="44190934"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 2.0.4</title>
       <pubDate>Thu, 24 Sep 2026 14:50:23 +0000</pubDate>
       <sparkle:version>104</sparkle:version>
