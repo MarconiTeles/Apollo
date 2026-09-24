@@ -151,6 +151,11 @@ struct ContentView: View {
             || reviewPresenter.request != nil
     }
 
+    /// Launch splash or onboarding wizard on screen. Both cover the content
+    /// view, but not the native window toolbar above it, so the toolbar
+    /// hides its items meanwhile.
+    private var setupOwnsWindow: Bool { showWelcome || showOnboarding }
+
     var body: some View {
         GeometryReader { windowGeo in
             ZStack(alignment: .topTrailing) {
@@ -316,7 +321,7 @@ struct ContentView: View {
                 .toolbar {
                     if usesWindowToolbar { windowToolbar }
                 }
-                .navigationTitle(usesWindowToolbar ? pageTitle : "")
+                .navigationTitle(usesWindowToolbar && !setupOwnsWindow ? pageTitle : "")
                 // Toasts drop in below the head bar whichever toolbar is used.
                 .onChange(of: appState.toastQueue) { _, queue in
                     showNextToast(from: queue)
@@ -1425,7 +1430,7 @@ struct ContentView: View {
                 .help("Nova tarefa")
                 .accessibilityIdentifier("newTaskButton")
             }
-            .toolbarControl(disabled: anyPopupOpen)
+            .toolbarControl(disabled: anyPopupOpen, hidden: setupOwnsWindow)
         }
         .sharedBackgroundVisibility(.hidden)
 
@@ -1451,7 +1456,7 @@ struct ContentView: View {
                     .help("Próximo mês (⌘→)")
                     .keyboardShortcut(.rightArrow, modifiers: .command)
                 }
-                .toolbarControl(disabled: anyPopupOpen)
+                .toolbarControl(disabled: anyPopupOpen, hidden: setupOwnsWindow)
             }
             .sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.fixed)
@@ -1460,7 +1465,7 @@ struct ContentView: View {
         if appState.clickUpAuthService.isConnected {
             ToolbarItem {
                 ToolbarGlassGroup { listPickerToolbarButton }
-                    .toolbarControl(disabled: anyPopupOpen)
+                    .toolbarControl(disabled: anyPopupOpen, hidden: setupOwnsWindow)
             }
             .sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.fixed)
@@ -1486,7 +1491,7 @@ struct ContentView: View {
                 }
                 .help("Ajustes")
             }
-            .toolbarControl(disabled: anyPopupOpen)
+            .toolbarControl(disabled: anyPopupOpen, hidden: setupOwnsWindow)
         }
         .sharedBackgroundVisibility(.hidden)
 
@@ -1496,7 +1501,7 @@ struct ContentView: View {
             ToolbarItem {
                 MyTasksFilterToggle(filters: $appState.taskFilters,
                                     auth: appState.clickUpAuthService)
-                    .toolbarControl(disabled: anyPopupOpen)
+                    .toolbarControl(disabled: anyPopupOpen, hidden: setupOwnsWindow)
             }
             .sharedBackgroundVisibility(.hidden)
         }
@@ -2053,10 +2058,18 @@ private struct IntelligenceEdgeGlow: View {
 private extension View {
     /// Window-toolbar controls: never show the keyboard focus ring, and stay
     /// inert while an Apollo popup is open.
-    func toolbarControl(disabled: Bool) -> some View {
+    ///
+    /// `hidden` covers the launch splash and onboarding: the native toolbar
+    /// lives in the window's title bar, above the whole content view, so no
+    /// zIndex lets those overlays cover it. The items stay in place (no
+    /// layout shift) and fade in once the overlay unmounts.
+    func toolbarControl(disabled: Bool, hidden: Bool) -> some View {
         focusable(false)
             .focusEffectDisabled()
             .disabled(disabled)
+            .opacity(hidden ? 0 : 1)
+            .allowsHitTesting(!hidden)
+            .animation(.easeOut(duration: 0.2), value: hidden)
     }
 }
 
