@@ -25,3 +25,13 @@ Limite do teste: eventos sintéticos de mouse não chegam a partir desta sessão
 - Conferir em uso real: arrastar entre status (slot "SOLTAR EM"), arquivos do Finder (1 tarefa e lote), menus, seletor de status, estados de mídia/review, modo claro.
 - Nó do Apollo Studio (`tasks.row.*`) não foi portado (é ferramenta de desenvolvimento).
 - A avaliação de fluidez fica com o usuário.
+
+## Animações e design (24/09/2026, segunda etapa)
+
+- Recolher/expandir: as linhas que saem viram "fantasmas" que somem em 140ms atrás das que sobem; as que entram descem 6pt com opacidade em 200ms, escalonadas a cada 12ms (teto de 120ms). O reflow passou a usar `cubic-bezier(0.23, 1, 0.32, 1)` em 220ms.
+- O chevron é um único `chevron.right` que gira até 90° em 200ms. Botões ANEXAR, VER REVIEW e "…" encolhem a 0,97 ao pressionar. Tarefa que muda de status pulsa em accent 7,5% por 450ms. Linhas arrastadas ficam a 42% de opacidade. ENVIADO ganhou o mesmo pulso verde do REVISADO.
+- O slot de soltura entra com `@starting-style` em vez de keyframes. Há `prefers-reduced-motion`.
+- Design: grupos vazios discretos (opacidade 0,45, espaçador de 10pt); ANEXAR sem pílula em repouso, que aparece no hover ou na seleção; datas de hoje e atrasadas em pílula; anel de 0,5pt nos avatares; "· N atrasadas" no grupo recolhido; faixa do grupo fixa sob o cabeçalho da página (fundo opaco, sem desfoque).
+- Correções: o Swift omite `phase` quando não há lote, então o JS agora normaliza ausente como nulo (isso também corrige a dica "Anexar nas N tarefas selecionadas"). O `overflow-x` passou a `clip`, porque `hidden` impedia o sticky.
+- Vão sob o cabeçalho: o WebKit corta elementos fixos na borda do `obscuredContentInsets`. A área encoberta passou a ser só o cabeçalho (82pt) e os 10pt de respiro viraram padding da página. Medido: faixa de 82 a 116pt, colada na linha do cabeçalho (81pt); o repouso é idêntico ao nativo.
+- O relato de linhas visíveis para acompanhar reviews espera 350ms de lista parada.

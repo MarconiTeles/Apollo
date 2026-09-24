@@ -215,11 +215,13 @@ final class AgendaReactHost: NSObject {
     private(set) var webView: AgendaReactWebView?
     private(set) var booted = false
     weak var client: AgendaReactCoordinator?
+    private let avatars = AgendaAvatarSchemeHandler()
 
     func ensureWebView() -> AgendaReactWebView {
         if let webView { return webView }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(avatars, forURLScheme: AgendaAvatarSchemeHandler.scheme)
         configuration.userContentController.add(AgendaReactMessageProxy(host: self), name: "apolloAgenda")
         let webView = AgendaReactWebView(frame: .zero, configuration: configuration)
         webView.setValue(false, forKey: "drawsBackground")
@@ -328,6 +330,27 @@ struct AgendaReactEvent: Encodable, Equatable {
     let darkInk: Bool
     let monogram: String
     let initials: String?
+    // Day panel (redesigned list under the month grid).
+    let start: String
+    let end: String
+    let allDay: Bool
+    let location: String?
+    let join: AgendaReactJoin?
+    let people: [AgendaReactPerson]
+    /// "past" / "now" relative to the current minute; nil otherwise.
+    let phase: String?
+}
+
+struct AgendaReactJoin: Encodable, Equatable {
+    let label: String
+}
+
+struct AgendaReactPerson: Encodable, Equatable {
+    let name: String
+    let initials: String
+    let color: String
+    let photo: String?
+    let organizer: Bool
 }
 
 struct AgendaReactDay: Encodable, Equatable {
@@ -443,6 +466,7 @@ final class AgendaReactCoordinator: NSObject {
 
     // TimelineView state.
     private var suppressAutoScroll = false
+    private var shownMonth: String?
     private var lastSelectedDate: Date?
     private var colorCache: [String: String] = [:]
 
@@ -494,6 +518,12 @@ final class AgendaReactCoordinator: NSObject {
 
     func update(parent: AgendaReactView) {
         self.parent = parent
+        let monthKey = Self.dayKey(AgendaMonth(containing: parent.month).start)
+        if let shownMonth, shownMonth != monthKey {
+            // A different month's days replace the list: start at its top.
+            queueScroll(day: nil, animated: false)
+        }
+        shownMonth = monthKey
         parent.loader.load(month: parent.month, appState: parent.appState)
         refresh()
     }
@@ -538,6 +568,11 @@ final class AgendaReactCoordinator: NSObject {
             DispatchQueue.main.async { self?.jumpToToday() }
         }.store(in: &cancellables)
 
+        // "Agora" / past rows follow the clock.
+        Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+            .sink { _ in schedule() }.store(in: &cancellables)
+        // Guest photos come from ClickUp members.
+        appState.$availableMembers.dropFirst().sink { _ in schedule() }.store(in: &cancellables)
         let center = NotificationCenter.default
         center.publisher(for: .NSCalendarDayChanged).sink { _ in schedule() }.store(in: &cancellables)
         center.publisher(for: NSColor.systemColorsDidChangeNotification)
@@ -614,13 +649,16 @@ final class AgendaReactCoordinator: NSObject {
                 sentTheme = theme
                 changed = true
             }
-            let timeline = buildTimeline(appState)
+            let projection = monthCache.resolve(month: parent.month, primary: appState.events,
+                                                shared: appState.sharedEvents,
+                                                fetched: parent.loader.fetchedEvents)
+            let timeline = buildTimeline(appState, projection: projection)
             if timeline != sentTimeline || needsFull {
                 patch.timeline = timeline
                 sentTimeline = timeline
                 changed = true
             }
-            let month = buildMonth(parent)
+            let month = buildMonth(parent, projection: projection)
             if month != sentMonth || needsFull {
                 patch.month = month
                 sentMonth = month
@@ -703,15 +741,25 @@ final class AgendaReactCoordinator: NSObject {
         ]
     }
 
-    // MARK: Timeline (TimelineView forwardOnly: today … today + 30)
+    // MARK: Timeline (TimelineView forwardOnly, limited to the selected month)
 
-    private func buildTimeline(_ appState: AppState) -> [AgendaReactDay] {
+    /// Days of the month selected in the toolbar (‹ Hoje ›). The current
+    /// month keeps the forward-only contract (today is the first row, up to
+    /// the month's last day); any other month lists all of its days. Days
+    /// inside the sync window read `mergedEventsByDay` as before; other
+    /// months read the month grid's projection (the fetched month).
+    private func buildTimeline(_ appState: AppState,
+                               projection: AgendaMonthProjectionCache.Projection) -> [AgendaReactDay] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        let dates = (0...30).compactMap { calendar.date(byAdding: .day, value: $0, to: today) }
+        let model = projection.model
+        let isCurrentMonth = model.calendar.isDate(today, equalTo: model.start, toGranularity: .month)
+        let dates = model.monthDays.filter { !isCurrentMonth || $0 >= today }
         var map: [String: CalendarEvent] = [:]
         let days = dates.map { date -> AgendaReactDay in
-            let events = appState.mergedEventsByDay[date] ?? []
+            let events = isCurrentMonth
+                ? appState.mergedEventsByDay[date] ?? []
+                : projection.index[date] ?? []
             for event in events { map[event.calendarIdentity] = event }
             let isToday = calendar.isDateInToday(date)
             return AgendaReactDay(
@@ -719,7 +767,7 @@ final class AgendaReactCoordinator: NSObject {
                 label: isToday ? "HOJE" : Self.weekdayLabel(date),
                 day: date.formatted(.dateTime.day()),
                 today: isToday,
-                past: calendar.startOfDay(for: date) < calendar.startOfDay(for: Date()),
+                past: calendar.startOfDay(for: date) < today,
                 events: events.map(payload))
         }
         timelineEvents = map
@@ -734,11 +782,8 @@ final class AgendaReactCoordinator: NSObject {
 
     // MARK: Month (AgendaMonthView)
 
-    private func buildMonth(_ parent: AgendaReactView) -> AgendaReactMonth {
-        let appState = parent.appState
-        let projection = monthCache.resolve(month: parent.month, primary: appState.events,
-                                            shared: appState.sharedEvents,
-                                            fetched: parent.loader.fetchedEvents)
+    private func buildMonth(_ parent: AgendaReactView,
+                            projection: AgendaMonthProjectionCache.Projection) -> AgendaReactMonth {
         let model = projection.model
         let calendar = model.calendar
         let today = calendar.startOfDay(for: Date())
@@ -799,11 +844,10 @@ final class AgendaReactCoordinator: NSObject {
         let range = AgendaReactFormat.timeRange(event)
         let location = event.location ?? ""
         let trimmed = location.trimmingCharacters(in: .whitespacesAndNewlines)
-        let initials: String? = event.attendees.first.map { attendee in
-            attendee.name.split(separator: " ").prefix(2)
-                .compactMap { $0.first.map(String.init) }
-                .joined().uppercased()
-        }
+        let initials: String? = event.attendees.first.map { Self.initials($0.name) }
+        let meeting = event.meetingURL?.absoluteString
+        // A location that is only the meeting link is shown as the join tag.
+        let place = trimmed.isEmpty || trimmed == meeting || trimmed.hasPrefix("http") ? nil : trimmed
         return AgendaReactEvent(
             key: event.calendarIdentity,
             title: event.title,
@@ -816,7 +860,69 @@ final class AgendaReactCoordinator: NSObject {
             dot: cached("status:\(event.colorHex)", components: false) { NSColor(Color(statusHex: event.colorHex)) },
             darkInk: Self.prefersDarkInk(event.colorHex),
             monogram: event.title.first { $0.isLetter || $0.isNumber }.map { String($0).uppercased() } ?? "•",
-            initials: initials)
+            initials: initials,
+            start: event.isAllDay ? "Dia" : AgendaReactFormat.time.string(from: event.startDate),
+            end: event.isAllDay ? "inteiro" : AgendaReactFormat.time.string(from: event.endDate),
+            allDay: event.isAllDay,
+            location: place,
+            join: Self.joinTag(event.meetingURL),
+            people: people(event),
+            phase: Self.phase(event))
+    }
+
+    private static func initials(_ name: String) -> String {
+        name.split(separator: " ").prefix(2)
+            .compactMap { $0.first.map(String.init) }
+            .joined().uppercased()
+    }
+
+    /// Organizer first, then the other guests; meeting rooms are places,
+    /// not people.
+    private func people(_ event: CalendarEvent) -> [AgendaReactPerson] {
+        let guests = event.attendees.filter {
+            !($0.email ?? "").lowercased().hasSuffix("@resource.calendar.google.com")
+        }
+        let ordered = guests.filter(\.isOrganizer) + guests.filter { !$0.isOrganizer }
+        let members = parent?.appState.availableMembers ?? []
+        return ordered.map { attendee in
+            let email = attendee.email?.lowercased()
+            let member = email.flatMap { mail in members.first { $0.email?.lowercased() == mail } }
+            let name = attendee.name.isEmpty ? (attendee.email ?? "?") : attendee.name
+            let seed = email ?? name.lowercased()
+            let hex = member?.color ?? Self.personPalette[Int(Self.stableHash(seed) % UInt64(Self.personPalette.count))]
+            let photo = member?.profilePicture.flatMap(URL.init(string:)).map(AgendaAvatarSchemeHandler.url(for:))
+            return AgendaReactPerson(
+                name: attendee.isOrganizer ? name + " (organizador)" : name,
+                initials: Self.initials(name).isEmpty ? "?" : String(Self.initials(name).prefix(2)),
+                color: cached("person:\(hex)", components: false) { NSColor(Color(hex: hex)) },
+                photo: photo,
+                organizer: attendee.isOrganizer)
+        }
+    }
+
+    /// Google Calendar's event palette: every guest keeps one colour.
+    private static let personPalette = ["#039BE5", "#7986CB", "#33B679", "#8E24AA", "#E67C73",
+                                        "#F4511E", "#0B8043", "#3F51B5", "#D50000", "#616161"]
+
+    /// FNV-1a: stable across launches (String.hashValue is seeded).
+    private static func stableHash(_ text: String) -> UInt64 {
+        text.utf8.reduce(14_695_981_039_346_656_037 as UInt64) { ($0 ^ UInt64($1)) &* 1_099_511_628_211 }
+    }
+
+    private static func joinTag(_ url: URL?) -> AgendaReactJoin? {
+        guard let host = url?.host?.lowercased() else { return nil }
+        if host.contains("meet.google") { return AgendaReactJoin(label: "Meet") }
+        if host.contains("zoom") { return AgendaReactJoin(label: "Zoom") }
+        if host.contains("teams") { return AgendaReactJoin(label: "Teams") }
+        return AgendaReactJoin(label: "Entrar")
+    }
+
+    private static func phase(_ event: CalendarEvent) -> String? {
+        guard !event.isAllDay else { return nil }
+        let now = Date()
+        if event.endDate <= now { return "past" }
+        if event.startDate <= now { return "now" }
+        return nil
     }
 
     private func cached(_ key: String, components: Bool, _ make: () -> NSColor) -> String {
@@ -863,11 +969,8 @@ final class AgendaReactCoordinator: NSObject {
                 self.revealSeq = nil
                 webView?.alphaValue = 1
             }
-        case "open":
-            guard let key, let event = timelineEvents[key] else { return }
-            open(event, appState: appState)
-        case "openMonth":
-            guard let key, let event = monthEvents[key] else { return }
+        case "open", "openMonth":
+            guard let key, let event = (type == "open" ? timelineEvents : monthEvents)[key] else { return }
             // Existing detail mutations update AppState's event cache. Seed
             // only the opened primary event when browsing beyond the sync window.
             if event.calendarId == "primary", !appState.events.contains(where: { $0.id == event.id }) {
@@ -878,6 +981,10 @@ final class AgendaReactCoordinator: NSObject {
             guard let key, let event = timelineEvents[key],
                   let x = message["x"] as? Double, let y = message["y"] as? Double else { return }
             popUpMenu(for: event, at: NSPoint(x: x, y: y), appState: appState)
+        case "join":
+            guard let key, let event = (monthEvents[key] ?? timelineEvents[key]),
+                  let url = event.meetingURL else { return }
+            NSWorkspace.shared.open(url)
         case "retry":
             parent.loader.bump(month: parent.month, appState: appState)
         default:
@@ -929,6 +1036,51 @@ final class AgendaReactCoordinator: NSObject {
         // WKWebView is flipped: page coordinates map 1:1 onto the view.
         let viewPoint = webView.isFlipped ? point : NSPoint(x: point.x, y: webView.bounds.height - point.y)
         menu.popUp(positioning: nil, at: viewPoint, in: webView)
+    }
+}
+
+// MARK: - Guest photos (AvatarStore through a private scheme)
+
+@MainActor
+final class AgendaAvatarSchemeHandler: NSObject, WKURLSchemeHandler {
+    static let scheme = "apollo-avatar"
+    private var running: [ObjectIdentifier: Task<Void, Never>] = [:]
+
+    static func url(for photo: URL) -> String {
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = "avatar"
+        components.queryItems = [URLQueryItem(name: "u", value: photo.absoluteString)]
+        return components.string ?? ""
+    }
+
+    func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
+        guard let requestURL = urlSchemeTask.request.url,
+              let raw = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "u" })?.value,
+              let photo = URL(string: raw) else {
+            urlSchemeTask.didFailWithError(URLError(.badURL))
+            return
+        }
+        let key = ObjectIdentifier(urlSchemeTask)
+        running[key] = Task { @MainActor [weak self] in
+            var image = AvatarStore.shared.image(for: photo)
+            if image == nil { image = await AvatarStore.shared.load(photo).value }
+            guard let self, self.running.removeValue(forKey: key) != nil else { return }
+            guard let image, let tiff = image.tiffRepresentation,
+                  let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else {
+                urlSchemeTask.didFailWithError(URLError(.cannotDecodeContentData))
+                return
+            }
+            urlSchemeTask.didReceive(URLResponse(url: requestURL, mimeType: "image/png",
+                                                 expectedContentLength: png.count, textEncodingName: nil))
+            urlSchemeTask.didReceive(png)
+            urlSchemeTask.didFinish()
+        }
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {
+        running.removeValue(forKey: ObjectIdentifier(urlSchemeTask))?.cancel()
     }
 }
 
@@ -988,6 +1140,14 @@ enum AgendaReactResources {
            let image = base.withSymbolConfiguration(.init(pointSize: size, weight: .medium)) {
             out["warning"] = glyph(image, scale: max(scale, 2) * 1.5)
         }
+        let symbol = { (name: String, size: CGFloat, weight: NSFont.Weight) -> AgendaReactGlyph? in
+            guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil),
+                  let image = base.withSymbolConfiguration(.init(pointSize: size, weight: weight)) else { return nil }
+            return glyph(image, scale: max(scale, 2) * 1.5)
+        }
+        out["pin"] = symbol("mappin.and.ellipse", 9, .semibold)
+        out["video"] = symbol("video.fill", 9, .semibold)
+        out["sun"] = symbol("sun.max.fill", 9, .semibold)
         glyphCache[scale] = out
         return out
     }
@@ -1010,37 +1170,79 @@ enum AgendaReactResources {
                                 width: size.width, height: size.height)
     }
 
-    /// SwiftUI Text line heights for every text style the page draws.
-    static let metrics: [String: CGFloat] = {
-        let layout = NSLayoutManager()
+    /// SwiftUI Text geometry for every text style the page draws, measured
+    /// from the same Text/Font the native views use. SwiftUI gives each line
+    /// its own rounded box (card 16 + 13, panel row 13 + 11) and puts the
+    /// baseline on a whole point; CSS centres the glyphs in the line box.
+    /// `<name>` is the box height, `<name>-dy` moves the CSS baseline onto
+    /// SwiftUI's.
+    private static var metricsCache: [String: CGFloat]?
+    static var metrics: [String: CGFloat] {
+        if let metricsCache { return metricsCache }
         let scale = Editorial.typeScale
-        func line(_ font: NSFont) -> CGFloat { layout.defaultLineHeight(for: font) }
-        func system(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont { .systemFont(ofSize: size, weight: weight) }
-        func rounded(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
-            let base = NSFont.systemFont(ofSize: size, weight: weight)
-            return base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: size) } ?? base
+        func nsFont(_ size: CGFloat, _ weight: NSFont.Weight, rounded: Bool = false,
+                    italic: Bool = false) -> NSFont {
+            var font = NSFont.systemFont(ofSize: size, weight: weight)
+            if rounded, let descriptor = font.fontDescriptor.withDesign(.rounded) {
+                font = NSFont(descriptor: descriptor, size: size) ?? font
+            }
+            if italic {
+                font = NSFont(descriptor: font.fontDescriptor.withSymbolicTraits(.italic), size: size) ?? font
+            }
+            return font
         }
-        func italic(_ size: CGFloat) -> NSFont {
-            let base = NSFont.systemFont(ofSize: size)
-            return NSFont(descriptor: base.fontDescriptor.withSymbolicTraits(.italic), size: size) ?? base
+        var out: [String: CGFloat] = [:]
+        func add(_ name: String, _ text: Text, _ font: NSFont) {
+            let (box, baseline) = measure(text)
+            let natural = font.ascender - font.descender + font.leading
+            out[name] = box
+            out[name + "-dy"] = baseline - ((box - natural) / 2 + font.ascender)
         }
-        return [
-            "cardTitle": line(system(13.8, .semibold)),
-            "cardSubtitle": line(system(10, .regular)),
-            "avatar": line(system(9, .bold)),
-            "dateLabel": line(rounded(9, .semibold)),
-            "dateNumber": line(rounded(24, .semibold)),
-            "empty": line(italic(13.5 * scale)),
-            "weekday": line(system(10 * scale, .semibold)),
-            "cellNumber": line(system(12.5 * scale, .bold)),
-            "cellMonth": line(system(11 * scale, .medium)),
-            "folio": line(system(10.5 * scale, .semibold)),
-            "relative": line(system(11 * scale, .medium)),
-            "rowTitle": line(system(12.5 * scale, .semibold)),
-            "rowDetail": line(system(11 * scale, .medium)),
-            "panelEmpty": line(system(12 * scale, .medium)),
-            "banner": line(system(11 * scale, .medium)),
-        ]
-    }()
+        add("cardTitle", Text("Ág").font(.system(size: 13.8, weight: .semibold)), nsFont(13.8, .semibold))
+        add("cardSubtitle", Text("Ág").font(.caption), nsFont(10, .regular))
+        add("avatar", Text("ÁG").font(.system(size: 9, weight: .bold)), nsFont(9, .bold))
+        add("dateLabel", Text("HOJE").font(.system(size: 9, weight: .semibold, design: .rounded)).tracking(0.7),
+            nsFont(9, .semibold, rounded: true))
+        add("dateNumber", Text("24").font(.system(size: 24, weight: .semibold, design: .rounded)).monospacedDigit(),
+            nsFont(24, .semibold, rounded: true))
+        add("empty", Text("— Sem").font(Editorial.serif(13.5).italic()), nsFont(13.5 * scale, .regular, italic: true))
+        add("weekday", Text("SEG").font(Editorial.sans(10, .semibold)).tracking(1.2), nsFont(10 * scale, .semibold))
+        add("cellNumber", Text("24").font(Editorial.sans(12.5, .semibold)).monospacedDigit(),
+            nsFont(12.5 * scale, .semibold))
+        add("cellNumberToday", Text("24").font(Editorial.sans(12.5, .bold)).monospacedDigit(),
+            nsFont(12.5 * scale, .bold))
+        add("cellMonth", Text("set").font(Editorial.sans(11, .medium)), nsFont(11 * scale, .medium))
+        add("folio", Text("QUI").font(Editorial.sans(10.5, .semibold)).tracking(1.4), nsFont(10.5 * scale, .semibold))
+        add("relative", Text("Hoje").font(Editorial.sans(11, .medium)), nsFont(11 * scale, .medium))
+        add("rowTitle", Text("Ág").font(Editorial.sans(12.5, .semibold)), nsFont(12.5 * scale, .semibold))
+        add("rowDetail", Text("Ág").font(Editorial.sans(11, .medium)), nsFont(11 * scale, .medium))
+        add("panelEmpty", Text("Ág").font(Editorial.sans(12, .medium)), nsFont(12 * scale, .medium))
+        add("banner", Text("Ág").font(Editorial.sans(11, .medium)), nsFont(11 * scale, .medium))
+        // AgendaEventDot / AgendaMoreDot glyphs (size × 0.56, × 0.5, × 0.42).
+        for (name, size) in [("disc14", 14 * 0.56), ("disc22", 22 * 0.56), ("more", 14 * 0.5), ("moreSmall", 14 * 0.42)] {
+            add(name, Text("R").font(.system(size: size, weight: .bold, design: .rounded)),
+                nsFont(size, .bold, rounded: true))
+        }
+        metricsCache = out
+        return out
+    }
+
+    /// Box height and first baseline of a single-line Text.
+    private static func measure(_ text: Text) -> (CGFloat, CGFloat) {
+        final class Probe: @unchecked Sendable { var baseline: CGFloat = 0 }
+        let probe = Probe()
+        let view = HStack(alignment: .top, spacing: 0) {
+            text.alignmentGuide(.top) { dimensions in
+                probe.baseline = dimensions[.firstTextBaseline]
+                return dimensions[.top]
+            }
+            Color.clear.frame(width: 1, height: 1)
+        }.fixedSize()
+        let host = NSHostingView(rootView: view)
+        let height = host.fittingSize.height
+        host.frame = NSRect(x: 0, y: 0, width: 400, height: height)
+        host.layoutSubtreeIfNeeded()
+        return (height, probe.baseline)
+    }
 }
 #endif

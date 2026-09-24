@@ -25,6 +25,13 @@ function springEasing(mass: number, stiffness: number, damping: number, velocity
 
 export const doneSpring = springEasing(0.7, 310, 22, 2);
 
+/** Strong ease-out for UI responses (reflow, entrances, press). */
+export const EASE_OUT = "cubic-bezier(0.23, 1, 0.32, 1)";
+
+/** prefers-reduced-motion: keep opacity/colour, drop movement. */
+const reducedQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+export const prefersReducedMotion = () => reducedQuery.matches;
+
 export function installMotionTokens() {
   const root = document.documentElement.style;
   root.setProperty("--spring", doneSpring.easing);

@@ -14,7 +14,9 @@ import {
 } from "./lib/geometry";
 import type { DisplayRow } from "./lib/geometry";
 import { drawStackImage } from "./lib/dragImage";
+import { EASE_OUT, prefersReducedMotion } from "./lib/motion";
 import {
+  msSinceScroll,
   onScroll,
   setDragging,
   setOcclusion,
@@ -23,17 +25,45 @@ import {
   viewToClientY,
 } from "./lib/interaction";
 import { read, subscribe } from "./lib/store";
-import type { HeaderRowPayload, TaskRowPayload } from "./lib/types";
+import type { HeaderRowPayload, RowPayload, TaskRowPayload } from "./lib/types";
 
 /** Beyond this, offscreen rows skip style/layout/paint until scrolled near. */
 const HUGE_LIST = 800;
-const REFLOW_MS = 200;
+/** Reflow of surviving rows: a response to a click, so a strong ease-out. */
+const REFLOW_MS = 220;
+const ENTER_MS = 200;
+const ENTER_STAGGER_MS = 12;
+const ENTER_STAGGER_CAP_MS = 120;
+const EXIT_MS = 140;
+const ARRIVAL_MS = 450;
+const MAX_GHOSTS = 40;
+/** MyTasksViewport's quiet period: no native bookkeeping while moving. */
+const QUIET_MS = 350;
+
+interface Ghost {
+  key: string;
+  row: TaskRowPayload;
+  y: number;
+}
+
+const EMPTY_IDS: ReadonlySet<string> = new Set();
+const ghostHandlers: RowHandlers = {
+  register() {},
+  dragStart(event) {
+    event.preventDefault();
+  },
+  dragEnd() {},
+};
 
 export function App() {
   const state = useSyncExternalStore(subscribe, read);
   const [width, setWidth] = useState(() => document.documentElement.clientWidth);
   const [slotStatus, setSlotStatus] = useState<string | null>(null);
   const [fileDropId, setFileDropId] = useState<string | null>(null);
+  const [draggingIds, setDraggingIds] = useState<ReadonlySet<string>>(EMPTY_IDS);
+  const [ghosts, setGhosts] = useState<Ghost[]>([]);
+  const ghostTimer = useRef<number | undefined>(undefined);
+  const previousRows = useRef(new Map<string, RowPayload>());
   const listRef = useRef<HTMLDivElement>(null);
   const stackCanvas = useRef<HTMLCanvasElement>(null);
   const elements = useRef(new Map<string, HTMLElement>());
@@ -45,7 +75,10 @@ export function App() {
 
   const inert = state.popupOpen;
   const obscured = state.insets.mode === "obscured";
-  const contentTop = obscured ? 0 : state.insets.top;
+  // Obscured mode: WKWebView.obscuredContentInsets covers only the page
+  // header (occlusion); the rest of the top inset is padding on the page.
+  const obscuredTop = obscured ? state.insets.occlusion : 0;
+  const contentTop = state.insets.top - obscuredTop;
 
   // ── Theme, fonts, insets ────────────────────────────────────────────
   useLayoutEffect(() => {
@@ -66,8 +99,8 @@ export function App() {
   }, [state.fonts]);
 
   useLayoutEffect(() => {
-    setOcclusion(state.insets.occlusion, obscured ? state.insets.top : 0);
-  }, [state.insets, obscured]);
+    setOcclusion(state.insets.occlusion, obscuredTop);
+  }, [state.insets, obscuredTop]);
 
   useEffect(() => setWindowKey(state.windowKey), [state.windowKey]);
   useEffect(() => {
@@ -104,35 +137,87 @@ export function App() {
   }, []);
 
   const tileWindow = () => {
-    const height = window.innerHeight + (obscured ? state.insets.top + state.insets.bottom : 0);
-    const top = window.scrollY - (obscured ? state.insets.top : 0);
+    const height = window.innerHeight + (obscured ? obscuredTop + state.insets.bottom : 0);
+    const top = window.scrollY - obscuredTop;
     const overscan = Math.max(180, height * 0.5);
     return { top: top - overscan, bottom: top + height + overscan };
   };
 
-  // Reflow like MyTasksViewport.apply(rows:animated:): rows that were on
-  // screen before and after slide from their old y (0.20 s ease-in-out).
+  // Row motion after a store change (collapse/expand, status moves, filter
+  // changes) or a drop-slot change:
+  // • survivors slide from their old y (FLIP, like MyTasksViewport.apply);
+  // • rows that appear fade down into place with a short, capped stagger;
+  // • rows that vanish leave a ghost that fades out while the rest closes up;
+  // • a task that changed status pulses once where it landed.
+  // Only rows inside the tiled window animate; offscreen work is skipped.
   useLayoutEffect(() => {
-    const animate = (state.rowsVersion !== lastRowsVersion.current && state.animate) || slotMotion.current;
+    const storeChange = state.rowsVersion !== lastRowsVersion.current && state.animate;
+    const animate = storeChange || slotMotion.current;
     lastRowsVersion.current = state.rowsVersion;
     slotMotion.current = false;
     const next = new Map<string, number>();
     displayRows.forEach((row, index) => next.set(displayKey(row), offsets[index]));
+    const nextRows = new Map<string, RowPayload>();
+    state.rows.forEach((row) => nextRows.set(`${row.k}:${row.id}`, row));
     if (animate) {
+      const reduced = prefersReducedMotion();
       const { top, bottom } = tileWindow();
+      const onScreen = (y: number) => y <= bottom && y + 52 >= top;
+      let entering = 0;
       next.forEach((y, key) => {
-        const prior = previousOffsets.current.get(key);
-        if (prior === undefined || prior === y) return;
-        if (prior > bottom || prior + 52 < top || y > bottom || y + 52 < top) return;
         const element = elements.current.get(key);
-        element?.getAnimations().forEach((animation) => animation.cancel());
-        element?.animate([{ transform: `translateY(${prior - y}px)` }, { transform: "none" }], {
+        if (!element) return;
+        const prior = previousOffsets.current.get(key);
+        if (prior === undefined) {
+          if (!storeChange || !onScreen(y)) return;
+          const delay = Math.min(entering * ENTER_STAGGER_MS, ENTER_STAGGER_CAP_MS);
+          entering += 1;
+          element.animate(
+            reduced
+              ? [{ opacity: 0 }, { opacity: 1 }]
+              : [
+                  { opacity: 0, transform: "translateY(-6px)" },
+                  { opacity: 1, transform: "none" },
+                ],
+            { duration: ENTER_MS, easing: EASE_OUT, delay, fill: "backwards" },
+          );
+          return;
+        }
+        if (prior === y || reduced || !onScreen(prior) || !onScreen(y)) return;
+        element.getAnimations().forEach((animation) => animation.cancel());
+        element.animate([{ transform: `translateY(${prior - y}px)` }, { transform: "none" }], {
           duration: REFLOW_MS,
-          easing: "ease-in-out",
+          easing: EASE_OUT,
         });
       });
+      if (storeChange) {
+        const exits: Ghost[] = [];
+        previousOffsets.current.forEach((y, key) => {
+          if (next.has(key) || exits.length >= MAX_GHOSTS || !onScreen(y)) return;
+          const row = previousRows.current.get(key);
+          if (row?.k === "t") exits.push({ key, row, y });
+        });
+        if (exits.length) {
+          window.clearTimeout(ghostTimer.current);
+          setGhosts(exits);
+          ghostTimer.current = window.setTimeout(() => setGhosts([]), EXIT_MS + 30);
+        }
+        const arrival = state.theme["accent-075"];
+        nextRows.forEach((row, key) => {
+          const before = previousRows.current.get(key);
+          if (row.k !== "t" || before?.k !== "t" || before.status === row.status) return;
+          const y = next.get(key);
+          const background = elements.current.get(key)?.querySelector(".bg");
+          if (!arrival || y === undefined || !onScreen(y) || !background) return;
+          background.animate([{ backgroundColor: arrival }, { backgroundColor: "transparent" }], {
+            duration: ARRIVAL_MS,
+            easing: EASE_OUT,
+          });
+        });
+      }
     }
     previousOffsets.current = next;
+    previousRows.current = nextRows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayRows, offsets]);
 
@@ -142,6 +227,13 @@ export function App() {
     let timer: number | undefined;
     const report = () => {
       timer = undefined;
+      // Review watches start polling; keep that bookkeeping off the app's
+      // main thread until the list has been still for the quiet period.
+      const moving = QUIET_MS - msSinceScroll();
+      if (moving > 0) {
+        timer = window.setTimeout(report, moving);
+        return;
+      }
       const { displayRows: rows, offsets: ys } = live.current;
       const { top, bottom } = tileWindow();
       const ids: string[] = [];
@@ -246,10 +338,13 @@ export function App() {
         }
         resetInteraction();
         setDragging(true);
+        // After the drag image snapshot: dim the rows being carried.
+        window.setTimeout(() => setDraggingIds(new Set(ids)), 0);
         post({ type: "dragBegin", id: row.id });
       },
       dragEnd(event) {
         setDragging(false);
+        setDraggingIds(EMPTY_IDS);
         updateSlot(null);
         post({ type: "dragEnd", completed: event.dataTransfer.dropEffect !== "none" });
       },
@@ -290,6 +385,7 @@ export function App() {
   const style = {
     "--title-x": `${m.titleX}px`,
     "--title-w": `${m.titleWidth}px`,
+    "--title-w-wide": `${m.titleWideWidth}px`,
     "--review-x": `${m.reviewX}px`,
     "--media-x": `${m.mediaX}px`,
     "--priority-x": `${m.priorityX}px`,
@@ -299,12 +395,63 @@ export function App() {
     "--date-x": `${m.dateX}px`,
     "--date-w": `${m.dateWidth}px`,
     "--more-x": `${m.moreX}px`,
-    paddingTop: obscured ? 0 : state.insets.top,
+    paddingTop: contentTop,
     paddingBottom: obscured ? 0 : state.insets.bottom,
+    // Group bands stick flush under the SwiftUI page header.
+    "--sticky-top": `${obscured ? 0 : state.insets.occlusion}px`,
   } as CSSProperties;
 
   const bulkCount = state.selected.size;
   const taskCount = state.rows.length;
+
+  // Each status group is its own block so its header band can stick under
+  // the page header and be pushed away by the next group.
+  const groups: { key: string; rows: DisplayRow[] }[] = [];
+  for (const row of displayRows) {
+    if (row.k === "h" || groups.length === 0) groups.push({ key: `s:${row.k === "h" ? row.id : ""}`, rows: [] });
+    groups[groups.length - 1].rows.push(row);
+  }
+
+  const renderRow = (row: DisplayRow) => {
+    if (row.k === "t") {
+      const selected = state.selected.has(row.id);
+      return (
+        <TaskRow
+          key={`t:${row.id}`}
+          row={row}
+          selected={selected}
+          bulkCount={selected ? bulkCount : 0}
+          fileDrop={fileDropId === row.id}
+          dragging={draggingIds.has(row.id)}
+          inert={inert}
+          glyphs={state.glyphs}
+          handlers={handlers}
+        />
+      );
+    }
+    if (row.k === "h") {
+      return (
+        <HeaderRow
+          key={`h:${row.id}`}
+          row={row}
+          fonts={state.fonts}
+          chevron={state.glyphs.chevronRight}
+          register={register}
+        />
+      );
+    }
+    const header = state.rows.find((r) => r.k === "h" && r.status === row.status) as HeaderRowPayload | undefined;
+    return (
+      <DropSlot
+        key="d:slot"
+        title={row.title}
+        color={row.color}
+        sc={header?.sc ?? "0 0 0"}
+        width={width}
+        labelHeight={state.fonts.slot}
+      />
+    );
+  };
 
   return (
     <>
@@ -323,45 +470,25 @@ export function App() {
         onDragLeave={onDragLeave}
         onDrop={onDrop}
       >
-        {displayRows.map((row) => {
-          if (row.k === "t") {
-            const selected = state.selected.has(row.id);
-            return (
-              <TaskRow
-                key={`t:${row.id}`}
-                row={row}
-                selected={selected}
-                bulkCount={selected ? bulkCount : 0}
-                fileDrop={fileDropId === row.id}
-                inert={inert}
-                glyphs={state.glyphs}
-                handlers={handlers}
-              />
-            );
-          }
-          if (row.k === "h") {
-            return (
-              <HeaderRow
-                key={`h:${row.id}`}
-                row={row}
-                fonts={state.fonts}
-                chevron={row.collapsed ? state.glyphs.chevronRight : state.glyphs.chevronDown}
-                register={register}
-              />
-            );
-          }
-          const header = state.rows.find((r) => r.k === "h" && r.status === row.status) as HeaderRowPayload | undefined;
-          return (
-            <DropSlot
-              key="d:slot"
-              title={row.title}
-              color={row.color}
-              sc={header?.sc ?? "0 0 0"}
-              width={width}
-              labelHeight={state.fonts.slot}
+        {groups.map((group) => (
+          <div className="group" key={group.key}>
+            {group.rows.map(renderRow)}
+          </div>
+        ))}
+        {ghosts.map((ghost) => (
+          <div className="ghost" key={`g:${ghost.key}`} style={{ top: ghost.y }} aria-hidden="true">
+            <TaskRow
+              row={ghost.row}
+              selected={false}
+              bulkCount={0}
+              fileDrop={false}
+              dragging={false}
+              inert
+              glyphs={state.glyphs}
+              handlers={ghostHandlers}
             />
-          );
-        })}
+          </div>
+        ))}
       </div>
       <div className="drag-image-host" aria-hidden="true">
         <canvas ref={stackCanvas} />

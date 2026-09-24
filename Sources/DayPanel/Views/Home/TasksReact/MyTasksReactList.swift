@@ -191,10 +191,19 @@ final class MyTasksReactHost: NSObject {
 
     private static func hideTopScrollPocket(_ webView: WKWebView) {
         let selector = NSSelectorFromString("_addReasonToHideTopScrollPocket:")
-        guard webView.responds(to: selector) else { return }
-        typealias Function = @convention(c) (AnyObject, Selector, UInt) -> Void
-        let implementation = webView.method(for: selector)
-        unsafeBitCast(implementation, to: Function.self)(webView, selector, 1 << 0)
+        if webView.responds(to: selector) {
+            typealias Function = @convention(c) (AnyObject, Selector, UInt) -> Void
+            let implementation = webView.method(for: selector)
+            unsafeBitCast(implementation, to: Function.self)(webView, selector, 1 << 0)
+        }
+        // Sticky group headers sit at the obscured edge; WebKit would extend
+        // their colour into the header band above. The glass header owns it.
+        let suppress = NSSelectorFromString("_setShouldSuppressTopColorExtensionView:")
+        if webView.responds(to: suppress) {
+            typealias Function = @convention(c) (AnyObject, Selector, Bool) -> Void
+            let implementation = webView.method(for: suppress)
+            unsafeBitCast(implementation, to: Function.self)(webView, suppress, true)
+        }
     }
 
     private func load(_ webView: WKWebView) {
@@ -327,6 +336,8 @@ struct MyTasksReactRow: Encodable, Equatable {
     // Header
     var color: String?
     var count: Int?
+    /// Open tasks past due, summarised next to a collapsed group's count.
+    var overdue: Int?
     var collapsed: Bool?
     var first: Bool?
 
@@ -610,8 +621,13 @@ final class MyTasksReactCoordinator: NSObject, MyTasksReactFileDropDelegate {
 
     private func applyInsets(_ parent: MyTasksReactList, to webView: WKWebView) -> MyTasksReactInsets {
         let obscured = MyTasksReactHost.supportsObscuredInsets
+        // Only the page header is obscured. WebKit clips sticky layers at the
+        // obscured edge, so the 10pt breathing room before the first group
+        // (topContentInset − occlusion) is page padding instead: group bands
+        // then stick flush under the header rule.
         let value = obscured
-            ? NSEdgeInsets(top: parent.topContentInset, left: 0, bottom: parent.bottomContentInset, right: 0)
+            ? NSEdgeInsets(top: parent.headerOcclusionHeight, left: 0,
+                           bottom: parent.bottomContentInset, right: 0)
             : NSEdgeInsets()
         let current = webView.obscuredContentInsets
         if current.top != value.top || current.bottom != value.bottom
@@ -632,6 +648,7 @@ final class MyTasksReactCoordinator: NSObject, MyTasksReactFileDropDelegate {
         var byId: [String: CUTask] = [:]
         var ordered: [CUTask] = []
         rows.reserveCapacity(parent.sections.reduce(0) { $0 + $1.tasks.count + 1 })
+        let startOfToday = Calendar.current.startOfDay(for: Date())
         for (index, section) in parent.sections.enumerated() {
             let status = section.status
             let color = statusColor(status.displayHex)
@@ -642,6 +659,10 @@ final class MyTasksReactCoordinator: NSObject, MyTasksReactFileDropDelegate {
                 sc: color.components,
                 color: color.css,
                 count: section.tasks.count,
+                overdue: section.tasks.reduce(0) { total, task in
+                    guard let due = task.dueDate, !task.isCompleted, due < startOfToday else { return total }
+                    return total + 1
+                },
                 collapsed: section.collapsed,
                 first: index == 0))
             for task in section.tasks { byId[task.id] = task }
@@ -744,6 +765,7 @@ final class MyTasksReactCoordinator: NSObject, MyTasksReactFileDropDelegate {
             "ink": css(NSColor(Editorial.ink)),
             "ink-soft": css(NSColor(Editorial.inkSoft)),
             "ink-mute": css(NSColor(Editorial.inkMute)),
+            "ink-faint": css(NSColor(Editorial.inkFaint)),
             "ink-faint-85": css(NSColor(Editorial.inkFaint.opacity(0.85))),
             "rule-50": css(NSColor(Editorial.rule.opacity(0.5))),
             "rule-soft": css(NSColor(Editorial.ruleSoft)),

@@ -38,6 +38,8 @@ export type OutboundMessage =
 declare global {
   interface Window {
     __APOLLO_TASKS__?: Patch;
+    /** Vite dev server only: the browser fixture answers like the host. */
+    __apolloTasksDemo?: (message: OutboundMessage) => void;
     apolloTasks?: {
       update(patch: Patch): void;
       taskAt(x: number, y: number): string | null;
@@ -54,7 +56,10 @@ export const isHosted = native() !== undefined;
 export function post(message: OutboundMessage) {
   const handler = native();
   if (handler) handler.postMessage(message);
-  else if (import.meta.env.DEV) console.debug("[apollo-tasks]", message);
+  else if (import.meta.env.DEV) {
+    console.debug("[apollo-tasks]", message);
+    window.__apolloTasksDemo?.(message);
+  }
 }
 
 window.addEventListener("error", (event) => {

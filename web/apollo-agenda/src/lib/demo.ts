@@ -28,6 +28,22 @@ function event(id: string, title: string, start: string, end: string, location: 
     darkInk: false,
     monogram: title.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "•",
     initials,
+    start,
+    end,
+    allDay: false,
+    location: location || undefined,
+    join: accepted ? { label: "Meet" } : undefined,
+    people: [
+      { name: "Júlia Prado (organizador)", initials: "JP", color: "#7986CB", organizer: true },
+      { name: "Marconi Reis", initials: "MR", color: "#33B679", organizer: false },
+      { name: "Eduardo Lima", initials: "EL", color: "#E67C73", organizer: false },
+      ...(accepted ? [] : [
+        { name: "Vitória Alves", initials: "VA", color: "#F4511E", organizer: false },
+        { name: "Pedro Nasser", initials: "PN", color: "#039BE5", organizer: false },
+        { name: "Ana Souza", initials: "AS", color: "#8E24AA", organizer: false },
+      ]),
+    ],
+    phase: start === "10:00" ? "now" : start === "09:30" && title.startsWith("Daily Receita") ? "past" : undefined,
   };
 }
 

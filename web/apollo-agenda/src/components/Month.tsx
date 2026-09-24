@@ -1,6 +1,8 @@
 import { memo, useLayoutEffect, useRef, useState } from "react";
 import { post } from "../lib/bridge";
-import type { EventPayload, Glyph, MonthCell, MonthPayload } from "../lib/types";
+import { Squircle, useBoxSize } from "../lib/squircle";
+import { BoxText } from "./BoxText";
+import type { EventPayload, Glyph, MonthCell, MonthPayload, PersonPayload } from "../lib/types";
 
 // AgendaMonthView: weekday header, month grid of filled tiles with stacked
 // event discs, and the selected day's panel. Sizes follow the native
@@ -21,7 +23,10 @@ const OVERLAP = 4;
 
 function Disc({ event, size, ring }: { event: EventPayload; size: number; ring: boolean }) {
   return (
-    <span className={`disc${ring ? " ring" : ""}`} style={{ "--size": `${size}px` } as React.CSSProperties}>
+    <span
+      className={`disc${ring ? " ring" : ""}`}
+      style={{ "--size": `${size}px`, "--glyph": `var(--lh-disc${size})`, "--glyph-dy": `var(--dy-disc${size})` } as React.CSSProperties}
+    >
       <span className="disc-fill" style={{ background: event.dot }}>
         <span className={`disc-letter${event.darkInk ? " dark-ink" : ""}`}>{event.monogram}</span>
       </span>
@@ -51,7 +56,7 @@ function DotStack({ events, width }: { events: EventPayload[]; width: number }) 
           <span className="disc ring" style={{ "--size": `${DOT}px` } as React.CSSProperties}>
             {/* AgendaMoreDot: inkSoft disc, page-coloured count */}
             <span className="disc-fill more">
-              <span className="disc-more" style={{ fontSize: more > 9 ? DOT * 0.42 : DOT * 0.5 }}>
+              <span className={`disc-more${more > 9 ? " small" : ""}`} style={{ fontSize: more > 9 ? DOT * 0.42 : DOT * 0.5 }}>
                 +{more}
               </span>
             </span>
@@ -75,8 +80,10 @@ const DayCell = memo(function DayCell({ cell, height, stackWidth, selected, onSe
   if (cell.inMonth) classes.push("in-month");
   if (cell.today) classes.push("today");
   if (selected) classes.push("selected");
+  const [ref, size] = useBoxSize<HTMLDivElement>();
   return (
     <div
+      ref={ref}
       className={classes.join(" ")}
       style={{ height }}
       title={cell.tooltip || undefined}
@@ -84,9 +91,13 @@ const DayCell = memo(function DayCell({ cell, height, stackWidth, selected, onSe
       aria-label={cell.a11y}
       onClick={() => onSelect(cell.key)}
     >
+      <Squircle width={size.width} height={size.height} radius={10} className="cell-base" />
+      <Squircle width={size.width} height={size.height} radius={10} className="cell-selection" />
       <div className="cell-content">
         <div className="cell-head">
-          <span className="cell-number">{cell.number}</span>
+          <span className="cell-number">
+            <span>{cell.number}</span>
+          </span>
           {cell.monthLabel && <span className="cell-month">{cell.monthLabel}</span>}
         </div>
         {cell.events.length > 0 && <DotStack events={cell.events} width={stackWidth} />}
@@ -95,24 +106,105 @@ const DayCell = memo(function DayCell({ cell, height, stackWidth, selected, onSe
   );
 });
 
-const PanelRow = memo(function PanelRow({ event }: { event: EventPayload }) {
+const MAX_PEOPLE = 4;
+
+function Mask({ glyph, className }: { glyph?: Glyph; className: string }) {
+  if (!glyph) return null;
   return (
-    <button type="button" className="prow" onClick={() => post({ type: "openMonth", key: event.key })}>
-      <Disc event={event} size={22} ring={false} />
-      <span className="prow-text">
-        <span className="prow-title">{event.title}</span>
-        <span className="prow-detail">{event.detail}</span>
+    <span
+      className={className}
+      style={{
+        width: glyph.width,
+        height: glyph.height,
+        WebkitMaskImage: `url(${glyph.url})`,
+        maskImage: `url(${glyph.url})`,
+      }}
+    />
+  );
+}
+
+/** Guests as stacked discs, organizer first and ringed in the accent (the
+ *  month grid's disc language), photos when ClickUp knows the person. */
+function People({ people }: { people: PersonPayload[] }) {
+  if (people.length === 0) return null;
+  const shown = people.length > MAX_PEOPLE + 1 ? people.slice(0, MAX_PEOPLE) : people;
+  const more = people.length - shown.length;
+  return (
+    <span className="people" title={people.map((person) => person.name).join("\n")}>
+      {shown.map((person, index) => (
+        <span
+          key={`${person.name}-${index}`}
+          className={`person${person.organizer ? " organizer" : ""}`}
+          style={{ zIndex: shown.length - index, background: person.color }}
+        >
+          <span className="person-initials">{person.initials}</span>
+          {person.photo && <img className="person-photo" src={person.photo} alt="" draggable={false} />}
+        </span>
+      ))}
+      {more > 0 && (
+        <span className="person more" style={{ zIndex: 0 }}>
+          <span className="person-initials">+{more}</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+const PanelRow = memo(function PanelRow({ event, glyphs }: { event: EventPayload; glyphs: Record<string, Glyph> }) {
+  const [ref, size] = useBoxSize<HTMLButtonElement>();
+  const classes = ["prow"];
+  if (event.phase) classes.push(event.phase);
+  if (event.declined) classes.push("declined");
+  return (
+    <button ref={ref} type="button" className={classes.join(" ")}
+            onClick={() => post({ type: "openMonth", key: event.key })}>
+      <Squircle width={size.width} height={size.height} radius={10} className="prow-hover" />
+      <span className="prow-time">
+        <span className="prow-start">{event.start}</span>
+        <span className="prow-end">{event.end}</span>
       </span>
+      <span className="prow-bar" style={{ background: event.dot }} />
+      <span className="prow-main">
+        <span className="prow-title">{event.title}</span>
+        {(event.location || event.phase === "now") && (
+          <span className="prow-tags">
+            {event.phase === "now" && <span className="tag now">Agora</span>}
+            {event.location && (
+              <span className="tag place" title={event.location}>
+                <Mask glyph={glyphs.pin} className="tag-icon" />
+                <span className="tag-text">{event.location}</span>
+              </span>
+            )}
+          </span>
+        )}
+      </span>
+      <People people={event.people} />
+      {event.join && (
+        <span
+          className="join"
+          role="button"
+          title="Entrar na reunião"
+          onClick={(e) => {
+            e.stopPropagation();
+            post({ type: "join", key: event.key });
+          }}
+        >
+          <Mask glyph={glyphs.video} className="join-icon" />
+          {event.join.label}
+        </span>
+      )}
     </button>
   );
 });
 
-function DayPanel({ cell, height }: { cell: MonthCell; height: number }) {
+function DayPanel({ cell, height, glyphs }: { cell: MonthCell; height: number; glyphs: Record<string, Glyph> }) {
+  const [ref, size] = useBoxSize<HTMLDivElement>();
   return (
-    <div className="panel" style={{ height }}>
+    <div ref={ref} className="panel" style={{ height }}>
+      <Squircle width={size.width} height={size.height} radius={12} className="panel-bg" />
       <div className="panel-head">
         <span className="folio">{cell.title}</span>
-        <span className="panel-relative">{cell.relative}</span>
+        <BoxText className="panel-relative">{cell.relative}</BoxText>
       </div>
       {cell.events.length === 0 ? (
         <div className="panel-empty" key={`empty-${cell.key}`}>
@@ -122,7 +214,7 @@ function DayPanel({ cell, height }: { cell: MonthCell; height: number }) {
         <div className="panel-list" key={cell.key}>
           <div className="panel-stack">
             {cell.events.map((event) => (
-              <PanelRow key={event.key} event={event} />
+              <PanelRow key={event.key} event={event} glyphs={glyphs} />
             ))}
           </div>
         </div>
@@ -218,7 +310,7 @@ export function Month({ month, top, error, glyphs, selectedDay, onSelect }: Mont
                 </div>
               ))}
             </div>
-            {focused && <DayPanel cell={focused} height={panelHeight} />}
+            {focused && <DayPanel cell={focused} height={panelHeight} glyphs={glyphs} />}
           </div>
         </div>
       </div>

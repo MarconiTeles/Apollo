@@ -80,7 +80,7 @@ export const ReviewCapsule = memo(function ReviewCapsule({ taskId, state, disabl
         label.current?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 280, easing: CURVE_OUT });
       });
     } else {
-      label.current?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 100, easing: "ease-in", fill: "forwards" });
+      label.current?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 100, easing: "ease-out", fill: "forwards" });
       later(100, () => {
         setCaption(next);
         label.current?.getAnimations().forEach((animation) => animation.cancel());

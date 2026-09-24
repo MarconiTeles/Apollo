@@ -1,13 +1,14 @@
 import { Component, createRef, memo } from "react";
 import { noteScroll } from "../lib/interaction";
 import type { EventPayload, ScrollCommand, TimelineDay } from "../lib/types";
+import { BoxText } from "./BoxText";
 import { EventCard } from "./EventCard";
 
 // TimelineView(forwardOnly: true) / AgendaNativeList: one recyclable row per
 // event, explicit heights (card 47, single/empty day 52, +22 after a day's
 // last row, +6 between events), the date gutter overlaid on a day's first
-// row, the first row of each day clipping its shadows like the native
-// NSTableRowView, and the resting reserve as the first row.
+// row and the resting reserve as the first row. Rows never clip: the card's
+// glow must stay whole (see `.trow` in styles.css).
 
 const CARD = 47;
 const SINGLE = 52;
@@ -46,8 +47,8 @@ const heightOf = (row: Row) => (row.event === null || (row.first && row.last) ? 
 const DateColumn = memo(function DateColumn({ day }: { day: TimelineDay }) {
   return (
     <div className="date">
-      <span className={`date-label${day.today ? " today" : ""}`}>{day.label}</span>
-      <span className="date-number">{day.day}</span>
+      <BoxText className={`date-label${day.today ? " today" : ""}`}>{day.label}</BoxText>
+      <BoxText className="date-number">{day.day}</BoxText>
     </div>
   );
 });

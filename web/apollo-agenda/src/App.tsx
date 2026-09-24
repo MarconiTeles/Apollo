@@ -3,6 +3,7 @@ import { Month } from "./components/Month";
 import { Timeline } from "./components/Timeline";
 import { post } from "./lib/bridge";
 import { setOcclusion } from "./lib/interaction";
+import { ShadowFilters } from "./lib/squircle";
 import { read, subscribe } from "./lib/store";
 
 /** AgendaLayout.timelineWidth — computed here so live resize needs no round trip. */
@@ -21,7 +22,10 @@ export function App() {
 
   useLayoutEffect(() => {
     const root = document.documentElement.style;
-    for (const [name, value] of Object.entries(state.metrics)) root.setProperty(`--lh-${name}`, `${value}px`);
+    for (const [name, value] of Object.entries(state.metrics)) {
+      if (name.endsWith("-dy")) root.setProperty(`--dy-${name.slice(0, -3)}`, `${value}px`);
+      else root.setProperty(`--lh-${name}`, `${value}px`);
+    }
   }, [state.metrics]);
 
   useLayoutEffect(() => setOcclusion(state.layout.occlusion), [state.layout.occlusion]);
@@ -52,6 +56,7 @@ export function App() {
 
   return (
     <div className={`agenda${state.reduceMotion ? " reduce-motion" : ""}`}>
+      <ShadowFilters />
       <div className="column-left" style={{ width: left }}>
         <Timeline
           days={state.timeline}
