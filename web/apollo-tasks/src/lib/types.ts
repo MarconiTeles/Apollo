@@ -9,8 +9,8 @@ export type DateTone = "today" | "overdue" | "soft";
 
 export interface MediaPayload {
   label: string;
-  /** TaskMediaTransferStore.Phase raw value, or null for ANEXAR. */
-  phase: string | null;
+  /** TaskMediaTransferStore.Phase name; absent (or null) for ANEXAR. */
+  phase?: string | null;
   /** Mask fraction 0…1 (1 for ENVIAR, 0 when idle). */
   progress: number;
   showProgress: boolean;
@@ -50,6 +50,8 @@ export interface HeaderRowPayload {
   /** Display-P3 components of `color` (drop slot alphas). */
   sc: string;
   count: number;
+  /** Open tasks past due (collapsed-group summary). */
+  overdue: number;
   collapsed: boolean;
   first: boolean;
 }

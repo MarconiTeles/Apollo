@@ -2,6 +2,8 @@ import { memo, useRef } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { post } from "../lib/bridge";
 import { pressSpring } from "../lib/motion";
+import { Squircle, squircle, useBoxSize } from "../lib/squircle";
+import type { ShadowLayer } from "../lib/squircle";
 import type { EventPayload } from "../lib/types";
 
 // AgendaEventCard + interactivePillFeedback(glow, hoverScale 1.015,
@@ -16,8 +18,15 @@ const RIPPLE_FRAMES: Keyframe[] = Array.from({ length: 11 }, (_, index) => {
   return { offset: p, transform: `scale(${p})`, opacity: Math.pow(1 - p, 1.6) * 0.6 };
 });
 
+// drawingGroup().shadow(radius: 4, y: 1) under the pill glow
+// (radius 10.4, y 3.9 on hover).
+const CARD_SHADOWS: ShadowLayer[] = [
+  { className: "card-glow", dy: 3.9, sigma: 10.4 },
+  { className: "card-shadow", dy: 1, sigma: 4 },
+];
+
 export const EventCard = memo(function EventCard({ event }: { event: EventPayload }) {
-  const card = useRef<HTMLButtonElement>(null);
+  const [card, size] = useBoxSize<HTMLButtonElement>();
   const ripple = useRef<HTMLSpanElement>(null);
   const release = useRef<number | undefined>(undefined);
 
@@ -71,6 +80,22 @@ export const EventCard = memo(function EventCard({ event }: { event: EventPayloa
         post({ type: "menu", key: event.key, x: e.clientX, y: e.clientY });
       }}
     >
+      {!event.accepted && (
+        // The group shadow of the text sits under the 14% fill (drawingGroup):
+        // a transparent copy casts it from behind the squircle.
+        <span className={`card-text card-text-shadow${event.initials !== undefined ? " with-avatar" : ""}`} aria-hidden>
+          <span className="card-title">{event.title}</span>
+          <span className="card-subtitle">{event.subtitle}</span>
+        </span>
+      )}
+      <Squircle
+        width={size.width}
+        height={size.height}
+        radius={13}
+        className="card-bg"
+        stroke={event.accepted ? { className: "card-stroke", width: 0.5 } : undefined}
+        shadows={CARD_SHADOWS}
+      />
       <span className="card-text">
         <span className="card-title">{event.title}</span>
         <span className="card-subtitle">{event.subtitle}</span>
@@ -80,7 +105,11 @@ export const EventCard = memo(function EventCard({ event }: { event: EventPayloa
           <span>{event.initials || "?"}</span>
         </span>
       )}
-      <span className="card-ripple-clip" aria-hidden>
+      <span
+        className="card-ripple-clip"
+        style={{ clipPath: `path("${squircle(0, 0, size.width, size.height, 13)}")` }}
+        aria-hidden
+      >
         <span ref={ripple} className="card-ripple" />
       </span>
     </button>

@@ -12,6 +12,7 @@
   --curve-hover-in: cubic-bezier(0.2, 0.82, 0.24, 1);
   --curve-hover-out: cubic-bezier(0.32, 0, 0.67, 1);
   --curve-dismiss: cubic-bezier(0.4, 0, 0.67, 1);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --type-scale: 0.85;
   color-scheme: light;
 }
@@ -25,7 +26,9 @@ body {
   margin: 0;
   padding: 0;
   background: transparent;
-  overflow-x: hidden;
+  /* clip, not hidden: hidden would turn body into the sticky headers'
+   * scroll container instead of the viewport. */
+  overflow-x: clip;
 }
 
 body {
@@ -52,10 +55,33 @@ img {
   position: relative;
   height: 36px;
   contain: layout style;
+  transition: opacity 150ms ease;
 }
 
-.list.huge .row,
-.list.huge .hrow {
+/* Rows carried by a drag in flight. */
+.row.dragging {
+  opacity: 0.42;
+}
+
+/* A row that just left the list fades out while the rest closes up. */
+.ghost {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Beneath the rows closing up over it: no double exposure. */
+  z-index: -1;
+  pointer-events: none;
+  animation: ghost-out 140ms var(--ease-out) forwards;
+}
+
+@keyframes ghost-out {
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.list.huge .row {
   content-visibility: auto;
   contain-intrinsic-size: auto 36px;
 }
@@ -127,6 +153,11 @@ html.hover-on .list:not(.inert) .row:hover > .rule {
   pointer-events: auto;
 }
 
+/* No review capsule on this row: the title uses the reserved slot too. */
+.row.no-review .title {
+  width: var(--title-w-wide);
+}
+
 .row.completed .title {
   color: var(--ink-mute);
 }
@@ -167,6 +198,19 @@ html.hover-on .list:not(.inert) .row:hover > .rule {
   overflow: hidden;
 }
 
+/* Hairline ring: dark assignee colours would otherwise melt into the page. */
+.row .avatar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  pointer-events: none;
+}
+:root.dark .row .avatar::after {
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.1);
+}
+
 .row .avatar img {
   position: absolute;
   inset: 0;
@@ -199,9 +243,24 @@ html.hover-on .list:not(.inert) .row:hover > .rule {
 }
 .row .date.today {
   color: var(--accent);
+  overflow: visible;
 }
 .row .date.overdue {
   color: var(--red);
+  overflow: visible;
+}
+/* Today / overdue read at a glance: a quiet tinted pill whose text keeps
+ * the column's right edge (the padding grows leftwards). */
+.row .date .pill {
+  padding: 1px 6px;
+  margin-right: -6px;
+  border-radius: 8px;
+}
+.row .date.today .pill {
+  background: color-mix(in display-p3, var(--accent) 10%, transparent);
+}
+.row .date.overdue .pill {
+  background: color-mix(in display-p3, var(--red) 10%, transparent);
 }
 
 /* ─── DONE circle (MyTasksDoneCircle) ──────────────────────────────── */
@@ -276,6 +335,12 @@ html.hover-on .list:not(.inert) .row:hover > .rule {
   background: none;
   outline: none;
   font-family: inherit;
+  /* Release snaps back; the press itself is a touch slower. */
+  transition: transform 80ms var(--ease-out);
+}
+.capsule:active:not(:disabled) {
+  transform: scale(0.97);
+  transition-duration: 120ms;
 }
 
 .capsule .track,
@@ -326,6 +391,31 @@ html.hover-on .list:not(.inert) .media:hover .track {
   transition-timing-function: var(--curve-hover-in);
 }
 html.hover-on .list:not(.inert) .media:hover .caption {
+  color: var(--m-htitle);
+}
+/* Idle ANEXAR stays quiet: just its label until the row is hovered or
+ * selected. Any batch state (PREPARANDO, ENVIAR…) is always a full pill. */
+.media.idle .track {
+  background: transparent;
+}
+.media.idle .caption {
+  color: var(--ink-faint);
+}
+html.hover-on .list:not(.inert) .row:hover .media.idle .track,
+.row.selected .media.idle .track {
+  background: var(--m-bg);
+  transition-duration: 0.16s;
+  transition-timing-function: var(--ease-out);
+}
+html.hover-on .list:not(.inert) .row:hover .media.idle .caption,
+.row.selected .media.idle .caption {
+  color: var(--m-title);
+}
+html.hover-on .list:not(.inert) .row:hover .media.idle:hover .track {
+  background: var(--m-hbg);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.055);
+}
+html.hover-on .list:not(.inert) .row:hover .media.idle:hover .caption {
   color: var(--m-htitle);
 }
 .media.file-drop .track,
@@ -411,6 +501,11 @@ html.hover-on .list:not(.inert) .review.update:hover .track {
 
 .more .glyph {
   color: var(--ink-mute);
+  transition: transform 80ms var(--ease-out);
+}
+.more:active:not(:disabled) .glyph {
+  transform: translate(-50%, -50%) scale(0.9);
+  transition-duration: 120ms;
 }
 .more:disabled .glyph {
   opacity: 0.5;
@@ -418,9 +513,25 @@ html.hover-on .list:not(.inert) .review.update:hover .track {
 
 /* ─── Status header (MyTasksHeaderView) ────────────────────────────── */
 
-.hrow {
+.gspace {
   position: relative;
+}
+
+/* The 34pt band sticks under the page header while its group scrolls and
+ * is pushed away by the next group. Opaque paper (no backdrop blur): it
+ * costs nothing per scrolled frame and matches the canvas when not stuck. */
+.hrow {
+  position: sticky;
+  top: var(--sticky-top, 0px);
+  z-index: 30;
+  height: 34px;
+  background: var(--paper);
   contain: layout style;
+}
+
+.hrow.empty .chevron,
+.hrow.empty .htitle {
+  opacity: 0.45;
 }
 
 .hrow .chevron {
@@ -432,6 +543,13 @@ html.hover-on .list:not(.inert) .review.update:hover .track {
   /* Measured: NSImageView centres the symbol ~0.85pt above the box centre;
    * the mask snaps to device pixels, so a whole point is the closest fit. */
   margin-top: -1px;
+  transform-origin: 6px 6px;
+  transition: transform 200ms var(--ease-out);
+}
+
+/* One chevron turning 0° → 90°, as the original SwiftUI header did. */
+.hrow .chevron.open {
+  transform: rotate(90deg);
 }
 
 .hrow .htitle {
@@ -465,6 +583,18 @@ html.hover-on .list:not(.inert) .review.update:hover .track {
   white-space: nowrap;
 }
 
+.hrow .htitle .summary {
+  margin-left: 8px;
+  padding: 0 2px;
+  line-height: normal;
+  height: var(--f-hcount);
+  font-size: calc(11px * var(--type-scale));
+  font-weight: 500;
+  color: var(--red);
+  opacity: 0.8;
+  white-space: nowrap;
+}
+
 .hrow .hrule {
   position: absolute;
   left: 28px;
@@ -480,7 +610,8 @@ html.hover-on .list:not(.inert) .review.update:hover .track {
 .slot {
   position: relative;
   height: 36px;
-  animation: slot-in 0.18s ease-out both;
+  opacity: 1;
+  transition: opacity 180ms var(--ease-out);
   pointer-events: none;
 }
 
@@ -500,12 +631,33 @@ html.hover-on .list:not(.inert) .review.update:hover .track {
   white-space: nowrap;
 }
 
-@keyframes slot-in {
-  from {
+/* Entry as a transition (not keyframes) so fast status hops retarget. */
+@starting-style {
+  .slot {
     opacity: 0;
   }
-  to {
-    opacity: 1;
+}
+
+/* Reduced motion: keep colour/opacity feedback, drop movement. */
+@media (prefers-reduced-motion: reduce) {
+  .capsule:active:not(:disabled),
+  .more:active:not(:disabled) .glyph {
+    transform: none;
+  }
+  .more:active:not(:disabled) .glyph {
+    transform: translate(-50%, -50%);
+  }
+  .hrow .chevron {
+    transition: none;
+  }
+  .done.hovered .done-visual,
+  .done.pressed .done-visual {
+    transform: none;
+  }
+  @keyframes ghost-out {
+    to {
+      opacity: 0;
+    }
   }
 }
 
@@ -516,4 +668,9 @@ html.hover-on .list:not(.inert) .review.update:hover .track {
   left: -10000px;
   top: 0;
   pointer-events: none;
+}
+
+/* Vite dev server inspection only (`?debug=1`). */
+:root.debug-geometry .hrow {
+  background: rgba(255, 0, 180, 0.35);
 }

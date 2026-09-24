@@ -27,6 +27,8 @@ function sync() {
   root.classList.toggle("hover-on", !scrolling && !occluded && !dragging && windowKey);
 }
 
+export const msSinceScroll = () => performance.now() - lastScroll;
+
 export function isScrolling() {
   return scrolling;
 }

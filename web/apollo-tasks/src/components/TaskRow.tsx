@@ -1,4 +1,4 @@
-import { memo, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { post } from "../lib/bridge";
 import { clientToViewY, viewRect } from "../lib/interaction";
@@ -11,6 +11,9 @@ import { ReviewCapsule } from "./ReviewCapsule";
 // avatar + assignee | date | ellipsis, on a 36pt row with the hover capsule
 // inset 28pt from both edges.
 
+/** ReviewCapsule's dismissal: fade 260ms, hidden at 270ms. */
+const REVIEW_EXIT_MS = 270;
+
 export interface RowHandlers {
   register(key: string, element: HTMLElement | null): void;
   dragStart(event: React.DragEvent<HTMLDivElement>, row: TaskRowPayload): void;
@@ -22,20 +25,45 @@ interface Props {
   selected: boolean;
   bulkCount: number;
   fileDrop: boolean;
+  /** Part of the drag in flight (dimmed like the SwiftUI list's drag state). */
+  dragging: boolean;
   inert: boolean;
   glyphs: Record<string, Glyph>;
   handlers: RowHandlers;
 }
 
-export const TaskRow = memo(function TaskRow({ row, selected, bulkCount, fileDrop, inert, glyphs, handlers }: Props) {
+export const TaskRow = memo(function TaskRow({
+  row,
+  selected,
+  bulkCount,
+  fileDrop,
+  dragging,
+  inert,
+  glyphs,
+  handlers,
+}: Props) {
   const more = useRef<HTMLButtonElement>(null);
+  // The title takes the review slot only once no capsule occupies it: when
+  // a review is concluded it waits for the capsule's 270ms exit first.
+  const hasReview = row.review !== "hidden";
+  const [reviewSlotFree, setReviewSlotFree] = useState(!hasReview);
+  useEffect(() => {
+    if (hasReview) {
+      setReviewSlotFree(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setReviewSlotFree(true), REVIEW_EXIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [hasReview]);
   const ellipsis = glyphs.ellipsis;
   const key = `t:${row.id}`;
 
   return (
     <div
       ref={(element) => handlers.register(key, element)}
-      className={`row${selected ? " selected" : ""}${row.completed ? " completed" : ""}`}
+      className={`row${selected ? " selected" : ""}${row.completed ? " completed" : ""}${dragging ? " dragging" : ""}${
+        reviewSlotFree ? " no-review" : ""
+      }`}
       data-key={key}
       role="listitem"
       draggable={!inert}
@@ -81,7 +109,11 @@ export const TaskRow = memo(function TaskRow({ row, selected, bulkCount, fileDro
           <span className="label assignee">{row.assignee.name}</span>
         </>
       )}
-      {row.date && <span className={`label date ${row.date.tone}`}>{row.date.text}</span>}
+      {row.date && (
+        <span className={`label date ${row.date.tone}`}>
+          {row.date.tone === "soft" ? row.date.text : <span className="pill">{row.date.text}</span>}
+        </span>
+      )}
       <button
         ref={more}
         type="button"

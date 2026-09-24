@@ -19,6 +19,14 @@ async function boot() {
     startDemo();
   }
   createRoot(document.getElementById("root")!).render(<App />);
+  // Vite dev server only: `?scroll=<y>&debug=1` pins a scroll position (and
+  // outlines the sticky bands) so geometry can be inspected in the app.
+  if (import.meta.env.DEV) {
+    const params = new URLSearchParams(location.search);
+    const y = Number(params.get("scroll"));
+    if (params.get("debug")) document.documentElement.classList.add("debug-geometry");
+    if (y) window.setTimeout(() => window.scrollTo(0, y), 1200);
+  }
   post({ type: "boot" });
 }
 

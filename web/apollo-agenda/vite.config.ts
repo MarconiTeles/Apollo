@@ -15,7 +15,7 @@ const contentSecurityPolicy: Plugin = {
       attrs: {
         "http-equiv": "Content-Security-Policy",
         content:
-          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'",
+          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: apollo-avatar:; connect-src 'none'",
       },
       injectTo: "head-prepend",
     },

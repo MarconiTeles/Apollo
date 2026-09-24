@@ -48,6 +48,15 @@ let state: ListState = {
 
 const listeners = new Set<() => void>();
 
+// Vite dev server only: `?fakeReviews=1` gives every third task a pending
+// review so the review-capsule layout can be inspected with fixture data.
+const fakeReviews = import.meta.env.DEV && new URLSearchParams(location.search).has("fakeReviews");
+function devFakeReview(row: RowPayload): RowPayload {
+  if (!fakeReviews || row.k !== "t") return row;
+  const n = Number.parseInt(row.id.replace(/\D/g, "").slice(-3) || "0", 10);
+  return n % 3 === 0 ? { ...row, review: "update" } : row;
+}
+
 export function apply(patch: Patch) {
   const next: ListState = { ...state, seq: patch.seq };
   let rowsChanged = false;
@@ -61,7 +70,7 @@ export function apply(patch: Patch) {
     rowsChanged = true;
   }
   if (patch.upsert) {
-    for (const row of patch.upsert) byKey.set(rowKey(row), row);
+    for (const row of patch.upsert) byKey.set(rowKey(row), devFakeReview(row));
     rowsChanged = true;
   }
   if (patch.order) {

@@ -17,6 +17,8 @@ export type OutboundMessage =
   | { type: "openMonth"; key: string }
   /** Timeline card right-click, page coordinates. */
   | { type: "menu"; key: string; x: number; y: number }
+  /** Day panel "Meet" / "Entrar" tag: open the meeting link. */
+  | { type: "join"; key: string }
   | { type: "retry" }
   | { type: "error"; message: string };
 

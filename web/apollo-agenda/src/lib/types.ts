@@ -25,6 +25,24 @@ export interface EventPayload {
   monogram: string;
   /** Initials of the first attendee; absent when there are none. */
   initials?: string;
+  // Day panel (redesigned list under the month grid).
+  start: string;
+  end: string;
+  allDay: boolean;
+  location?: string;
+  /** Meeting link tag ("Meet", "Zoom", "Teams", "Entrar"). */
+  join?: { label: string };
+  /** Organizer first, then guests. */
+  people: PersonPayload[];
+  phase?: "past" | "now";
+}
+
+export interface PersonPayload {
+  name: string;
+  initials: string;
+  color: string;
+  photo?: string;
+  organizer: boolean;
 }
 
 export interface TimelineDay {
@@ -70,24 +88,9 @@ export interface Layout {
   occlusion: number;
 }
 
-/** SwiftUI line heights (NSLayoutManager.defaultLineHeight) per text style. */
-export interface Metrics {
-  cardTitle: number;
-  cardSubtitle: number;
-  avatar: number;
-  dateLabel: number;
-  dateNumber: number;
-  empty: number;
-  weekday: number;
-  cellNumber: number;
-  cellMonth: number;
-  folio: number;
-  relative: number;
-  rowTitle: number;
-  rowDetail: number;
-  panelEmpty: number;
-  banner: number;
-}
+/** SwiftUI text geometry per style: `<name>` is the line box height and
+ *  `<name>-dy` the offset that puts the CSS baseline on SwiftUI's. */
+export type Metrics = Record<string, number>;
 
 export interface Glyph {
   url: string;

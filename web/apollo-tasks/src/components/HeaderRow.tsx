@@ -1,9 +1,12 @@
 import { memo, useLayoutEffect, useRef } from "react";
 import { post } from "../lib/bridge";
+import { HEADER_BAND, headerSpacer } from "../lib/geometry";
 import type { FontBoxes, Glyph, HeaderRowPayload } from "../lib/types";
 
-// MyTasksHeaderView: 34pt first header, 52pt for the rest (18pt group
-// spacer above a 34pt header). Toggles on mouse DOWN, like the native view.
+// MyTasksHeaderView, split in two: the group spacer (18pt, 10pt for an empty
+// group, none for the first) and the 34pt band that sticks under the page
+// header while its group scrolls. Both toggle on mouse DOWN, like the native
+// view.
 
 interface Props {
   row: HeaderRowPayload;
@@ -12,10 +15,11 @@ interface Props {
   register(key: string, element: HTMLElement | null): void;
 }
 
+const CENTER_Y = HEADER_BAND / 2;
+
 export const HeaderRow = memo(function HeaderRow({ row, fonts, chevron, register }: Props) {
-  const height = row.first ? 34 : 52;
-  const centerY = row.first ? height / 2 : 18 + 17;
   const key = `h:${row.id}`;
+  const spacer = headerSpacer(row);
   const name = useRef<HTMLSpanElement>(null);
   // sizeToFit() rounds the title cell up to a device pixel, so the count
   // starts on a pixel boundary; CSS text width is fractional.
@@ -26,43 +30,52 @@ export const HeaderRow = memo(function HeaderRow({ row, fonts, chevron, register
     const scale = window.devicePixelRatio || 2;
     element.style.width = `${Math.ceil(element.getBoundingClientRect().width * scale) / scale}px`;
   }, [row.title, fonts]);
+  const toggle = (event: React.MouseEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    post({ type: "toggle", status: row.status });
+  };
+  const empty = row.count === 0;
   return (
-    <div
-      ref={(element) => register(key, element)}
-      className="hrow"
-      data-key={key}
-      style={{ height }}
-      role="button"
-      aria-expanded={!row.collapsed}
-      onMouseDown={(event) => {
-        if (event.button !== 0) return;
-        event.preventDefault();
-        post({ type: "toggle", status: row.status });
-      }}
-    >
-      {chevron && (
-        <span className="chevron" style={{ top: centerY - 6 }}>
-          <span
-            className="glyph"
-            style={{
-              width: chevron.width,
-              height: chevron.height,
-              WebkitMaskImage: `url(${chevron.url})`,
-              maskImage: `url(${chevron.url})`,
-            }}
-          />
+    <>
+      {spacer > 0 && <div className="gspace" style={{ height: spacer }} onMouseDown={toggle} />}
+      <div
+        ref={(element) => register(key, element)}
+        className={`hrow${empty ? " empty" : ""}`}
+        data-key={key}
+        role="button"
+        aria-expanded={!row.collapsed}
+        onMouseDown={toggle}
+      >
+        {chevron && (
+          <span className={`chevron${row.collapsed ? "" : " open"}`} style={{ top: CENTER_Y - 6 }}>
+            <span
+              className="glyph"
+              style={{
+                width: chevron.width,
+                height: chevron.height,
+                WebkitMaskImage: `url(${chevron.url})`,
+                maskImage: `url(${chevron.url})`,
+              }}
+            />
+          </span>
+        )}
+        <span className="htitle" style={{ top: 0 }}>
+          <span ref={name} className="name" style={{ color: row.color, marginTop: CENTER_Y - fonts.headerTitle / 2 }}>
+            {row.title}
+          </span>
+          <span className="count" style={{ marginTop: CENTER_Y - fonts.headerCount / 2 }}>
+            {row.count}
+          </span>
+          {row.collapsed && row.overdue > 0 && (
+            <span className="summary" style={{ marginTop: CENTER_Y - fonts.headerCount / 2 }}>
+              · {row.overdue} {row.overdue === 1 ? "atrasada" : "atrasadas"}
+            </span>
+          )}
         </span>
-      )}
-      <span className="htitle" style={{ top: 0 }}>
-        <span ref={name} className="name" style={{ color: row.color, marginTop: centerY - fonts.headerTitle / 2 }}>
-          {row.title}
-        </span>
-        <span className="count" style={{ marginTop: centerY - fonts.headerCount / 2 }}>
-          {row.count}
-        </span>
-      </span>
-      <span className="hrule" />
-    </div>
+        <span className="hrule" />
+      </div>
+    </>
   );
 });
 

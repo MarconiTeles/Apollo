@@ -15,7 +15,11 @@ export const TITLE_TRAILING_GAP = GAP * 1.5;
 
 export interface Metrics {
   titleX: number;
+  /** Title width when the row shows a review capsule. */
   titleWidth: number;
+  /** Rows without a review also take the review slot: the title runs up
+   * to the same 21pt gap before ANEXAR instead of stopping ~103pt early. */
+  titleWideWidth: number;
   reviewX: number;
   mediaX: number;
   priorityX: number;
@@ -36,9 +40,11 @@ export function metrics(totalWidth: number, widths: Widths): Metrics {
   const reviewX = mediaX - REVIEW_MEDIA_GAP - REVIEW_WIDTH;
   const titleX = EDGE + TITLE_LEADING;
   const titleWidth = Math.max(0, reviewX - TITLE_TRAILING_GAP - titleX);
+  const titleWideWidth = Math.max(0, mediaX - TITLE_TRAILING_GAP - titleX);
   return {
     titleX,
     titleWidth,
+    titleWideWidth,
     reviewX,
     mediaX,
     priorityX,
@@ -56,8 +62,17 @@ export type DisplayRow = RowPayload | { k: "d"; id: string; status: string; titl
 
 export const displayKey = (row: DisplayRow) => `${row.k}:${row.id}`;
 
+/** 34pt header band, preceded by the group spacer (none for the first). */
+export const HEADER_BAND = 34;
+
+/** Empty groups stay as drop targets but give back most of their spacer. */
+export function headerSpacer(row: { first: boolean; count: number }) {
+  if (row.first) return 0;
+  return row.count === 0 ? 10 : 18;
+}
+
 export function rowHeight(row: DisplayRow) {
-  if (row.k === "h") return row.first ? 34 : 52;
+  if (row.k === "h") return headerSpacer(row) + HEADER_BAND;
   return 36;
 }
 

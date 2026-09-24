@@ -1516,7 +1516,8 @@ struct ContentView: View {
 
         if sidebarRoute == .tasks || sidebarRoute == .board {
             ToolbarSpacer(.fixed)
-            // Keeps its own accent capsule and "Minhas tarefas" label.
+            // Draws the same transparent glass capsule as the groups above,
+            // plus its visible "Minhas tarefas" label.
             ToolbarItem {
                 MyTasksFilterToggle(filters: $appState.taskFilters,
                                     auth: appState.clickUpAuthService)
