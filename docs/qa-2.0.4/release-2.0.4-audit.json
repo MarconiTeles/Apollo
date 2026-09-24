@@ -1,7 +1,6 @@
 {
   "version": "2.0.4",
   "build": 104,
-  "source_base_commit": "b0f73665cf8908b0a9f02ea700e31b741f890334",
   "review_commit": "5256f8644633131044ba9f6142f120b0b8be6475",
   "architectures": {
     "Apollo": [
@@ -39,7 +38,7 @@
     "app": "/Users/marconi/Documents/PROJETOS/AGENTS/Apollo/t3/build/Apollo.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: Marconi Lima (CU544M36UD)",
     "dmg": "/Users/marconi/Documents/PROJETOS/AGENTS/Apollo/t3/dist/Apollo-2.0.4.dmg: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: Marconi Lima (CU544M36UD)"
   },
-  "publication_state": "validated locally; not yet published",
+  "publication_state": "published as latest; public assets and public update feed verified",
   "archive_validation": {
     "zip": "extracted, signature/staple/Gatekeeper passed; executable, helper, Info.plist and React resources match",
     "dmg": "mounted read-only, signature/staple/Gatekeeper passed; executable, helper, Info.plist and React resources match"
@@ -63,5 +62,19 @@
     }
   },
   "production_smoke": "Launched the app extracted from final ZIP on Apple Silicon. Tasks loaded real data; scrolled to verify sticky frosted category and full-width bottom rule. Agenda loaded real events and single portraits on left; selected September 25 and returned to Today. No external mutations exercised.",
-  "release_pipeline_notes": "Resumed notarization with the existing profile used for 2.0.3 after the script default profile was absent. Signed the final Sparkle ZIP using the existing backup key directly; no key was copied, exposed or rotated. Verified signature against unchanged app public key."
+  "release_pipeline_notes": "Resumed notarization with the existing profile used for 2.0.3 after the script default profile was absent. Signed the final Sparkle ZIP using the existing backup key directly; no key was copied, exposed or rotated. Verified signature against unchanged app public key.",
+  "release_url": "https://github.com/MarconiTeles/Apollo/releases/tag/v2.0.4",
+  "published_at": "2026-09-24T14:54:29Z",
+  "public_downloads_verified": true,
+  "source_commit": "b0f73665cf8908b0a9f02ea700e31b741f890334",
+  "feed_promotion_commit": "7fbcf0f0e42be366fffbc2f9c4d77713d79f3c0a",
+  "feed_url": "https://marconiteles.github.io/Apollo/appcast.xml",
+  "channel": "public",
+  "public_feed_verified": true,
+  "pages_run": {
+    "conclusion": "success",
+    "databaseId": 36016302741,
+    "headSha": "7fbcf0f0e42be366fffbc2f9c4d77713d79f3c0a",
+    "status": "completed"
+  }
 }
