@@ -529,11 +529,11 @@ html.hover-on .list:not(.inert) .review.update:hover .track {
   contain: layout style;
 }
 
-@supports ((-webkit-backdrop-filter: blur(9px)) or (backdrop-filter: blur(9px))) {
+@supports ((-webkit-backdrop-filter: blur(4.5px)) or (backdrop-filter: blur(4.5px))) {
   .hrow {
     background: color-mix(in srgb, var(--paper) 72%, transparent);
-    -webkit-backdrop-filter: blur(9px) saturate(135%);
-    backdrop-filter: blur(9px) saturate(135%);
+    -webkit-backdrop-filter: blur(4.5px) saturate(135%);
+    backdrop-filter: blur(4.5px) saturate(135%);
   }
 }
 
@@ -613,10 +613,10 @@ html.hover-on .list:not(.inert) .review.update:hover .track {
 
 .hrow .hrule {
   position: absolute;
-  left: 28px;
-  right: 28px;
+  left: 0;
+  right: 0;
   bottom: 0;
-  height: 0.5px;
+  height: 1px;
   background: var(--rule-soft);
   pointer-events: none;
 }
