@@ -2,11 +2,18 @@ import AppKit
 import SwiftUI
 
 private enum StatusPickerBubbleMetrics {
-    static let bodyWidth: CGFloat = 196
-    /// The surface shadow reaches 8pt sideways and 12pt downward
-    /// (`radius: 8, y: 4`). Keep a little extra breathing room so the
-    /// NSPanel never clips the blur at a window edge or during the spring.
-    static let shadowOutset: CGFloat = 14
+    static let bodyWidth: CGFloat = 200
+    /// Transparent margin of the panel around the glass. Liquid Glass casts
+    /// its own soft shadow well beyond our `radius: 10, y: 4` one; 16pt
+    /// clipped it into a visible rectangle. Hits stay limited to the body.
+    static let shadowOutset: CGFloat = 48
+    /// Distance kept between the body and the owning window's edges.
+    static let windowMargin: CGFloat = 24
+    static let rowHeight: CGFloat = 28
+    static let listInset: CGFloat = 6
+    static let cornerRadius: CGFloat = 16
+    /// Diameter of the glass drop that grows out of the status control.
+    static let seedDiameter: CGFloat = 18
 }
 
 /// Presents the shared status picker as one borderless, transparent surface.
@@ -45,14 +52,9 @@ final class StatusPickerBubblePresenter: NSObject, NSWindowDelegate {
         let anchorOnScreen = window.convertToScreen(anchorInWindow)
         let bodyWidth = StatusPickerBubbleMetrics.bodyWidth
         let shadowOutset = StatusPickerBubbleMetrics.shadowOutset
-        // Exact intrinsic estimate: row text + 10pt vertical padding, one
-        // hairline between rows, 6pt content inset and the 8pt notch. The old
-        // 30pt-per-row estimate left a large empty lower quadrant.
-        let rowHeight: CGFloat = 23.5
-        let dividerHeight = CGFloat(max(0, statuses.count - 1))
-        let contentInsets: CGFloat = 6 + 16
-        let bodyHeight = min(ceil(CGFloat(statuses.count) * rowHeight
-                                  + dividerHeight + contentInsets), 420)
+        // Exact intrinsic height: fixed-height rows plus the list inset.
+        let bodyHeight = min(CGFloat(statuses.count) * StatusPickerBubbleMetrics.rowHeight
+                             + StatusPickerBubbleMetrics.listInset * 2, 420)
         // A status bubble belongs to the app canvas, not to the desktop.
         // Constrain it to the owning window as well as the physical screen so
         // a bottom-row picker flips upward instead of sampling wallpaper.
@@ -60,32 +62,40 @@ final class StatusPickerBubblePresenter: NSObject, NSWindowDelegate {
         // The surrounding transparent panel may then carry the whole blur
         // without sampling outside the app canvas or exposing a clipped
         // rectangular edge.
+        let margin = StatusPickerBubbleMetrics.windowMargin
         let visible = screen.visibleFrame.intersection(
-            window.frame.insetBy(dx: 8 + shadowOutset,
-                                 dy: 8 + shadowOutset)
+            window.frame.insetBy(dx: margin, dy: margin)
         )
-        let belowY = anchorOnScreen.minY - bodyHeight - 5
+        let belowY = anchorOnScreen.minY - bodyHeight - 6
         let appearsAbove = belowY < visible.minY + 8
         let bodyY = appearsAbove
-            ? min(anchorOnScreen.maxY + 5, visible.maxY - bodyHeight - 8)
+            ? min(anchorOnScreen.maxY + 6, visible.maxY - bodyHeight - 8)
             : belowY
-        // The notch lives near the leading edge so the body expands rightward
-        // into the list canvas instead of straddling the Done control.
-        let preferredNotchX: CGFloat = 28
-        let proposedX = anchorOnScreen.midX - preferredNotchX
+        // The body opens rightward from the control, so the glass drop
+        // that grows out of the control sits near its leading corner.
+        let proposedX = anchorOnScreen.midX - 22
         let bodyX = min(max(proposedX, visible.minX + 8),
                         visible.maxX - bodyWidth - 8)
-        let localNotchX = max(22, min(bodyWidth - 22,
-                                      anchorOnScreen.midX - bodyX))
-
-        let panelRect = NSRect(
-            x: bodyX - shadowOutset,
-            y: bodyY - shadowOutset,
-            width: bodyWidth + shadowOutset * 2,
-            height: bodyHeight + shadowOutset * 2
-        )
+        let bodyOnScreen = NSRect(x: bodyX, y: bodyY, width: bodyWidth, height: bodyHeight)
+        let seed = StatusPickerBubbleMetrics.seedDiameter
+        let seedOnScreen = NSRect(x: anchorOnScreen.midX - seed / 2,
+                                  y: anchorOnScreen.midY - seed / 2,
+                                  width: seed, height: seed)
+        // The panel covers the body AND the control: the glass morphs
+        // from the control's own position into the list.
+        let panelRect = bodyOnScreen.union(seedOnScreen)
+            .insetBy(dx: -shadowOutset, dy: -shadowOutset)
+        // SwiftUI lays out top-down from the panel's top-left corner.
+        func local(_ rect: NSRect) -> CGRect {
+            CGRect(x: rect.minX - panelRect.minX, y: panelRect.maxY - rect.maxY,
+                   width: rect.width, height: rect.height)
+        }
+        let currentHex = statuses.first {
+            $0.status.caseInsensitiveCompare(currentStatusName ?? "") == .orderedSame
+        }?.displayHex
 
         let model = StatusPickerBubbleModel()
+        model.seedTint = currentHex.map { Color(statusHex: $0) }
         let panel = StatusPickerBubblePanel(
             contentRect: panelRect,
             styleMask: [.borderless],
@@ -105,16 +115,19 @@ final class StatusPickerBubblePresenter: NSObject, NSWindowDelegate {
             statuses: statuses,
             currentStatusName: currentStatusName,
             appearsAbove: appearsAbove,
-            notchX: localNotchX,
-            bodySize: CGSize(width: bodyWidth, height: bodyHeight),
-            shadowOutset: shadowOutset,
+            bodyFrame: local(bodyOnScreen),
+            seedFrame: local(seedOnScreen),
             model: model
-        ) { [weak self] status in
+        ) { [weak self, weak model] status in
+            // The drop shrinks back into the control already wearing the
+            // colour the control is about to show.
+            model?.seedTint = Color(statusHex: status.displayHex)
             onSelect(status)
             self?.dismiss(animated: true)
         }
         let host = StatusPickerBubbleHostingView(rootView: root)
-        host.shadowOutset = shadowOutset
+        host.interactiveRect = NSRect(x: bodyX - panelRect.minX, y: bodyY - panelRect.minY,
+                                      width: bodyWidth, height: bodyHeight)
         host.wantsLayer = true
         host.layer?.backgroundColor = NSColor.clear.cgColor
         panel.contentView = host
@@ -126,12 +139,10 @@ final class StatusPickerBubblePresenter: NSObject, NSWindowDelegate {
         panel.makeKeyAndOrderFront(nil)
         installEscapeMonitor()
         installClickOutsideMonitor()
+        // First frame: a glass drop over the control. Next runloop: it
+        // morphs into the list while the rows cascade in behind it.
         DispatchQueue.main.async {
-            // Spring mais seco que o original (0.34/0.78) — o picker aparece
-            // de imediato em vez de "demorar a abrir".
-            withAnimation(.spring(response: 0.24, dampingFraction: 0.85)) {
-                model.visible = true
-            }
+            model.expand()
         }
     }
 
@@ -156,10 +167,9 @@ final class StatusPickerBubblePresenter: NSObject, NSWindowDelegate {
         dismissalCallback = nil
         callback?()
         if animated, let model {
-            withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
-                model.visible = false
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self, weak panel] in
+            model.collapse()
+            DispatchQueue.main.asyncAfter(deadline: .now() + StatusPickerBubbleModel.collapseDuration) {
+                [weak self, weak panel] in
                 panel?.orderOut(nil)
                 if self?.panel === panel {
                     self?.panel = nil
@@ -285,129 +295,139 @@ private final class StatusPickerBubblePanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-/// The enlarged transparent window exists only to carry the blur. Ignore
-/// hits in that breathing room so the picker does not grow a mysterious
-/// 14pt invisible interaction rectangle around the visible bubble.
+/// The enlarged transparent window exists only to carry the blur and the
+/// morph from the control. Only the list body takes hits, so the picker
+/// never grows an invisible interaction area over the row underneath.
 private final class StatusPickerBubbleHostingView<Content: View>: NSHostingView<Content> {
-    var shadowOutset: CGFloat = 0
+    /// Body rect in unflipped (bottom-left origin) panel coordinates.
+    var interactiveRect: NSRect = .zero
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard bounds.insetBy(dx: shadowOutset, dy: shadowOutset).contains(point)
-        else { return nil }
+        let local = convert(point, from: superview)
+        let y = isFlipped ? bounds.height - local.y : local.y
+        guard interactiveRect.contains(NSPoint(x: local.x, y: y)) else { return nil }
         return super.hitTest(point)
     }
 }
 
+/// Seed → list → seed → gone. The glass keeps one identity throughout, so
+/// every step is a Liquid Glass morph rather than a scale/opacity fake.
 private final class StatusPickerBubbleModel: ObservableObject {
-    @Published var visible = false
+    enum Phase { case seed, list, gone }
+    @Published var phase: Phase = .seed
+    /// Rows cascade in once the glass has started growing.
+    @Published var revealed = false
+    @Published var seedTint: Color?
+
+    static let expand = Animation.spring(duration: 0.36, bounce: 0.24)
+    static let shrink = Animation.spring(duration: 0.24, bounce: 0.05)
+    static let collapseDuration: TimeInterval = 0.40
+
+    func expand() {
+        withAnimation(Self.expand) { phase = .list }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.revealed = true
+        }
+    }
+
+    func collapse() {
+        withAnimation(.easeOut(duration: 0.09)) { revealed = false }
+        withAnimation(Self.shrink) { phase = .seed }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            withAnimation(.easeOut(duration: 0.16)) { self?.phase = .gone }
+        }
+    }
 }
 
 private struct StatusPickerBubbleView: View {
     let statuses: [CUStatus]
     let currentStatusName: String?
     let appearsAbove: Bool
-    let notchX: CGFloat
-    let bodySize: CGSize
-    let shadowOutset: CGFloat
+    /// Body and seed frames in panel-local, top-left-origin coordinates.
+    let bodyFrame: CGRect
+    let seedFrame: CGRect
     @ObservedObject var model: StatusPickerBubbleModel
     let onSelect: (CUStatus) -> Void
+    @Namespace private var glassNamespace
 
-    private var shape: StatusBubbleShape {
-        StatusBubbleShape(notchEdge: appearsAbove ? .bottom : .top,
-                          notchX: notchX)
+    private static let glassID = "status.picker.glass"
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: StatusPickerBubbleMetrics.cornerRadius, style: .continuous)
+    }
+    private var morphs: Bool {
+        Materials.tier == .liquidGlass
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             Color.clear
-            if model.visible {
-                materializedSurface
-                    .frame(width: bodySize.width, height: bodySize.height)
-                    .padding(shadowOutset)
-                    .transition(
-                        .scale(scale: 0.12,
-                               anchor: appearsAbove ? .bottomLeading : .topLeading)
-                        .combined(with: .opacity)
-                    )
+            if morphs, #available(macOS 26.0, *) {
+                glassMorph
+            } else {
+                fallbackSurface
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    @ViewBuilder
-    private var materializedSurface: some View {
-        if #available(macOS 26.0, *), Materials.tier == .liquidGlass {
-            GlassEffectContainer(spacing: 0) {
-                pickerContent
-                    .glassEffect(.regular.interactive(), in: shape)
-                    .glassEffectTransition(.materialize)
-                    .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
+    // MARK: Liquid Glass
+
+    @available(macOS 26.0, *)
+    private var glassMorph: some View {
+        GlassEffectContainer(spacing: 24) {
+            ZStack(alignment: .topLeading) {
+                switch model.phase {
+                case .list:
+                    pickerContent
+                        .frame(width: bodyFrame.width, height: bodyFrame.height)
+                        .glassEffect(.regular.interactive(), in: shape)
+                        .glassEffectID(Self.glassID, in: glassNamespace)
+                        .shadow(color: .black.opacity(0.14), radius: 10, y: 4)
+                        .padding(.leading, bodyFrame.minX)
+                        .padding(.top, bodyFrame.minY)
+                case .seed:
+                    Color.clear
+                        .frame(width: seedFrame.width, height: seedFrame.height)
+                        .glassEffect(.regular.tint(model.seedTint?.opacity(0.45)), in: .circle)
+                        .glassEffectID(Self.glassID, in: glassNamespace)
+                        .glassEffectTransition(.materialize)
+                        .padding(.leading, seedFrame.minX)
+                        .padding(.top, seedFrame.minY)
+                case .gone:
+                    EmptyView()
+                }
             }
-        } else if Materials.tier == .solid {
-            pickerContent
-                .background(shape.fill(Editorial.popup))
-                .overlay(shape.strokeBorder(Editorial.rule, lineWidth: 1))
-                .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
-        } else {
-            pickerContent
-                .background(.ultraThinMaterial, in: shape)
-                .overlay(shape.strokeBorder(Color.white.opacity(0.16), lineWidth: 0.6))
-                .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    // MARK: Reduced transparency / motion
+
+    @ViewBuilder
+    private var fallbackSurface: some View {
+        if model.phase == .list {
+            Group {
+                if Materials.tier == .solid {
+                    pickerContent.background(shape.fill(Editorial.popup))
+                } else {
+                    pickerContent.background(.ultraThinMaterial, in: shape)
+                }
+            }
+            .frame(width: bodyFrame.width, height: bodyFrame.height)
+            .shadow(color: .black.opacity(0.14), radius: 10, y: 4)
+            .transition(.scale(scale: 0.96, anchor: appearsAbove ? .bottomLeading : .topLeading)
+                .combined(with: .opacity))
+            .padding(.leading, bodyFrame.minX)
+            .padding(.top, bodyFrame.minY)
         }
     }
 
     private var pickerContent: some View {
         StatusPickerPopover(statuses: statuses,
                             currentStatusName: currentStatusName,
+                            revealed: model.revealed || !morphs,
+                            revealFromBottom: appearsAbove,
                             onSelect: onSelect)
-            .frame(maxHeight: 408)
-            .padding(.top, appearsAbove ? 5 : 11)
-            .padding(.bottom, appearsAbove ? 11 : 5)
-    }
-}
-
-private struct StatusBubbleShape: InsettableShape {
-    enum NotchEdge { case top, bottom }
-    let notchEdge: NotchEdge
-    let notchX: CGFloat
-    var insetAmount: CGFloat = 0
-
-    func path(in rect: CGRect) -> Path {
-        let notchHeight: CGFloat = 8
-        let notchHalfWidth: CGFloat = 10
-        let body = rect.insetBy(dx: insetAmount, dy: insetAmount)
-        let bodyRect = CGRect(x: body.minX,
-                              y: body.minY + (notchEdge == .top ? notchHeight : 0),
-                              width: body.width,
-                              height: body.height - notchHeight)
-        let radius: CGFloat = max(10, Editorial.popupRadius(12) - insetAmount)
-        var path = Path(roundedRect: bodyRect,
-                        cornerRadius: radius,
-                        style: .continuous)
-        let center = max(body.minX + notchHalfWidth + 6,
-                         min(body.maxX - notchHalfWidth - 6,
-                             body.minX + notchX))
-        var notch = Path()
-        if notchEdge == .top {
-            notch.move(to: CGPoint(x: center - notchHalfWidth, y: bodyRect.minY + 1))
-            notch.addQuadCurve(to: CGPoint(x: center, y: body.minY),
-                               control: CGPoint(x: center - 4, y: body.minY))
-            notch.addQuadCurve(to: CGPoint(x: center + notchHalfWidth, y: bodyRect.minY + 1),
-                               control: CGPoint(x: center + 4, y: body.minY))
-        } else {
-            notch.move(to: CGPoint(x: center - notchHalfWidth, y: bodyRect.maxY - 1))
-            notch.addQuadCurve(to: CGPoint(x: center, y: body.maxY),
-                               control: CGPoint(x: center - 4, y: body.maxY))
-            notch.addQuadCurve(to: CGPoint(x: center + notchHalfWidth, y: bodyRect.maxY - 1),
-                               control: CGPoint(x: center + 4, y: body.maxY))
-        }
-        path.addPath(notch)
-        return path
-    }
-
-    func inset(by amount: CGFloat) -> StatusBubbleShape {
-        StatusBubbleShape(notchEdge: notchEdge,
-                          notchX: notchX,
-                          insetAmount: insetAmount + amount)
     }
 }

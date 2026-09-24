@@ -14,6 +14,18 @@ final class AgendaMonthTests: XCTestCase {
         CalendarEvent(id: "event-\(Int(start.timeIntervalSince1970))", title: "Evento", startDate: start, endDate: end,
                       colorHex: "#039BE5", calendarId: "primary", isAllDay: allDay)
     }
+    func testSameMeetingInSharedCalendarsKeepsBothCopiesWithDistinctUIIdentity() {
+        let original = event(date(2026, 9, 24, 9), date(2026, 9, 24, 10))
+        var shared = original
+        shared.calendarId = "coworker@example.com"
+        shared.colorHex = "#33B679"
+        let model = AgendaMonth(containing: original.startDate, calendar: calendar)
+        let copies = model.eventsByDay([original, shared])[date(2026, 9, 24)]!
+        XCTAssertEqual(copies.count, 2)
+        XCTAssertEqual(Set(copies.map(\.calendarIdentity)).count, 2)
+        // The original Google ID must still be sent to event mutation APIs.
+        XCTAssertEqual(shared.id, original.id)
+    }
     func testMonthGridIncludesLeadingAndTrailingDays() {
         let m = AgendaMonth(containing: date(2026, 9, 23), calendar: calendar)
         XCTAssertEqual(m.days.count, 35)

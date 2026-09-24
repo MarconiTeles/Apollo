@@ -1,0 +1,519 @@
+/* Apollo · Tarefas (React port of MyTasksAppKitList).
+ *
+ * Every geometry value mirrors MyTasksNativeRowView.layout(),
+ * MyTasksHeaderView.layout() and MyTasksDropPlaceholderView.layout().
+ * Colours are CSS variables resolved natively (see MyTasksReactTheme).
+ * NSTextField labels carry a 2pt line-fragment inset on each side, which is
+ * why text boxes use `padding: 0 2px`. Motion copies the CoreAnimation
+ * durations/curves of the native row one for one. */
+
+:root {
+  --curve-out: cubic-bezier(0.18, 0.84, 0.24, 1);
+  --curve-hover-in: cubic-bezier(0.2, 0.82, 0.24, 1);
+  --curve-hover-out: cubic-bezier(0.32, 0, 0.67, 1);
+  --curve-dismiss: cubic-bezier(0.4, 0, 0.67, 1);
+  --type-scale: 0.85;
+  color-scheme: light;
+}
+
+:root.dark {
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow-x: hidden;
+}
+
+body {
+  font-family: -apple-system, system-ui, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+  -webkit-text-size-adjust: none;
+}
+
+img {
+  -webkit-user-drag: none;
+}
+
+.list {
+  position: relative;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+/* ─── Task row ─────────────────────────────────────────────────────── */
+
+.row {
+  position: relative;
+  height: 36px;
+  contain: layout style;
+}
+
+.list.huge .row,
+.list.huge .hrow {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 36px;
+}
+
+.row > .bg {
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  top: 1px;
+  bottom: 1px;
+  border-radius: 13.5px;
+  pointer-events: none;
+}
+
+.row.selected > .bg {
+  background: var(--accent-075);
+  box-shadow: inset 0 0 0 1px var(--accent-042);
+}
+
+.row > .rule {
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  bottom: 0;
+  height: 0.5px;
+  background: var(--rule-50);
+  pointer-events: none;
+}
+
+/* Hover: AppKit applies it without implicit animation. */
+html.hover-on .list:not(.inert) .row:hover {
+  z-index: 20;
+}
+html.hover-on .list:not(.inert) .row:not(.selected):hover > .bg {
+  background: var(--card);
+}
+html.hover-on .list:not(.inert) .row:hover > .bg {
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.14);
+}
+html.hover-on .list:not(.inert) .row.selected:hover > .bg {
+  box-shadow:
+    inset 0 0 0 1px var(--accent-042),
+    0 1px 8px rgba(0, 0, 0, 0.14);
+}
+html.hover-on .list:not(.inert) .row:hover > .rule {
+  opacity: 0;
+}
+
+.label {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 0 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: normal;
+  pointer-events: none;
+}
+
+.row .title {
+  left: var(--title-x);
+  width: var(--title-w);
+  /* Measured: NSTextField draws this face 0.5pt higher than the CSS box. */
+  top: calc(18px - var(--f-title) / 2 - 0.5px);
+  height: var(--f-title);
+  font-size: calc(15px * var(--type-scale));
+  font-weight: 500;
+  color: var(--ink);
+  pointer-events: auto;
+}
+
+.row.completed .title {
+  color: var(--ink-mute);
+}
+
+.row .priority {
+  left: var(--priority-x);
+  width: var(--priority-w);
+  top: calc(18px - var(--f-priority) / 2);
+  height: var(--f-priority);
+  font-size: calc(9.5px * var(--type-scale));
+  font-weight: 600;
+}
+
+.row .avatar {
+  position: absolute;
+  left: var(--assignee-x);
+  top: 8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.row .avatar .initials {
+  position: absolute;
+  /* Measured: centred NSTextField text sits 0.25pt right of CSS centring. */
+  left: 0.25px;
+  top: 4px;
+  width: 20px;
+  height: 12px;
+  text-align: center;
+  font-size: 8.4px;
+  font-weight: 700;
+  line-height: normal;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.row .avatar img {
+  position: absolute;
+  inset: 0;
+  width: 20px;
+  height: 20px;
+  object-fit: fill;
+}
+
+.row .assignee {
+  left: calc(var(--assignee-x) + 27px);
+  width: max(0px, calc(var(--assignee-w) - 27px));
+  top: calc(18px - var(--f-assignee) / 2);
+  height: var(--f-assignee);
+  font-size: calc(11.5px * var(--type-scale));
+  font-weight: 400;
+  color: var(--ink-soft);
+}
+
+.row .date {
+  left: var(--date-x);
+  width: var(--date-w);
+  top: calc(18px - var(--f-date) / 2);
+  height: var(--f-date);
+  text-align: right;
+  text-overflow: clip;
+  font-size: calc(11.5px * var(--type-scale));
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+.row .date.today {
+  color: var(--accent);
+}
+.row .date.overdue {
+  color: var(--red);
+}
+
+/* ─── DONE circle (MyTasksDoneCircle) ──────────────────────────────── */
+
+.done {
+  position: absolute;
+  left: 37px;
+  top: 6px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  cursor: pointer;
+}
+.done.completed,
+.done:disabled {
+  cursor: default;
+}
+.done-visual {
+  position: absolute;
+  inset: 0;
+  transform-origin: 12px 12px;
+  transition: transform 0.2s ease-out;
+  pointer-events: none;
+}
+.done-visual svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+/* The painted disc: the 10pt visual circle inset by 0.6pt. */
+.done-fill {
+  position: absolute;
+  left: 7.6px;
+  top: 7.6px;
+  width: 8.8px;
+  height: 8.8px;
+  border-radius: 50%;
+}
+.done-halo {
+  position: absolute;
+  left: 4.8px;
+  top: 4.8px;
+  width: 14.4px;
+  height: 14.4px;
+  border-radius: 50%;
+}
+.done.hovered .done-visual {
+  transform: scale(1.16);
+  transition-duration: 0.16s;
+}
+.done.pressed .done-visual {
+  transform: scale(0.91);
+  transition-duration: 0.08s;
+}
+.done.released .done-visual {
+  transition: transform var(--spring-duration) var(--spring);
+}
+
+/* ─── Capsules (review · media) ────────────────────────────────────── */
+
+.capsule {
+  position: absolute;
+  top: 5px;
+  height: 26px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font-family: inherit;
+}
+
+.capsule .track,
+.capsule .fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 13px;
+  pointer-events: none;
+}
+
+.capsule .caption {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.media {
+  left: var(--media-x);
+  width: 64.4px;
+}
+.media .track {
+  background: var(--m-bg);
+  transition:
+    background-color 0.24s var(--curve-hover-out),
+    box-shadow 0.24s var(--curve-hover-out);
+}
+.media .fill {
+  background: var(--m-fill);
+  clip-path: inset(0 calc((1 - var(--m-p)) * 100%) 0 0);
+  transition: clip-path 0.22s ease-out;
+}
+.media .caption {
+  font-size: calc(9.5px * var(--type-scale));
+  color: var(--m-title);
+}
+.media.small .caption {
+  font-size: calc(8px * var(--type-scale));
+}
+html.hover-on .list:not(.inert) .media:hover .track {
+  background: var(--m-hbg);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.055);
+  transition-duration: 0.16s;
+  transition-timing-function: var(--curve-hover-in);
+}
+html.hover-on .list:not(.inert) .media:hover .caption {
+  color: var(--m-htitle);
+}
+.media.file-drop .track,
+html.hover-on .list:not(.inert) .media.file-drop:hover .track {
+  background: var(--orange-16);
+}
+.media.file-drop .caption,
+html.hover-on .list:not(.inert) .media.file-drop:hover .caption {
+  color: var(--orange);
+}
+.media .dash {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.media .badge {
+  position: absolute;
+  left: 52.4px;
+  top: -6px;
+  width: 20px;
+  height: 16px;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--accent);
+  font-family: -apple-system, system-ui, sans-serif;
+  font-size: 8.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: normal;
+  text-align: center;
+  pointer-events: none;
+}
+
+.review {
+  left: var(--review-x);
+  width: 76px;
+}
+.review .track {
+  background: var(--r-bg);
+  transition:
+    background-color 0.36s var(--curve-out),
+    box-shadow 0.3s var(--curve-out);
+}
+.review .caption {
+  font-size: calc(9.2px * var(--type-scale));
+  color: var(--r-title);
+}
+html.hover-on .list:not(.inert) .review.update:hover .track {
+  background: var(--accent-082);
+  transition:
+    background-color 0.16s var(--curve-hover-in),
+    box-shadow 0.3s var(--curve-out);
+}
+
+/* ─── More (ellipsis) ──────────────────────────────────────────────── */
+
+.more {
+  position: absolute;
+  left: var(--more-x);
+  top: 9px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  outline: none;
+}
+
+.glyph {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  mask-size: 100% 100%;
+  pointer-events: none;
+}
+
+.more .glyph {
+  color: var(--ink-mute);
+}
+.more:disabled .glyph {
+  opacity: 0.5;
+}
+
+/* ─── Status header (MyTasksHeaderView) ────────────────────────────── */
+
+.hrow {
+  position: relative;
+  contain: layout style;
+}
+
+.hrow .chevron {
+  position: absolute;
+  left: 36px;
+  width: 12px;
+  height: 12px;
+  color: var(--ink-mute);
+  /* Measured: NSImageView centres the symbol ~0.85pt above the box centre;
+   * the mask snaps to device pixels, so a whole point is the closest fit. */
+  margin-top: -1px;
+}
+
+.hrow .htitle {
+  position: absolute;
+  left: 58px;
+  display: flex;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.hrow .htitle .name {
+  box-sizing: border-box;
+  padding: 0 2px;
+  line-height: normal;
+  height: var(--f-htitle);
+  font-size: calc(11.5px * var(--type-scale));
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.hrow .htitle .count {
+  position: relative;
+  margin-left: 10px;
+  padding: 0 2px;
+  line-height: normal;
+  height: var(--f-hcount);
+  font-size: calc(11px * var(--type-scale));
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+
+.hrow .hrule {
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  bottom: 0;
+  height: 0.5px;
+  background: var(--rule-soft);
+  pointer-events: none;
+}
+
+/* ─── Drop slot (MyTasksDropPlaceholderView) ───────────────────────── */
+
+.slot {
+  position: relative;
+  height: 36px;
+  animation: slot-in 0.18s ease-out both;
+  pointer-events: none;
+}
+
+.slot svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+.slot .slot-label {
+  position: absolute;
+  left: 73px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: normal;
+  padding: 0 2px;
+  white-space: nowrap;
+}
+
+@keyframes slot-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Offscreen host for the multi-task drag image (setDragImage needs a
+ * rendered element). */
+.drag-image-host {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  pointer-events: none;
+}

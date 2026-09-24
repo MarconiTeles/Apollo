@@ -58,10 +58,10 @@ struct EditorialMyTasksView: View {
     /// Sticky chrome height (52pt toolbar band + title row + column-header
     /// row) — one continuous glass element up to the window top. Rows start
     /// below it but scroll through underneath.
-    // 132pt is the measured toolbar + route title + column-header chrome.
-    // The additional 30pt is deliberate breathing room before the first
-    // status group, while rows can still scroll back underneath the material.
-    private let chromeInset: CGFloat = 162
+    // 82pt is the toolbar reserve (52) + column-header row (30). The extra
+    // 10pt is the gap before the first status group; rows can still scroll
+    // back underneath the material.
+    private let chromeInset: CGFloat = 82 + 10
 
     var body: some View {
         GeometryReader { geo in
@@ -135,6 +135,9 @@ struct EditorialMyTasksView: View {
                 selectionAnchorId = nil
             }
         }
+        #if APOLLO_TASKS_REACT
+        .onAppear { if MyTasksRenderer.usesReact { MyTasksReactHost.shared.prewarm() } }
+        #endif
         .task(id: activeListId) {
             listMountReady = false
             await Task.yield()
@@ -286,7 +289,27 @@ struct EditorialMyTasksView: View {
             emptyState(title: "Status indisponíveis",
                        caption: "Sincronize a lista para carregar suas categorias.")
         } else {
-            MyTasksAppKitList(
+            taskList
+                .apolloStudioNode("tasks.list",
+                                  title: "Lista de tarefas",
+                                  kind: .list,
+                                  parent: "tasks.page",
+                                  properties: [
+                                    .init(kind: .verticalPadding,
+                                          title: "Inset superior", value: chromeInset),
+                                    .init(kind: .height,
+                                          title: "Altura da linha", value: 36),
+                                  ])
+        }
+    }
+
+    /// The task viewport. The DEV build compiled with APOLLO_TASKS_REACT
+    /// renders it in React (MyTasksReactList); every other build is native.
+    @ViewBuilder
+    private var taskList: some View {
+        #if APOLLO_TASKS_REACT
+        if MyTasksRenderer.usesReact {
+            MyTasksReactList(
                 sections: nativeSections,
                 selectedTaskIds: selectedTaskIds,
                 appState: appState,
@@ -314,20 +337,65 @@ struct EditorialMyTasksView: View {
                     // Arrastou sobre UMA tarefa: abre o fluxo de sempre
                     // já com o vídeo dentro, sem passar pelo seletor.
                     beginFileDrop(task: task, urls: urls)
-                }
+                },
+                onListFileDragChanged: { fileDragOverList = $0 },
+                onListFileDrop: { deliverListFileURLs($0) }
             )
-            .apolloStudioNode("tasks.list",
-                              title: "Lista de tarefas",
-                              kind: .list,
-                              parent: "tasks.page",
-                              properties: [
-                                .init(kind: .verticalPadding,
-                                      title: "Inset superior", value: chromeInset),
-                                .init(kind: .height,
-                                      title: "Altura da linha", value: 36),
-                              ])
+        } else {
+            appKitTaskList
+        }
+        #else
+        appKitTaskList
+        #endif
+    }
+
+    private var appKitTaskList: some View {
+        MyTasksAppKitList(
+            sections: nativeSections,
+            selectedTaskIds: selectedTaskIds,
+            appState: appState,
+            headerOcclusionHeight: showsColumnHeader ? 82 : 52,
+            topContentInset: chromeInset,
+            // Reserve the bulk-action capsule only while it actually
+            // exists. A permanent 112pt NSScrollView inset left visible
+            // rows inside a non-interactive bottom band.
+            bottomContentInset: selectedTasks.isEmpty ? 12 : 112,
+            onActivate: { task, modifiers, rect in
+                activate(task, modifiers: modifiers, origin: rect)
+            },
+            onToggleStatus: { toggleCollapsed($0) },
+            onBeginDrag: { beginDragIds(for: $0) },
+            onEndDrag: { completed in
+                draggingTaskIds.removeAll()
+                if completed { clearSelection() }
+            },
+            onClearSelection: clearSelection,
+            onMediaAction: { task, mode in
+                mediaFlowRequest = TaskMediaFlowRequest(task: task, mode: mode)
+            },
+            onBulkMediaAction: { presentBulkMedia() },
+            onFileDrop: { task, urls in
+                // Arrastou sobre UMA tarefa: abre o fluxo de sempre
+                // já com o vídeo dentro, sem passar pelo seletor.
+                beginFileDrop(task: task, urls: urls)
+            }
+        )
+    }
+
+    #if APOLLO_TASKS_REACT
+    /// Finder files dropped anywhere on the React list with 2+ selected
+    /// tasks: same delivery as `handleListFileDrop`, from resolved URLs.
+    private func deliverListFileURLs(_ urls: [URL]) {
+        guard selectedTasks.count >= 2 else { return }
+        for url in urls {
+            if bulkMediaRequest == nil {
+                presentBulkMedia(initialURLs: [url])
+            } else {
+                bulkInbox.deliver([url])
+            }
         }
     }
+    #endif
 
     private var nativeSections: [MyTasksAppKitSection] {
         groups.map { group in

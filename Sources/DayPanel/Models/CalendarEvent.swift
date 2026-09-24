@@ -2,6 +2,9 @@ import Foundation
 
 struct CalendarEvent: Identifiable, Codable, Equatable {
     let id: String
+    /// Google IDs are unique within a calendar, not across shared calendars.
+    /// Keep the server ID intact for API mutations; use this for UI identity.
+    var calendarIdentity: String { calendarId + "|" + id }
     var title: String
     var startDate: Date
     var endDate: Date

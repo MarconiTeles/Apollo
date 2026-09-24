@@ -1,23 +1,29 @@
 import AppKit
 import SwiftUI
 
-/// Global task-comment action list inspired by ClickUp's Assigned Comments
-/// surface, rebuilt with Apollo's compact Liquid Glass capsule language.
-struct AssignedCommentsView: View {
-    @EnvironmentObject private var appState: AppState
-
-    private enum Tab: String, CaseIterable {
+/// Scope of the comments page. Owned by ContentView because its controls
+/// live in the window toolbar, like the Agenda's month navigation.
+struct AssignedCommentsScope: Equatable {
+    enum Tab: String, CaseIterable {
         case assigned = "Atribuídos a mim"
         case delegated = "Delegados por mim"
+
+        /// Toolbar label — the full name lives in the tooltip.
+        var shortTitle: String {
+            switch self {
+            case .assigned: "Para mim"
+            case .delegated: "Delegados"
+            }
+        }
     }
 
-    private enum Kind: String, CaseIterable {
+    enum Kind: String, CaseIterable {
         case all = "Tudo"
         case assigned = "Atribuídos"
         case mentions = "Menções"
     }
 
-    private enum Period: String, CaseIterable {
+    enum Period: String, CaseIterable {
         case thirty = "Últimos 30 dias"
         case sixty = "Últimos 60 dias"
         case ninety = "Últimos 90 dias"
@@ -35,17 +41,38 @@ struct AssignedCommentsView: View {
         }
     }
 
-    @State private var tab: Tab = .assigned
-    @State private var kind: Kind = .all
-    @State private var period: Period = .ninety
-    @State private var includeResolved = false
-    @State private var query = ""
+    var tab: Tab = .assigned
+    var kind: Kind = .all
+    var period: Period = .ninety
+    var includeResolved = false
+    var query = ""
+
+    /// Any filter-menu option away from its default (tints the icon).
+    var filtersTouched: Bool {
+        kind != .all || includeResolved || period != .ninety
+    }
+}
+
+/// Global task-comment action list inspired by ClickUp's Assigned Comments
+/// surface, rebuilt with Apollo's compact Liquid Glass capsule language.
+/// Its scope controls (tabs, filter, search, refresh) live in the window
+/// toolbar; this view only draws the list.
+struct AssignedCommentsView: View {
+    @EnvironmentObject private var appState: AppState
+    @Binding var scope: AssignedCommentsScope
+
+    private var tab: AssignedCommentsScope.Tab { scope.tab }
+    private var kind: AssignedCommentsScope.Kind { scope.kind }
+    private var period: AssignedCommentsScope.Period { scope.period }
+    private var includeResolved: Bool { scope.includeResolved }
+    private var query: String { scope.query }
+
     @State private var savedIds = AssignedCommentPreferences.savedIds
     @State private var readIds = AssignedCommentPreferences.readIds
     @State private var reminders = AssignedCommentPreferences.reminders
-    /// Altura medida do header sobreposto — recuo do topo do conteúdo (os
-    /// cards descansam abaixo, mas rolam por trás até o topo da janela).
-    @State private var headerBarHeight: CGFloat = 96
+    /// Toolbar band height — the cards rest below it but scroll behind it
+    /// up to the window's top edge.
+    private let headerBarHeight: CGFloat = 52
 
     private var me: Int? { appState.clickUpAuthService.userId }
     private var myUsername: String {
@@ -108,27 +135,17 @@ struct AssignedCommentsView: View {
         ZStack(alignment: .top) {
             content
 
-            // UMA linha só: título + abas + filtro compacto + busca +
-            // progresso + atualizar. Os FILTROS do painel lateral também
-            // valem aqui (aplicados à tarefa de cada comentário).
-            header
-                .padding(.top, 52)   // toolbar band — same element
+            // Only the toolbar band: tabs, filter, search and refresh are
+            // window-toolbar items (ContentView). The sidebar FILTROS also
+            // apply here (to each comment's task).
+            Color.clear
+                .frame(height: headerBarHeight)
                 .finderHeaderMaterial()
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
-                }
-                .background(
-                    GeometryReader { g in
-                        Color.clear
-                            .onAppear { headerBarHeight = g.size.height }
-                            .onChange(of: g.size.height) { _, h in
-                                headerBarHeight = h
-                            }
-                    }
-                )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Editorial.paper)
+        .searchable(text: $scope.query, placement: .toolbar,
+                    prompt: "Pesquisar comentários")
         .task {
             if appState.assignedCommentRecords.isEmpty {
                 await appState.refreshAssignedComments()
@@ -144,133 +161,6 @@ struct AssignedCommentsView: View {
                             .init(kind: .material,
                                   title: "Material do header", token: "Materials.finderHeader"),
                           ])
-    }
-
-    /// Single-row identity band: title, scope tabs, live scan progress and
-    /// refresh all share one line so the header stays two rows tall (this row
-    /// + the filter toolbar) instead of the previous four.
-    private var header: some View {
-        HStack(spacing: 12) {
-            // Título "Comentários atribuídos" removido — as abas já dizem
-            // onde estamos; o espaço vai pro conteúdo.
-            HStack(spacing: 6) {
-                ForEach(Tab.allCases, id: \.self) { option in
-                    Button { tab = option } label: {
-                        Text(option.rawValue)
-                            .font(Editorial.sans(12, tab == option ? .semibold : .medium))
-                            .foregroundStyle(tab == option ? Editorial.ink : Editorial.inkMute)
-                            .padding(.horizontal, 14)
-                            .frame(height: 30)
-                    }
-                    .buttonStyle(.plain)
-                    .liquidGlassSelected(tab == option,
-                                         in: Capsule(style: .continuous),
-                                         tint: Editorial.accent,
-                                         tintOpacity: 0.07)
-                }
-            }
-            .padding(.leading, 6)
-
-            Spacer(minLength: 12)
-
-            // Filtro compacto (tipo + resolvidos + período) — sem linha própria.
-            Menu {
-                Picker("Tipo", selection: $kind) {
-                    ForEach(Kind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                Toggle("Incluir resolvidos", isOn: $includeResolved)
-                Picker("Período", selection: $period) {
-                    ForEach(Period.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-            } label: {
-                Image(systemName: "line.3.horizontal.decrease")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(filtersTouched ? Editorial.accent : Editorial.inkSoft)
-                    .frame(width: 30, height: 30)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .liquidGlassCapsule(tint: Editorial.accent,
-                                tintOpacity: filtersTouched ? 0.10 : 0.05)
-            .help("Filtro: tipo, resolvidos e período")
-
-            // Busca subiu pra linha do título (a linha extra morreu).
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(Editorial.inkMute)
-                TextField("Pesquisar comentários", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(Editorial.sans(12))
-                    .frame(width: 190)
-            }
-            .padding(.horizontal, 13)
-            .frame(height: 30)
-            .liquidGlassCapsule(tint: Editorial.accent, tintOpacity: 0.035)
-
-            if appState.assignedCommentsLoading
-                || appState.assignedCommentsScannedTasks < appState.assignedCommentsTotalTasks {
-                HStack(spacing: 8) {
-                    if appState.assignedCommentsLoading {
-                        ProgressView().controlSize(.small)
-                    }
-                    Text("\(appState.assignedCommentsScannedTasks)/\(appState.assignedCommentsTotalTasks)")
-                        .font(Editorial.sans(10.5, .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(Editorial.inkMute)
-                }
-                .help("Tarefas verificadas em lotes de 30")
-            }
-            Button {
-                Task { await appState.refreshAssignedComments() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 30, height: 30)
-            }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-            .liquidGlassCapsule(tint: Editorial.accent, tintOpacity: 0.05)
-            .help("Atualizar comentários")
-        }
-        .padding(.horizontal, 28)
-        .padding(.top, 16)
-        .padding(.bottom, 11)
-        .apolloStudioNode("comments.header",
-                          title: "Header de comentários",
-                          kind: .header,
-                          parent: "comments.page",
-                          properties: [
-                            .init(kind: .horizontalPadding,
-                                  title: "Padding horizontal", value: 28),
-                            .init(kind: .spacing, title: "Espaçamento", value: 12),
-                          ])
-    }
-
-    /// Algum filtro do menu compacto fora do padrão? (colore o ícone)
-    private var filtersTouched: Bool {
-        kind != .all || includeResolved || period != .ninety
-    }
-
-    /// One geometry for every toolbar action. Menu controls have a smaller
-    /// native intrinsic height than plain Buttons on macOS; the explicit
-    /// outer 32pt frame above plus this shared label prevents that platform
-    /// difference from leaking into Apollo's visual rhythm.
-    private func toolbarCapsuleLabel(_ title: String,
-                                     icon: String,
-                                     tone: Color) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .medium))
-                .frame(width: 15, height: 15)
-                .foregroundStyle(tone)
-            Text(title)
-                .font(Editorial.sans(12, .medium))
-                .lineLimit(1)
-                .foregroundStyle(Editorial.ink)
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 34)
-        .contentShape(Capsule(style: .continuous))
     }
 
     @ViewBuilder
@@ -334,7 +224,7 @@ struct AssignedCommentsView: View {
             // y=0, o conteúdo descansa abaixo do header e, ao rolar, viaja por
             // dentro da margem até o topo REAL da janela — sempre dentro do
             // viewport, então o LazyVStack não descarta o card no caminho.
-            .contentMargins(.top, headerBarHeight + 30, for: .scrollContent)
+            .contentMargins(.top, headerBarHeight + 16, for: .scrollContent)
             // Sombras/hover podem desenhar além dos limites do scroll.
             .scrollClipDisabled()
         }
@@ -348,7 +238,7 @@ struct AssignedCommentsView: View {
         SyncLoadingSurface(scene: .comments) {
             CommentsLoadingFallback()
         }
-        .padding(.top, headerBarHeight + 34)
+        .padding(.top, headerBarHeight + 20)
     }
 
     private var loadMoreButton: some View {

@@ -39,11 +39,8 @@ struct TimelineView: View {
     @State private var scrollLockUntil:    Date = .distantPast
     @State private var suppressAutoScroll: Bool = false
     @State private var didInitialScroll:   Bool = false
-    /// Rebuilds only the recycled `List` when the Home agenda must return to
-    /// its natural origin. In the forward-only variant the first row is today,
-    /// so resetting the list is more reliable than asking SwiftUI to
-    /// `scrollTo` a variable-height row (which could land on tomorrow).
-    @State private var forwardListResetToken: Int = 0
+    /// Owns only the native scroll commands; event data stays in AppState.
+    @State private var agendaScroll = AgendaScrollController()
     @State private var lastScrollIndex:    Int  = -1
     /// The date that the SCROLL POSITION currently points at,
     /// derived from the live `TimelineScrollOffsetKey`
@@ -77,90 +74,57 @@ struct TimelineView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            // ── List, not ScrollView+LazyVStack ──────────────
-            //
-            // We need a SLIDING WINDOW of mounted rows: at most
-            // ~25 day-sections in memory at any time, with
-            // rows recycling as the user scrolls. `LazyVStack`
-            // only DEFERS the initial mount — once a row has
-            // appeared, it stays in the SwiftUI hierarchy and
-            // its layers stay on the GPU. With a 61-day range
-            // (30 back + 30 forward) and busy days carrying 4-
-            // 6 event cards each, that meant the GPU was
-            // accumulating well over 100 rendered cell layers
-            // by the time the user scrolled the full timeline.
-            //
-            // SwiftUI `List` is backed by `NSTableView` on
-            // macOS, which has built-in row recycling: it
-            // mounts rows just-in-time as they enter the
-            // viewport (plus a small buffer above and below)
-            // and tears them down — releasing their layers —
-            // when they scroll past. The reuse pool stays
-            // bounded regardless of total row count, so
-            // memory + GPU stay flat as the user scrolls.
-            //
-            // To preserve the existing visual + behaviour:
-            //   • `.listStyle(.plain)` strips the default
-            //     macOS sidebar styling.
-            //   • `.scrollContentBackground(.hidden)` lets the
-            //     window background show through (matches
-            //     ScrollView behaviour — the bottom-edge fade
-            //     overlay only works against the canvas).
-            //   • `.listRowBackground(.clear)` /
-            //     `.listRowSeparator(.hidden)` /
-            //     `.listRowInsets(...)` per row reproduce the
-            //     LazyVStack's spacing + horizontal padding.
-            //   • `.contentMargins(.top: 24, .bottom: 60)`
-            //     replaces the LazyVStack's top/bottom padding
-            //     and applies them inside the scroll content
-            //     so they participate in the scroll area
-            //     (rather than capping the list at the edges).
-            List {
-                // A concrete first row is more reliable than
-                // `.contentMargins(.top:)` on macOS List/NSTableView. The
-                // latter is represented as a scroll-view inset and could
-                // consume the first real day while reporting the viewport at
-                // its top. This row guarantees that TODAY is physically the
-                // first agenda section below the pinned Finder header, then
-                // scrolls away with the rest of the content.
-                Color.clear
-                    .frame(height: headerToFirstCardSpacing + topContentInset)
-                    .id("apollo-agenda-top-reserve")
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets())
+            Group {
+                if forwardOnly {
+                    AgendaNativeList(
+                        rows: AgendaTimelineRow.makeRows(dates: dates,
+                            eventsByDay: appState.mergedEventsByDay),
+                        appState: appState,
+                        topReserve: headerToFirstCardSpacing + topContentInset,
+                        leading: 20, trailing: 16, controller: agendaScroll)
+                } else {
+                    // Each event is one recyclable row. A whole-day VStack forced
+                    // List to measure/mount every card inside each materialized day.
+                    List {
+                        // A concrete first row is more reliable than
+                        // `.contentMargins(.top:)` on macOS List/NSTableView. The
+                        // latter is represented as a scroll-view inset and could
+                        // consume the first real day while reporting the viewport at
+                        // its top. This row guarantees that TODAY is physically the
+                        // first agenda section below the pinned Finder header, then
+                        // scrolls away with the rest of the content.
+                        Color.clear
+                            .frame(height: headerToFirstCardSpacing + topContentInset)
+                            .id("apollo-agenda-top-reserve")
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets())
 
-                ForEach(dates, id: \.self) { date in
-                    let dayStart = Calendar.current.startOfDay(for: date)
-                    AgendaDaySection(
-                        date: date,
-                        events: appState.mergedEventsByDay[dayStart] ?? [],
-                        appState: appState
-                    )
-                    .equatable()
-                    .id(date)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    // Left gutter between the window edge and the
-                    // events list (17 → 26, +50%). Inter-day gap is
-                    // the day row's own `marginBottom: 22`.
-                    .listRowInsets(EdgeInsets(top: 0, leading: forwardOnly ? 20 : 26,
-                                              bottom: 0, trailing: forwardOnly ? 16 : 32))
+                        ForEach(AgendaTimelineRow.makeRows(dates: dates,
+                                                          eventsByDay: appState.mergedEventsByDay)) { row in
+                            AgendaTimelineEventRow(row: row, appState: appState)
+                                .equatable()
+                                .id(row.id)
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 0, leading: forwardOnly ? 20 : 26,
+                                                          bottom: 0, trailing: forwardOnly ? 16 : 32))
+                        }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    // Sem barra de rolagem na agenda da Home (pedido de 20/jul) —
+                    // o scroll segue funcionando por trackpad/wheel.
+                    .scrollIndicators(.hidden)
+                    // Match the previous `.padding(.top, 24)` /
+                    // `.padding(.bottom, 60)`. `contentMargins` adds
+                    // the space INSIDE the scroll area, so it scrolls
+                    // with the content (the empty space above the
+                    // first row scrolls upward and out of view, just
+                    // like padding inside the LazyVStack).
+                    .contentMargins(.bottom, 60, for: .scrollContent)
                 }
             }
-            .listStyle(.plain)
-            .id(forwardListResetToken)
-            .scrollContentBackground(.hidden)
-            // Sem barra de rolagem na agenda da Home (pedido de 20/jul) —
-            // o scroll segue funcionando por trackpad/wheel.
-            .scrollIndicators(.hidden)
-            // Match the previous `.padding(.top, 24)` /
-            // `.padding(.bottom, 60)`. `contentMargins` adds
-            // the space INSIDE the scroll area, so it scrolls
-            // with the content (the empty space above the
-            // first row scrolls upward and out of view, just
-            // like padding inside the LazyVStack).
-            .contentMargins(.bottom, 60, for: .scrollContent)
             // NSScrollView introspect — listens to the
             // underlying NSClipView's `boundsDidChange`
             // notification to read the scroll offset
@@ -333,11 +297,9 @@ struct TimelineView: View {
                     suppressAutoScroll = true
                     appState.selectedDate = today
                 }
-                // In Home, rebuilding the recycled List restores its natural
-                // origin: today plus the exact resting reserve below the
-                // Finder header. The legacy timeline still scrolls normally.
+                // Restore the exact resting reserve without rebuilding cards.
                 if forwardOnly {
-                    forwardListResetToken &+= 1
+                    agendaScroll.reset()
                     pendingSelectedDate = nil
                     lastScrollIndex = -1
                 } else {
@@ -368,8 +330,13 @@ struct TimelineView: View {
     private func scrollToDay(_ date: Date, proxy: ScrollViewProxy,
                              animate: Bool, anchor: UnitPoint = .top) {
         let dayStart = Calendar.current.startOfDay(for: date)
+        if forwardOnly {
+            agendaScroll.scroll(to: dayStart, animated: animate)
+            return
+        }
         let action: () -> Void = {
-            proxy.scrollTo(dayStart, anchor: anchor)
+            // Match the concrete ID type used by the mixed day/event rows.
+            proxy.scrollTo(AnyHashable(dayStart), anchor: anchor)
         }
         if animate {
             withAnimation(.easeInOut(duration: 0.35)) { action() }
@@ -467,143 +434,154 @@ private struct ScrollOffsetIntrospect: NSViewRepresentable {
     }
 }
 
-// MARK: - One day in agenda layout
+// MARK: - Recyclable agenda rows
 
-private struct AgendaDaySection: View, Equatable {
+/// Day anchors retain the existing scrollTo(Date) contract. Other rows have
+/// calendar-qualified identities, so a shared meeting remains a distinct card.
+struct AgendaTimelineRow: Identifiable, Equatable {
+    struct EventID: Hashable {
+        let date: Date
+        let calendarIdentity: String
+    }
     let date: Date
-    /// Pre-merged & pre-sorted events for this day, supplied by
-    /// the parent `TimelineView`. Previously the section pulled
-    /// the array from `@EnvironmentObject AppState` via a
-    /// computed `mergedEventsByDay[dayStart]` lookup — but that
-    /// observer registration meant EVERY @Published mutation in
-    /// AppState (sync ticks, attachment hydration, notification
-    /// arrivals, expandedTaskId, etc.) re-ran every visible
-    /// section's body, regardless of whether the events for
-    /// that day actually changed.
-    ///
-    /// Passing `events` as a plain prop + holding `appState` as
-    /// a `let` reference lets us mark the view `Equatable` and
-    /// short-circuit re-renders when neither the date nor the
-    /// events for it changed. AppState lookup is uncached but
-    /// non-reactive — same pattern `TaskRowView` uses.
-    let events: [CalendarEvent]
-    /// Plain reference (not `@EnvironmentObject`) — used only
-    /// inside the click handler to write `detailEvent` /
-    /// `detailEventOrigin`. Reads of `appState.<property>` see
-    /// live values; the section just doesn't re-render on
-    /// unrelated `@Published` changes.
-    let appState: AppState
+    let event: CalendarEvent?
+    let isFirst: Bool
+    let isLast: Bool
 
-    /// Equatable: `date` is value-stable, `events` compares
-    /// element-wise (CalendarEvent is Equatable). `appState`
-    /// is a stable singleton reference and never affects the
-    /// diff. Combined with `.equatable()` at the call site,
-    /// the section body skips re-evaluation when AppState
-    /// mutates something irrelevant to this day.
-    static func == (lhs: AgendaDaySection, rhs: AgendaDaySection) -> Bool {
-        lhs.date == rhs.date && lhs.events == rhs.events
+    var id: AnyHashable {
+        if isFirst { return AnyHashable(date) }
+        return AnyHashable(EventID(date: date, calendarIdentity: event!.calendarIdentity))
     }
 
-    private var isToday: Bool { Calendar.current.isDateInToday(date) }
+    static func makeRows(dates: [Date], eventsByDay: [Date: [CalendarEvent]]) -> [Self] {
+        dates.flatMap { date -> [Self] in
+            let events = eventsByDay[date] ?? []
+            guard !events.isEmpty else {
+                return [Self(date: date, event: nil, isFirst: true, isLast: true)]
+            }
+            return events.enumerated().map { index, event in
+                Self(date: date, event: event, isFirst: index == 0,
+                     isLast: index == events.count - 1)
+            }
+        }
+    }
+}
 
-    /// `EditorialMainV2.EditorialDayRow`: past days dim to 0.55.
+struct AgendaTimelineEventRow: View, Equatable {
+    let row: AgendaTimelineRow
+    let appState: AppState
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.row == rhs.row && lhs.appState === rhs.appState
+    }
+
     private var isPast: Bool {
-        Calendar.current.startOfDay(for: date)
+        Calendar.current.startOfDay(for: row.date)
             < Calendar.current.startOfDay(for: Date())
     }
 
     var body: some View {
-        // Date column + gap trimmed from the prototype's `72px`/
-        // gap-24; the day-number→time gap is now 17 (11 → 17,
-        // +50%) and the column 48pt.
         HStack(alignment: .top, spacing: 17) {
-            dateColumn
-
-            // The last pre-editorial event card is a rounded capsule with its
-            // own shadow. Restore the original 6pt breathing room so adjacent
-            // capsules never visually merge, while keeping the current day
-            // hierarchy and lazy-list behavior intact.
-            VStack(spacing: 6) {
-                if events.isEmpty {
-                    Text("— Sem compromissos")
-                        .font(Editorial.serif(13.5).italic())
-                        .foregroundStyle(Editorial.inkMute)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 10)
-                } else {
-                    // Sequential vertical stack — events sorted
-                    // by startDate (already sorted upstream by
-                    // `events` accessor). Earlier experiment
-                    // with multi-column overlap clustering via
-                    // an inline GeometryReader broke layout
-                    // inside the LazyVStack scroll context
-                    // (estimated stack heights drifted from
-                    // actual pill heights, producing overlaps
-                    // and gaps). Reverted to the predictable
-                    // single-column layout; multi-column would
-                    // need a custom `Layout` protocol impl,
-                    // not an inline GR.
-                    ForEach(events) { event in
-                        AgendaEventCard(
-                            event:       event,
-                            onTap:       handleTap,
-                            onConvert:   { appState.pendingConversion = $0 },
-                            onCopyLink:  { ev in
-                                let url = ev.meetingURL?.absoluteString
-                                    ?? ev.location ?? ""
-                                guard !url.isEmpty else { return }
-                                let pb = NSPasteboard.general
-                                pb.clearContents()
-                                pb.setString(url, forType: .string)
-                                appState.notify(.success,
-                                                title: "Link copiado",
-                                                message: url)
-                            },
-                            onDelete:    { ev in
-                                Task { await appState.deleteEvent(ev) }
-                            })
-                            .equatable()
-                            // Smooth fade-in when an overlay
-                            // calendar adds a new event to the
-                            // day, or fade-out when removed.
-                            // Plain `.opacity` (no scale/move)
-                            // because spatial transitions can
-                            // get re-fired by SwiftUI during
-                            // window resize, which produced
-                            // visible "rubber-banding" of the
-                            // pills as the column width
-                            // changed.
-                            .transition(.opacity)
-                    }
+            // The original gutter is 52pt tall but an event is 47pt. On busy
+            // days the gutter must not increase the first card's 53pt stride.
+            Color.clear.frame(width: 46, height: 0)
+                .overlay(alignment: .top) {
+                    if row.isFirst { AgendaDateColumn(date: row.date) }
                 }
+            if let event = row.event {
+                AgendaEventCard(
+                    event: event,
+                    onTap: handleTap,
+                    onConvert: { appState.pendingConversion = $0 },
+                    onCopyLink: { ev in
+                        let url = ev.meetingURL?.absoluteString ?? ev.location ?? ""
+                        guard !url.isEmpty else { return }
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(url, forType: .string)
+                        appState.notify(.success, title: "Link copiado", message: url)
+                    },
+                    onDelete: { ev in Task { await appState.deleteEvent(ev) } })
+                    .equatable()
+                    .transition(.opacity)
+            } else {
+                Text("— Sem compromissos")
+                    .font(Editorial.serif(13.5).italic())
+                    .foregroundStyle(Editorial.inkMute)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 10)
             }
-            // Removed the spring `.animation(value: events.map(\.id))`
-            // that was here — `events.map(\.id)` allocates a fresh
-            // `[String]` on every body re-eval, and during a resize
-            // the body re-runs many times per second. Although the
-            // arrays compare equal across renders for stable data,
-            // SwiftUI's animation pipeline still occasionally
-            // interpolated between them, producing the visible
-            // graphical jitter during window resize. The
-            // `.transition(.opacity)` per card is enough to handle
-            // genuine list mutations (overlay add/remove, edits)
-            // without dragging in geometry-driven re-layouts.
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        // macOS `List` rows hug their content — without this the
-        // day row never stretches to the column width, so the
-        // event title's `1fr` collapsed and truncated to a few
-        // characters with dead space after it. Force the row to
-        // fill the full column so the title uses all the space
-        // (prototype grid `72px 1fr`).
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Prototype: each day row has `marginBottom: 22` and
-        // past days fade to 0.55.
+        .frame(maxWidth: .infinity,
+               minHeight: row.isFirst && row.isLast ? 52 : nil, alignment: .topLeading)
         .opacity(isPast ? 0.55 : 1)
-        .padding(.bottom, 22)
+        .padding(.bottom, row.isLast ? 22 : 6)
+        .background(AgendaRowClipping(clipsAtDayStart: row.isFirst))
     }
 
-    private var dateColumn: some View {
+    private func handleTap(_ event: CalendarEvent) {
+        // No click haptic — the trackpad's own click pulse is
+        // the natural feedback for opening the event detail.
+        appState.detailEventOrigin = MouseOriginCapture
+            .currentClickRectInMainWindow()
+        withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
+            appState.detailEvent = event
+        }
+    }
+}
+
+/// The old day-sized host allowed a later card's shadow into the preceding
+/// 6pt gap. Native List rows otherwise clip that shadow at each event boundary.
+/// Keep the original clip at the beginning of a day; leave the scroll viewport
+/// untouched. Reapply on reuse so a former continuation can become a day start.
+private struct AgendaRowClipping: NSViewRepresentable {
+    let clipsAtDayStart: Bool
+
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) {
+        view.clipsAtDayStart = clipsAtDayStart
+        view.updateRow()
+    }
+
+    final class Probe: NSView {
+        var clipsAtDayStart = true
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // SwiftUI finishes assembling the row after attaching this probe.
+            DispatchQueue.main.async { [weak self] in self?.updateRow() }
+        }
+        override func layout() {
+            super.layout()
+            updateRow()
+        }
+
+        func updateRow() {
+            guard window != nil else { return }
+            var ancestor = superview
+            while let view = ancestor {
+                if let row = view as? NSTableRowView {
+                    if row.clipsToBounds != clipsAtDayStart {
+                        row.clipsToBounds = clipsAtDayStart
+                    }
+                    if let layer = row.layer, layer.masksToBounds != clipsAtDayStart {
+                        layer.masksToBounds = clipsAtDayStart
+                    }
+                    return
+                }
+                if view is NSTableView || view is NSClipView { return }
+                ancestor = view.superview
+            }
+        }
+    }
+}
+
+private struct AgendaDateColumn: View {
+    let date: Date
+    private var isToday: Bool { Calendar.current.isDateInToday(date) }
+
+    var body: some View {
         // Flat calendar typography. Today is identified exclusively by the
         // HOJE label; a surrounding tile looked like a second selection
         // control and competed with the event cards beside it.
@@ -629,21 +607,6 @@ private struct AgendaDaySection: View, Equatable {
             .replacingOccurrences(of: ".", with: "")
     }
 
-    /// Click handler for `AgendaEventCard`. Lives on the
-    /// section (which already observes `appState`) so the card
-    /// itself can stay free of `@EnvironmentObject` and the
-    /// re-render cascade that comes with it. Section instances
-    /// are themselves cheap (date-only fields), so the
-    /// closure capture cost is negligible.
-    private func handleTap(_ event: CalendarEvent) {
-        // No click haptic — the trackpad's own click pulse is
-        // the natural feedback for opening the event detail.
-        appState.detailEventOrigin = MouseOriginCapture
-            .currentClickRectInMainWindow()
-        withAnimation(.spring(duration: 0.45, bounce: 0.35)) {
-            appState.detailEvent = event
-        }
-    }
 }
 
 // MARK: - Agenda-style event card (replaces the old positional EventBlock)
@@ -658,47 +621,23 @@ struct AgendaEventCard: View, Equatable {
     /// multiplied by 15+ visible cards × N AppState updates per
     /// second, it added measurable scroll overhead. The card
     /// now reads ZERO state from AppState; the parent
-    /// `AgendaDaySection` wires the click action.
+    /// `AgendaTimelineEventRow` wires the click action.
     let onTap: (CalendarEvent) -> Void
     /// Right-click context-menu actions. Closures keep the card
     /// free of `@EnvironmentObject AppState`, preserving the
     /// scroll-time Equatable short-circuit; the parent
-    /// `AgendaDaySection` wires them to AppState.
+    /// `AgendaTimelineEventRow` wires them to AppState.
     var onConvert: ((CalendarEvent) -> Void)? = nil
     var onCopyLink: ((CalendarEvent) -> Void)? = nil
     var onDelete: ((CalendarEvent) -> Void)? = nil
 
-    /// PERF: Equatable short-circuits SwiftUI body re-evaluation
-    /// when the event hasn't changed. With ~15-20 cards visible
-    /// during scroll and the parent `appState` driving many
-    /// unrelated `@Published` updates per second, this single
-    /// conformance cuts the bulk of redundant scroll-time
-    /// renders. We compare the fields that actually drive the
-    /// card's visuals — id, title, time range, color, and the
-    /// current user's RSVP status — instead of the whole event
-    /// (recurring rules, raw EKEvent ref, etc.) so unrelated
-    /// metadata changes don't invalidate the cache.
+    /// Unrelated AppState updates skip unchanged cards. Comparing the full
+    /// event also keeps retained actions current when only metadata changes.
     static func == (lhs: AgendaEventCard, rhs: AgendaEventCard) -> Bool {
-        // CRITICAL: the attendee status comparison must use the
-        // SAME selector the render uses (`first non-organizer`),
-        // not `first` outright. When the organizer is the first
-        // attendee in the list (the usual case for invites),
-        // `first?.status` is the organizer's accepted status,
-        // which never changes when the LOCAL user RSVPs. The
-        // comparison would then return true even though the
-        // user's own attendee just flipped to `.accepted` — so
-        // `.equatable()` short-circuited the re-render and the
-        // pill stayed in its old visual state until app restart.
-        let lhsMine = lhs.event.attendees.first(where: { !$0.isOrganizer })?.status
-        let rhsMine = rhs.event.attendees.first(where: { !$0.isOrganizer })?.status
-        return lhs.event.id == rhs.event.id
-            && lhs.event.title  == rhs.event.title
-            && lhs.event.startDate == rhs.event.startDate
-            && lhs.event.endDate   == rhs.event.endDate
-            && lhs.event.colorHex  == rhs.event.colorHex
-            && lhs.event.location  == rhs.event.location
-            && lhs.event.attendees.count == rhs.event.attendees.count
-            && lhsMine == rhsMine
+        // Reused rows also hold the complete event for click/context-menu
+        // actions. Preserve calendar identity, all-day labels, avatars and
+        // action metadata when another calendar's copy changes.
+        lhs.event == rhs.event
     }
 
     private var color: Color { Color(googleSnapHex: event.colorHex) }

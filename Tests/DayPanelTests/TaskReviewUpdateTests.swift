@@ -1,5 +1,15 @@
+import Combine
 import XCTest
 @testable import ApolloRuntime
+
+private final class ReviewCountingDefaults: UserDefaults, @unchecked Sendable {
+    var pendingWriteCount = 0
+
+    override func set(_ value: Any?, forKey defaultName: String) {
+        if defaultName == "taskReviewPendingUpdates.v1" { pendingWriteCount += 1 }
+        super.set(value, forKey: defaultName)
+    }
+}
 
 final class TaskReviewUpdateTests: XCTestCase {
     private func makeTask(id: String = "task-1",
@@ -632,6 +642,98 @@ final class TaskReviewUpdateTests: XCTestCase {
 
         try? await Task.sleep(nanoseconds: 80_000_000)
         XCTAssertNil(store.capsuleState(for: "task-1"))
+    }
+
+    @MainActor
+    func testRepeatedUnchangedProbesDoNotPublishOrPersist() throws {
+        let suite = "TaskReviewUpdateTests.unchanged.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(ReviewCountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = TaskReviewUpdateStore(defaults: defaults, catalogFetcher: { _ in nil })
+        let update = TaskReviewUpdateStore.Update(
+            taskId: "task-1", attachment: reviewAttachment,
+            activeAtt: reviewAttachment.id,
+            meta: .init(exists: true, updatedAt: "2026-09-24T00:00:00Z",
+                        status: "in_review", commentCount: 2)
+        )
+        var publications = 0
+        let subscription = store.$updatesByTask.dropFirst().sink { _ in publications += 1 }
+        defer { subscription.cancel() }
+        store.applyProbeResult(update, taskId: update.taskId, visibleAttachmentIds: [])
+        XCTAssertEqual(publications, 1)
+        XCTAssertEqual(defaults.pendingWriteCount, 1)
+
+        for _ in 0..<100 {
+            store.applyProbeResult(update, taskId: update.taskId, visibleAttachmentIds: [])
+        }
+        let stale = TaskReviewUpdateStore.Update(
+            taskId: update.taskId, attachment: reviewAttachment, activeAtt: update.activeAtt,
+            meta: .init(exists: true, updatedAt: "2026-09-23T00:00:00Z",
+                        status: "approved", commentCount: 1)
+        )
+        store.applyProbeResult(stale, taskId: update.taskId, visibleAttachmentIds: [])
+        XCTAssertEqual(publications, 1, "Unchanged and stale probes must not invalidate views")
+        XCTAssertEqual(defaults.pendingWriteCount, 1, "Unchanged probes must not encode/write the store")
+        XCTAssertEqual(store.update(for: update.taskId)?.meta.commentCount, 2)
+    }
+
+    @MainActor
+    func testEqualTimestampMetadataChangeStillPublishesAndPersists() throws {
+        let suite = "TaskReviewUpdateTests.equal-timestamp.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(ReviewCountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = TaskReviewUpdateStore(defaults: defaults, catalogFetcher: { _ in nil })
+        var publications = 0
+        let subscription = store.$updatesByTask.dropFirst().sink { _ in publications += 1 }
+        defer { subscription.cancel() }
+
+        for (status, title) in [("in_review", "Original.mov"), ("approved", "Renamed.mov")] {
+            let update = TaskReviewUpdateStore.Update(
+                taskId: "task-1", attachment: reviewAttachment, activeAtt: reviewAttachment.id,
+                meta: .init(exists: true, updatedAt: "2026-09-24T00:00:00Z",
+                            status: status, commentCount: 2, mediaTitle: title)
+            )
+            store.applyProbeResult(update, taskId: update.taskId, visibleAttachmentIds: [])
+            store.applyProbeResult(update, taskId: update.taskId, visibleAttachmentIds: [])
+        }
+
+        XCTAssertEqual(publications, 2)
+        XCTAssertEqual(defaults.pendingWriteCount, 2)
+        let restored = TaskReviewUpdateStore(defaults: defaults, catalogFetcher: { _ in nil })
+        XCTAssertEqual(restored.update(for: "task-1")?.meta.status, "approved")
+        XCTAssertEqual(restored.update(for: "task-1")?.displayTitle, "Renamed.mov")
+    }
+
+    @MainActor
+    func testIdenticalExactProbeStillRemovesLegacyAliasDurably() throws {
+        let suite = "TaskReviewUpdateTests.alias-only.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(ReviewCountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = TaskReviewUpdateStore(defaults: defaults, catalogFetcher: { _ in nil })
+        let exact = TaskReviewUpdateStore.Update(
+            taskId: "task-1", attachment: reviewAttachment, activeAtt: reviewAttachment.id,
+            meta: .init(exists: true, updatedAt: "2026-09-24T00:00:00Z",
+                        status: "in_review", commentCount: 2,
+                        evaluatedVersionId: "v1")
+        )
+        let legacy = TaskReviewUpdateStore.Update(
+            taskId: exact.taskId, attachment: exact.attachment, activeAtt: exact.activeAtt,
+            meta: .init(exists: true, updatedAt: exact.meta.updatedAt,
+                        status: "in_review", commentCount: 2)
+        )
+        store.applyProbeResult(exact, taskId: exact.taskId, visibleAttachmentIds: [])
+        store.applyProbeResult(legacy, taskId: exact.taskId, visibleAttachmentIds: [])
+        XCTAssertEqual(store.updatesByTask[exact.taskId]?.count, 2)
+        let writesBeforeCleanup = defaults.pendingWriteCount
+
+        store.applyProbeResult(exact, taskId: exact.taskId, visibleAttachmentIds: [])
+        XCTAssertEqual(store.updatesByTask[exact.taskId]?.count, 1)
+        XCTAssertEqual(defaults.pendingWriteCount, writesBeforeCleanup + 1)
+        store.applyProbeResult(exact, taskId: exact.taskId, visibleAttachmentIds: [])
+        XCTAssertEqual(defaults.pendingWriteCount, writesBeforeCleanup + 1)
+        let restored = TaskReviewUpdateStore(defaults: defaults, catalogFetcher: { _ in nil })
+        XCTAssertEqual(restored.updatesByTask[exact.taskId]?.count, 1)
+        XCTAssertEqual(restored.update(for: exact.taskId)?.meta.evaluatedVersionId, "v1")
     }
 
     @MainActor

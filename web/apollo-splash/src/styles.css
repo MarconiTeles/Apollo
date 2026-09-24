@@ -46,7 +46,7 @@ body,
 }
 
 /* Back to front: nebula · dust · stars · far orbits · MOON · near orbits ·
-   mist · motes · flare/glint · wordmark. Every layer moves at its own rate. */
+   mist · motes · flare · wordmark. Every layer moves at its own rate. */
 .nebula {
   z-index: 1;
 }
@@ -118,7 +118,6 @@ body,
   background: radial-gradient(circle at 64% 42%, #dfe3e9 0, #a3a9b1 38%, #3a3f47 66%, #12151a 78%);
 }
 
-/* The icon's four-point star catching the lit limb. */
 /* The expanding ring as sunlight settles on the disc. */
 .shock {
   position: absolute;
@@ -164,24 +163,6 @@ body,
     center / 100% 2px no-repeat;
 }
 
-.glint {
-  position: absolute;
-  z-index: 9;
-  width: 72px;
-  height: 72px;
-  margin: -36px 0 0 -36px;
-  left: calc(var(--moon-x) + var(--moon-d) * 0.321);
-  top: calc(var(--moon-y) - var(--moon-d) * 0.383);
-  opacity: 0;
-  pointer-events: none;
-  mix-blend-mode: screen;
-}
-.glint svg {
-  width: 100%;
-  height: 100%;
-  fill: #f2fdff;
-  filter: drop-shadow(0 0 5px rgba(140, 238, 255, 0.95)) drop-shadow(0 0 16px rgba(90, 210, 255, 0.55));
-}
 
 /* ── Wordmark ──────────────────────────────────────────────────────── */
 

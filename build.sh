@@ -174,6 +174,40 @@ fi
 mkdir -p "$APP/Contents/Resources/ApolloLoading"
 cp "$LOADING_BUILD" "$APP/Contents/Resources/ApolloLoading/index.html"
 
+# React task list (DEV only: script/build_dev_tasks_react.sh sets
+# APOLLO_BUNDLE_TASKS_REACT=1 together with -DAPOLLO_TASKS_REACT). Production
+# and every other variant skip this block, so their bundles are unchanged.
+if [ -n "${APOLLO_BUNDLE_TASKS_REACT:-}" ]; then
+    TASKS_WEB_DIR="web/apollo-tasks"
+    TASKS_BUILD="Sources/DayPanel/Resources/ApolloTasks/index.html"
+    if [ -d "$TASKS_WEB_DIR/node_modules" ]; then
+        echo "Building React task list..."
+        (cd "$TASKS_WEB_DIR" && npm run --silent build >/dev/null) \
+            || { echo "ERROR: task list build failed (npm run build in $TASKS_WEB_DIR)" >&2; exit 1; }
+    fi
+    [ -f "$TASKS_BUILD" ] \
+        || { echo "ERROR: $TASKS_BUILD missing — run npm ci && npm run build in $TASKS_WEB_DIR" >&2; exit 1; }
+    mkdir -p "$APP/Contents/Resources/ApolloTasks"
+    cp "$TASKS_BUILD" "$APP/Contents/Resources/ApolloTasks/index.html"
+fi
+
+# React agenda body (DEV only: script/build_dev_agenda_react.sh sets
+# APOLLO_BUNDLE_AGENDA_REACT=1 together with -DAPOLLO_AGENDA_REACT).
+# Production and every other variant skip this block.
+if [ -n "${APOLLO_BUNDLE_AGENDA_REACT:-}" ]; then
+    AGENDA_WEB_DIR="web/apollo-agenda"
+    AGENDA_BUILD="Sources/DayPanel/Resources/ApolloAgenda/index.html"
+    if [ -d "$AGENDA_WEB_DIR/node_modules" ]; then
+        echo "Building React agenda..."
+        (cd "$AGENDA_WEB_DIR" && npm run --silent build >/dev/null) \
+            || { echo "ERROR: agenda build failed (npm run build in $AGENDA_WEB_DIR)" >&2; exit 1; }
+    fi
+    [ -f "$AGENDA_BUILD" ] \
+        || { echo "ERROR: $AGENDA_BUILD missing — run npm ci && npm run build in $AGENDA_WEB_DIR" >&2; exit 1; }
+    mkdir -p "$APP/Contents/Resources/ApolloAgenda"
+    cp "$AGENDA_BUILD" "$APP/Contents/Resources/ApolloAgenda/index.html"
+fi
+
 # Apollo Review is a real secondary macOS application bundled with Apollo.
 # Keeping it as a nested .app gives the review surface its own NSWindow,
 # traffic lights, independent movement/resize and lifetime, while both hosts
