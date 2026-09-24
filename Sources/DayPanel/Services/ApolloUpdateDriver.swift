@@ -283,7 +283,7 @@ final class ApolloUpdateDriver: NSObject, ObservableObject, SPUUserDriver {
     }
 
     private func buildWindow() {
-        let host = NSHostingController(rootView: UpdaterCardView(driver: self))
+        let host = NSHostingController(rootView: UpdaterCardView(driver: self).focusEffectDisabled())
         let w = NSWindow(contentViewController: host)
         w.styleMask = [.titled, .fullSizeContentView]
         w.titleVisibility = .hidden

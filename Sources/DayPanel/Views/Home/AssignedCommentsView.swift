@@ -113,13 +113,9 @@ struct AssignedCommentsView: View {
             // valem aqui (aplicados à tarefa de cada comentário).
             header
                 .padding(.top, 52)   // toolbar band — same element
-                // The comments route is inset around the 220pt floating
-                // sidebar, but the native titlebar material is window chrome
-                // and therefore continues underneath that pane to x = 0.
-                .finderHeaderMaterial(leadingExtension: 220)
+                .finderHeaderMaterial()
                 .overlay(alignment: .bottom) {
                     Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
-                        .padding(.leading, -220)
                 }
                 .background(
                     GeometryReader { g in

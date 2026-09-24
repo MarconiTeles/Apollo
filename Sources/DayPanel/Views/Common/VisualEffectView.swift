@@ -23,6 +23,12 @@ struct VisualEffectView: NSViewRepresentable {
     /// raio nativo; 0.5 = metade do blur. Escalado sobre o valor-base capturado
     /// uma vez, então é idempotente entre layouts.
     var blurScale:    CGFloat                         = 1.0
+    /// Multiplies the opacity of the material's own fill layer (1 = native).
+    /// Keeps the material; lower values make it more translucent.
+    var tintOpacity:  CGFloat                         = 1.0
+    /// Multiplies the opacity of the material's blend-mode layer (lighten in
+    /// dark, darken in light; 1 = native).
+    var blendOpacity: CGFloat                         = 1.0
     func makeNSView(context: Context) -> NSVisualEffectView {
         // SEMPRE hit-test-transparente: estes materiais são decorativos
         // (backgrounds de barras/painéis). Como NSViews reais dentro do
@@ -31,9 +37,12 @@ struct VisualEffectView: NSViewRepresentable {
         // scroll travado). hitTest nil deixa tudo passar; os controles
         // SwiftUI por cima seguem funcionando normalmente.
         let v: NSVisualEffectView
-        if stripTint {
+        if stripTint || blurScale != 1.0 || tintOpacity != 1.0 || blendOpacity != 1.0 {
             let t = TintlessVisualEffectView()
+            t.stripsTint = stripTint
             t.blurScale = blurScale
+            t.tintOpacity = tintOpacity
+            t.blendOpacity = blendOpacity
             v = t
         } else {
             v = PassthroughVisualEffectView()
@@ -56,27 +65,33 @@ struct VisualEffectView: NSViewRepresentable {
         v.blendingMode = blendingMode
         v.state        = state
         if let tintless = v as? TintlessVisualEffectView {
+            tintless.stripsTint = stripTint
             tintless.blurScale = blurScale
+            tintless.tintOpacity = tintOpacity
+            tintless.blendOpacity = blendOpacity
             tintless.clearTintLayers()
         }
     }
 }
 
-/// A RECEITA OFICIAL do material de header do app (a mesma do header de
-/// Tarefas): `.fullScreenUI` sem tint nativo + blur reduzido (raio 5) +
-/// véu de `Editorial.paper` a 0.85. Reutilizável em qualquer barra/painel
-/// (popups, rodapés, sidebars) via `officialHeaderMaterial(in:)`.
+/// Shaped headers share the page-header material in light mode.
+/// Preserve their existing approved dark appearance.
 struct OfficialHeaderMaterial<S: Shape>: View {
+    @Environment(\.colorScheme) private var colorScheme
     let shape: S
 
     var body: some View {
-        VisualEffectView(material: .fullScreenUI,
-                         blendingMode: .withinWindow,
-                         state: .followsWindowActiveState,
-                         stripTint: true,
-                         blurScale: 5.0 / 30.0)
-            .overlay(Editorial.paper.opacity(0.85))
-            .clipShape(shape)
+        if colorScheme == .dark {
+            VisualEffectView(material: .fullScreenUI,
+                             blendingMode: .withinWindow,
+                             state: .active,
+                             stripTint: true,
+                             blurScale: 5.0 / 30.0)
+                .overlay(Editorial.paper.opacity(0.85))
+                .clipShape(shape)
+        } else {
+            AppHeaderMaterial().clipShape(shape)
+        }
     }
 }
 
@@ -85,6 +100,191 @@ extension View {
     /// recortada na `shape` (barras de popup com cantos arredondados etc.).
     func officialHeaderMaterial<S: Shape>(in shape: S) -> some View {
         background(OfficialHeaderMaterial(shape: shape))
+    }
+}
+
+/// Shared page-header material. Light mode uses the system
+/// sidebar's regular glass. Dark mode retains the approved sidebar recipe
+/// with reduced blur and a 30% black veil.
+struct AppHeaderMaterial: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        if colorScheme == .dark {
+            // Keep the approved dark recipe even when the window loses focus.
+            VisualEffectView(material: .sidebar,
+                             blendingMode: .withinWindow,
+                             state: .active,
+                             blurScale: 0.16)
+                .overlay(Color.black.opacity(0.3))
+        } else {
+            // Sidebar background recipe, with the requested lighter blur
+            // and white veil applied only in light mode.
+            PanelGlassMaterial()
+                .overlay(Color.white.opacity(0.252))
+        }
+    }
+}
+
+/// The sidebar BACKGROUND recipe, not the regular control/selection glass.
+/// On macOS 27 both are NSGlassEffectView, but the system sidebar uses
+/// variant 17 and adaptive appearance 1; controls use variant 0 / appearance 2.
+/// These AppKit-internal settings were read from NavigationSplitView's
+/// _NSSplitViewItemViewWrapper background (see docs/qa-header-light).
+private struct PanelGlassMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { SidebarBackgroundView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        (view as? SidebarBackgroundView)?.refreshMaterial()
+    }
+
+    private final class SidebarBackgroundView: NSView {
+        private let background = HeaderSidebarEffectView()
+        // Keep the native surface's refracting perimeter outside the header.
+        // Clipping exposes its flat interior without changing the material.
+        private let perimeterInset: CGFloat = 64
+
+        init() {
+            super.init(frame: .zero)
+            wantsLayer = true
+            layer?.masksToBounds = true
+            clipsToBounds = true
+            background.style = .regular
+            background.cornerRadius = 0
+            background.setValue(17, forKey: "_variant")
+            background.setValue(1, forKey: "_adaptiveAppearance")
+            // 0 follows focus; 1 fixes the subdued (unfocused) appearance.
+            background.setValue(1, forKey: "_subduedState")
+            addSubview(background)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func layout() {
+            super.layout()
+            background.frame = bounds.insetBy(dx: -perimeterInset,
+                                              dy: -perimeterInset)
+        }
+
+        func refreshMaterial() {
+            background.refreshMaterial()
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    private final class HeaderSidebarEffectView: NSGlassEffectView {
+        private var refreshScheduled = false
+        private var layerObservations: [ObjectIdentifier: [NSKeyValueObservation]] = [:]
+
+        override func layout() {
+            super.layout()
+            refreshMaterial()
+        }
+
+        override func updateLayer() {
+            super.updateLayer()
+            applyMaterial()
+        }
+
+        override func viewWillDraw() {
+            super.viewWillDraw()
+            applyMaterial()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            refreshMaterial()
+        }
+
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            refreshMaterial()
+        }
+
+        override func viewDidChangeBackingProperties() {
+            super.viewDidChangeBackingProperties()
+            refreshMaterial()
+        }
+
+        func refreshMaterial() {
+            applyMaterial()
+            // AppKit may rebuild its backdrop after attachment/layout.
+            // Coalesce a second pass; never continuously invalidate layout.
+            guard !refreshScheduled else { return }
+            refreshScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.refreshScheduled = false
+                self.applyMaterial()
+            }
+        }
+
+        private func applyMaterial() {
+            // The recipe must survive native layer/appearance rebuilds too.
+            for (key, target) in [("_variant", 17),
+                                  ("_adaptiveAppearance", 1),
+                                  ("_subduedState", 1)] {
+                if (value(forKey: key) as? NSNumber)?.intValue != target {
+                    setValue(target, forKey: key)
+                }
+            }
+            if let layer {
+                var liveLayers: Set<ObjectIdentifier> = []
+                observeLayerTree(layer, liveLayers: &liveLayers)
+                layerObservations = layerObservations.filter { liveLayers.contains($0.key) }
+                reduceBlur(in: layer)
+            }
+        }
+
+        private func observeLayerTree(_ node: CALayer,
+                                      liveLayers: inout Set<ObjectIdentifier>) {
+            let id = ObjectIdentifier(node)
+            liveLayers.insert(id)
+            if layerObservations[id] == nil {
+                // Native backdrop reconstruction does not necessarily call
+                // NSView.layout/updateLayer. Observe the actual layer tree.
+                let children = node.observe(\.sublayers) { [weak self] _, _ in
+                    MainActor.assumeIsolated { self?.refreshMaterial() }
+                }
+                let filters = node.observe(\.filters) { [weak self] _, _ in
+                    MainActor.assumeIsolated { self?.refreshMaterial() }
+                }
+                layerObservations[id] = [children, filters]
+            }
+            for child in node.sublayers ?? [] {
+                observeLayerTree(child, liveLayers: &liveLayers)
+            }
+        }
+
+        private func reduceBlur(in layer: CALayer) {
+            if NSStringFromClass(type(of: layer)).contains("Backdrop") {
+                for filter in layer.filters ?? [] {
+                    let filter = filter as AnyObject
+                    guard (filter.value(forKey: "name") as? String) == "glassBackground"
+                    else { continue }
+                    // Absolute targets: never derive them from a transient
+                    // native radius captured during creation or screen changes.
+                    for (key, target): (String, CGFloat) in [
+                        ("inputBlurRadius", 3.98034),
+                        ("inputBlurFillBlurRadius", 1.592136)
+                    ] {
+                        let path = "filters.glassBackground.\(key)"
+                        guard let number = layer.value(forKeyPath: path) as? NSNumber
+                        else { continue }
+                        let current = CGFloat(truncating: number)
+                        if abs(current - target) > 0.01 {
+                            layer.setValue(target, forKeyPath: path)
+                        }
+                    }
+                    // Avoid the extra softening from the native half-size capture.
+                    if (layer.value(forKey: "scale") as? NSNumber)?.doubleValue != 1 {
+                        layer.setValue(1.0, forKey: "scale")
+                    }
+                }
+            }
+            for child in layer.sublayers ?? [] { reduceBlur(in: child) }
+        }
     }
 }
 
@@ -106,22 +306,10 @@ private struct FinderHeaderMaterialModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.background(alignment: .topLeading) {
             GeometryReader { proxy in
-                // Header = blur nativo MAIS LEVE. `.fullScreenUI` tem o menor
-                // véu-base dos materiais (junto do underWindowBackground);
-                // `.withinWindow` desfoca o conteúdo da janela (os cards atrás)
-                // e `stripTint: true` tira a camada de cor/vibrancy — sobra o
-                // blur mais limpo que o nativo permite.
-                VisualEffectView(material: .fullScreenUI,
-                                 blendingMode: .withinWindow,
-                                 state: .followsWindowActiveState,
-                                 stripTint: true,
-                                 blurScale: 5.0 / 30.0) // raio 5 (nativo = 30)
+                AppHeaderMaterial()
                     // DEV-only attribution switch (`--board-diag=noheadermaterial`);
                     // never a delivery state. Always visible outside APOLLO_DEV.
                     .opacity(BoardDiag.has("noheadermaterial") ? 0 : 1)
-                    // Tint da cor do fundo (paper) por cima do blur — o véu
-                    // que separa o header do conteúdo, na cor do canvas.
-                    .overlay(Editorial.paper.opacity(0.85))
                     .frame(width: proxy.size.width + leadingExtension + trailingExtension,
                            height: proxy.size.height + topExtension + bottomExtension)
                     // Linha do FIM DO HEADER: desenhada no fim REAL do material
@@ -189,6 +377,15 @@ final class TintlessVisualEffectView: NSVisualEffectView {
 
     /// Fator do raio do blur (1.0 = nativo, 0.5 = metade).
     var blurScale: CGFloat = 1.0
+    /// false = mantém a cor/vibrancy nativa do material e só escala o blur.
+    var stripsTint = true
+    /// Com `stripsTint == false`: fator sobre a opacidade das layers de tint
+    /// nativas (1 = nativo). Mesmo material, mais translúcido.
+    var tintOpacity: CGFloat = 1.0
+    /// Idem para a layer com blend mode (lighten no escuro, darken no claro).
+    var blendOpacity: CGFloat = 1.0
+    /// Opacidade nativa de cada layer de tint, para escalar de forma idempotente.
+    private var baseTintOpacity: [ObjectIdentifier: Float] = [:]
     /// Raio nativo capturado na primeira passada, para escalar de forma
     /// idempotente (não encolher a cada layout).
     private var baseBlurRadius: CGFloat?
@@ -234,10 +431,15 @@ final class TintlessVisualEffectView: NSVisualEffectView {
         // Só despeja quando a árvore do material já foi montada pelo AppKit
         // (dump precoce mostrava apenas a backing layer vazia 0x0).
         if !Self.didDumpTree, !(root.sublayers ?? []).isEmpty,
-           root.bounds.width > 0 {
+           root.bounds.width > 0, Self.containsBackdrop(root) {
             Self.didDumpTree = true
             dumpTree(root, depth: 0)
         }
+    }
+
+    private static func containsBackdrop(_ node: CALayer) -> Bool {
+        if NSStringFromClass(type(of: node)).contains("Backdrop") { return true }
+        return (node.sublayers ?? []).contains { containsBackdrop($0) }
     }
 
     /// Dump único da árvore de layers do material — cada linha mostra quem
@@ -251,8 +453,11 @@ final class TintlessVisualEffectView: NSVisualEffectView {
         let fnames = (node.filters ?? []).compactMap {
             ($0 as AnyObject).value(forKey: "name") as? String
         }.joined(separator: ",")
-        NSLog("APOLLO-TREE %@%@ bgA=%.2f op=%.2f contents=%d filters=[%@] size=%.0fx%.0f",
-              pad, cls, bgA, node.opacity, hasContents ? 1 : 0, fnames,
+        let comp = node.compositingFilter.map { String(describing: ($0 as AnyObject).value(forKey: "name") ?? $0) } ?? "-"
+        let rgb = node.backgroundColor.flatMap { NSColor(cgColor: $0)?.usingColorSpace(.sRGB) }
+            .map { String(format: "%.3f,%.3f,%.3f", $0.redComponent, $0.greenComponent, $0.blueComponent) } ?? "-"
+        NSLog("APOLLO-TREE %@%@ bgA=%.2f rgb=%@ comp=%@ op=%.2f contents=%d filters=[%@] size=%.0fx%.0f",
+              pad, cls, bgA, rgb, comp, node.opacity, hasContents ? 1 : 0, fnames,
               node.bounds.width, node.bounds.height)
         for s in node.sublayers ?? [] { dumpTree(s, depth: depth + 1) }
     }
@@ -304,7 +509,7 @@ final class TintlessVisualEffectView: NSVisualEffectView {
                     // a layer tree → novo layout → nova passada → LOOP que
                     // saturava a main thread (scroll "travado" perto de
                     // qualquer material).
-                    if hasNonBlur, !kept.isEmpty { sub.filters = kept }
+                    if stripsTint, hasNonBlur, !kept.isEmpty { sub.filters = kept }
                     // Core Animation COPIA os filtros ao atribuí-los à layer —
                     // mutar o objeto original é no-op. O caminho documentado
                     // pra alterar parâmetro de filtro JÁ ANEXADO é via keyPath
@@ -329,6 +534,15 @@ final class TintlessVisualEffectView: NSVisualEffectView {
                         NSLog("APOLLO-TintlessVEV backdrop scale %@ -> 1.0",
                               String(describing: curScale))
                     }
+                }
+            } else if !stripsTint {
+                // Keep the native tint layer; only scale its opacity.
+                if let bg = sub.backgroundColor, bg.alpha > 0 {
+                    let id = ObjectIdentifier(sub)
+                    if baseTintOpacity[id] == nil { baseTintOpacity[id] = sub.opacity }
+                    let factor = sub.compositingFilter == nil ? tintOpacity : blendOpacity
+                    let target = (baseTintOpacity[id] ?? 1) * Float(factor)
+                    if abs(sub.opacity - target) > 0.001 { sub.opacity = target }
                 }
             } else {
                 // Tint/vibrancy overlay layer — wipe its colour and any

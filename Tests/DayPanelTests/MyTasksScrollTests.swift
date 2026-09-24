@@ -10,6 +10,37 @@ struct MyTasksScrollTests {
         (row.subviews.first(where: \.canDrawSubviewsIntoLayer) ?? row).subviews
     }
 
+    @Test func headerRejectsCoveredContentInteraction() throws {
+        let state = AppState(previewMode: true)
+        let tasks = ApolloBoardFixtureGenerator.tasks(count: 30)
+        let list = MyTasksAppKitList(
+            sections: [.init(status: ApolloPreviewFixtures.statuses[0], tasks: tasks, collapsed: false)],
+            selectedTaskIds: [], appState: state, headerOcclusionHeight: 82,
+            onActivate: { _, _, _ in }, onToggleStatus: { _ in },
+            onBeginDrag: { [$0.id] }, onEndDrag: { _ in }, onClearSelection: {},
+            onMediaAction: { _, _ in }, onBulkMediaAction: {}, onFileDrop: { _, _ in })
+        let window = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 1200, height: 800),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: list)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        func findViewport(_ view: NSView) -> MyTasksViewport? {
+            if let viewport = view as? MyTasksViewport { return viewport }
+            return view.subviews.lazy.compactMap(findViewport).first
+        }
+        let document = try #require(findViewport(host))
+        let scroll = try #require(document.enclosingScrollView)
+        let covered = NSPoint(x: 350, y: scroll.isFlipped ? 40 : scroll.bounds.height - 40)
+        let exposed = NSPoint(x: 350, y: scroll.isFlipped ? 160 : scroll.bounds.height - 160)
+        #expect(scroll.hitTest(scroll.convert(covered, to: scroll.superview)) == nil)
+        #expect(scroll.hitTest(scroll.convert(exposed, to: scroll.superview)) != nil)
+        #expect(document.isBehindPageHeader(windowPoint: scroll.convert(covered, to: nil)))
+        #expect(!document.isBehindPageHeader(windowPoint: scroll.convert(exposed, to: nil)))
+        window.contentView = nil
+        window.close()
+    }
+
     @Test(arguments: [169, 1_000, 5_000])
     func scrollingKeepsViewsBounded(taskCount: Int) throws {
         ApolloRuntimeEnvironment.activateStudio()

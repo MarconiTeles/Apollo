@@ -69,7 +69,8 @@ final class BoardDocumentView: NSView {
 }
 
 @MainActor
-final class BoardViewportView: NSView {
+final class BoardViewportView: NSView, HeaderOccludingViewport {
+    var headerOcclusionHeight: CGFloat = 0
     override var isFlipped: Bool { true }
     static let leadingMargin: CGFloat = 258
     static let trailingMargin: CGFloat = 28
@@ -127,6 +128,12 @@ final class BoardViewportView: NSView {
             scrollView.frame = bounds
             coordinator?.viewportResized()
         }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let windowPoint = superview?.convert(point, to: nil) ?? point
+        guard !isBehindPageHeader(windowPoint: windowPoint) else { return nil }
+        return super.hitTest(point)
     }
 
     /// SwiftUI `ScrollGeometry.contentOffset.x` equivalent: the offset
@@ -197,6 +204,7 @@ final class BoardAppKitCoordinator: NSObject, BoardCardViewDelegate, BoardColumn
                                headerChromeHeight: CGFloat, force: Bool) {
         BoardInstrumentation.counters.applies += 1
         startCounterLogIfNeeded()
+        viewport?.headerOcclusionHeight = headerChromeHeight
         let newMetrics = BoardColumnMetrics(headerChromeHeight: headerChromeHeight)
         let columnsChanged = force || new != snapshot || newMetrics != metrics
         let selectionChanged = selected != selectedIds

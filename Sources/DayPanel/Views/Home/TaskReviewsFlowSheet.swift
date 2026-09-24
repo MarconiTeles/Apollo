@@ -5,6 +5,7 @@ import SwiftUI
 /// Chooser shown only when one task has more than one actionable review.
 /// A single review keeps the faster direct-open behavior in the AppKit row.
 struct TaskReviewsFlowSheet: View {
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: AppState
     let dismiss: () -> Void
     @ObservedObject private var store = TaskReviewUpdateStore.shared
@@ -82,11 +83,7 @@ struct TaskReviewsFlowSheet: View {
                     .zIndex(30)
             }
 
-            header
-                .frame(height: headerHeight)
-                .frame(maxWidth: .infinity)
-                .liquidGlass(in: headerShape, tint: Editorial.ink,
-                             tintOpacity: 0.01, interactive: false)
+            materialHeader
                 .overlay(alignment: .bottom) {
                     Rectangle().fill(Editorial.rule.opacity(0.6)).frame(height: 1)
                 }
@@ -134,6 +131,22 @@ struct TaskReviewsFlowSheet: View {
                     dismiss()
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var materialHeader: some View {
+        if colorScheme == .dark {
+            header
+                .frame(height: headerHeight)
+                .frame(maxWidth: .infinity)
+                .liquidGlass(in: headerShape, tint: Editorial.ink,
+                             tintOpacity: 0.01, interactive: false)
+        } else {
+            header
+                .frame(height: headerHeight)
+                .frame(maxWidth: .infinity)
+                .officialHeaderMaterial(in: headerShape)
         }
     }
 

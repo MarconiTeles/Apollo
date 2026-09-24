@@ -168,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Launch
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        FocusRingSuppressor.install()
 #if APOLLO_DEV
         if let appearance = ApolloDevLaunchOptions.appearanceOverride {
             // Launch-only override; not persisted to preferences.
@@ -807,7 +808,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         w.minSize                      = AppDelegate.windowMinFrameSize
         w.contentMinSize               = AppDelegate.windowMinFrameSize
         w.titlebarAppearsTransparent   = true
-        w.titleVisibility              = .hidden
+        // Finder pattern: the toolbar shows the page title (ContentView's
+        // `navigationTitle`, bridged through `sceneBridgingOptions`) right
+        // after the leading items.
+        w.titleVisibility              = .visible
         // Remove the subtle separator line AppKit draws under
         // the title bar — without this the title-bar area still
         // reads as a distinct band even with isOpaque=false.
@@ -875,7 +879,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rootView: ContentView()
                 .environmentObject(appState)
                 .environmentObject(updateService)
+                .environment(\.apolloUsesWindowToolbar, true)
         )
+        // ContentView's `.toolbar` becomes the window's native toolbar.
+        host.sceneBridgingOptions = [.toolbars, .title]
 #endif
         w.contentViewController = host
         w.delegate = self
@@ -929,7 +936,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         w.makeKeyAndOrderFront(nil)
         window = w
-        SidebarTrafficLights.align(in: w)
     }
 
     /// Pre-fill window frame so the second click on the green button
@@ -1057,27 +1063,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - NSWindowDelegate
 
 extension AppDelegate: NSWindowDelegate {
-    private func alignSidebarTrafficLights(after notification: Notification) {
-        guard let changedWindow = notification.object as? NSWindow,
-              changedWindow === window else { return }
-        // AppKit finishes its titlebar layout before applying our scoped inset.
-        DispatchQueue.main.async { [weak changedWindow] in
-            if let changedWindow { SidebarTrafficLights.align(in: changedWindow) }
-        }
-    }
-
-    func windowDidResize(_ notification: Notification) {
-        alignSidebarTrafficLights(after: notification)
-    }
-
-    func windowDidBecomeKey(_ notification: Notification) {
-        alignSidebarTrafficLights(after: notification)
-    }
-
-    func windowDidDeminiaturize(_ notification: Notification) {
-        alignSidebarTrafficLights(after: notification)
-    }
-
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         // In menu bar mode, hide instead of close so the app stays alive
         if appState.menuBarMode {
@@ -1198,25 +1183,34 @@ extension AppDelegate {
     fileprivate func makeDevRootController() -> NSViewController {
         let route = ApolloDevLaunchOptions.initialRoute
         if ApolloDevLaunchOptions.isFixtureMode {
-            return NSHostingController(
-                rootView: ContentView(previewRoute: route ?? .board)
+            return windowToolbarHost(
+                ContentView(previewRoute: route ?? .board)
                     .environmentObject(appState)
                     .environmentObject(updateService)
                     .defaultAppStorage(ApolloPreviewFixtures.defaults)
             )
         }
         if let route {
-            return NSHostingController(
-                rootView: ContentView(devInitialRoute: route)
+            return windowToolbarHost(
+                ContentView(devInitialRoute: route)
                     .environmentObject(appState)
                     .environmentObject(updateService)
             )
         }
-        return NSHostingController(
-            rootView: ContentView()
+        return windowToolbarHost(
+            ContentView()
                 .environmentObject(appState)
                 .environmentObject(updateService)
         )
+    }
+
+    /// Main-window host: ContentView's `.toolbar` becomes the native toolbar.
+    private func windowToolbarHost<V: View>(_ root: V) -> NSViewController {
+        let host = NSHostingController(
+            rootView: root.environment(\.apolloUsesWindowToolbar, true)
+        )
+        host.sceneBridgingOptions = [.toolbars, .title]
+        return host
     }
 }
 #endif

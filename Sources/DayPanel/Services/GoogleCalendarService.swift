@@ -312,19 +312,30 @@ final class GoogleCalendarService {
             URLQueryItem(name: "orderBy",      value: "startTime"),
             URLQueryItem(name: "maxResults",   value: "500"),
         ]
-        var req = URLRequest(url: components.url!)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await URLSession.shared.data(for: req)
-        guard let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode)
-        else {
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            throw GCalError.message("List events on \(calendarId): \(raw.prefix(200))")
-        }
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let items = json["items"] as? [[String: Any]]
-        else { return [] }
-        return items.compactMap { Self.parseEvent($0) }
+        var events: [CalendarEvent] = []
+        var pageToken: String?
+        repeat {
+            try Task.checkCancellation()
+            var page = components
+            if let pageToken { page.queryItems?.append(URLQueryItem(name: "pageToken", value: pageToken)) }
+            var req = URLRequest(url: page.url!)
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else {
+                throw GCalError.message("Não foi possível carregar os eventos do calendário.")
+            }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw GCalError.message("Resposta inválida do calendário.")
+            }
+            events += (json["items"] as? [[String: Any]] ?? []).compactMap { item in
+                guard var event = Self.parseEvent(item) else { return nil }
+                event.calendarId = calendarId
+                return event
+            }
+            pageToken = (json["nextPageToken"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        } while pageToken != nil
+        return events
     }
 
     /// Returns blocked-time intervals per email for the given
