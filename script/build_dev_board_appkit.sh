@@ -13,7 +13,9 @@
 # Never touches /Applications/Apollo.app, the Sparkle feed/appcast, releases or
 # production secrets. Other DEV variants reuse this script by overriding
 # APOLLO_DEV_APP_NAME, APOLLO_DEV_BUNDLE_ID, APOLLO_DEV_OUT_DIR and
-# APOLLO_DEV_MANIFEST_NAME (see script/build_dev_sidebar_macos27.sh). Optional env:
+# APOLLO_DEV_MANIFEST_NAME (see script/build_dev_sidebar_macos27.sh); variants
+# with extra compilation conditions also set APOLLO_DEV_SWIFT_FLAGS and their
+# own APOLLO_DEV_SCRATCH_NAME (see script/build_dev_tasks_react.sh). Optional env:
 #   APOLLO_DEV_SIGNING_ID          signing identity (default: Developer ID if
 #                                  present, else ad-hoc "-")
 #   APOLLO_OLLAMA_RUNTIME_SOURCE   existing ollama binary to seed build/ollama-runtime
@@ -38,11 +40,11 @@ OUT_DIR="${APOLLO_DEV_OUT_DIR:-build/dev-board-appkit}"
 APP="$OUT_DIR/$APP_NAME.app"
 ABS_APP="$ROOT/$APP"
 WORK_DIR="$OUT_DIR/work"
-SCRATCH="$ROOT/.build-dev"
+SCRATCH="$ROOT/${APOLLO_DEV_SCRATCH_NAME:-.build-dev}"
 REVIEW_SCRATCH="$ROOT/.build-dev-review"
 REVIEW_DIR="$ROOT/../apollo-review-swift"
 CONFIG="release"
-SWIFT_FLAGS="-Xswiftc -DAPOLLO_DEV"
+SWIFT_FLAGS="${APOLLO_DEV_SWIFT_FLAGS:--Xswiftc -DAPOLLO_DEV}"
 MANIFEST_NAME="${APOLLO_DEV_MANIFEST_NAME:-DEV-board-appkit-manifest.json}"
 FINAL_MANIFEST_NAME="${MANIFEST_NAME%.json}.final.json"
 DEVELOPER_ID="Developer ID Application: Marconi Lima (CU544M36UD)"
@@ -228,7 +230,7 @@ manifest = {
                 os.path.join(app, "Contents/Info.plist")),
     "configuration": os.environ["M_CONFIG"],
     "swift_flags": os.environ["M_FLAGS"],
-    "compilation_conditions": ["APOLLO_DEV"],
+    "compilation_conditions": [f.split("-D", 1)[1] for f in os.environ["M_FLAGS"].split() if f.startswith("-D")],
     "optimization": "-O (SwiftPM release)",
     "scratch_path": os.environ["M_SCRATCH"],
     "source": git_state(os.environ["M_ROOT"]),

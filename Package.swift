@@ -52,6 +52,8 @@ let package = Package(
                 "Resources/Info.plist",
                 "Resources/ApolloSplash",
                 "Resources/ApolloLoading",
+                "Resources/ApolloTasks",
+                "Resources/ApolloAgenda",
                 "Resources/APOLLO_ICON_06.png",
                 "Resources/APOLLO.icon",
                 "Resources/Apollo.entitlements",

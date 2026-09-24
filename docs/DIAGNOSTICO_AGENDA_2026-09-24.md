@@ -293,3 +293,62 @@ PTY46113, `/tmp/apollo-agenda-cpu-trackpad.trace`. Sem limite de tempo;
 parar com Ctrl-C SOMENTE apos resposta de conclusao do gesto. Pergunta async
 solicitou15s nas duas listas e explicou falta de stacks da captura anterior.
 Nenhuma compilacao/AX durante o gesto. Aguardar mesmo handle, nao reiniciar.
+
+## CPU do trackpad e observacao local do header — 24/09 08h
+Captura fisica salva `/tmp/apollo-agenda-cpu-trackpad.trace`382s, apos usuario"foi".
+Trecho315–380s:20077 amostras main;15071 no sincronizador da rolagem AppKit,
+7555 em NSHostingView.layout;1085 DynamicPreferenceCombiner,512 contendo
+HeaderBottomPreferenceKey.reduce e realizacao de elementos lazy. ReviewWatcher
+430amostras nesse trecho (muito mais fora dele): nao confundir com causa principal
+da rolagem. Parser `/tmp/analyze-agenda-cpu.py`, XML `/tmp/cpu-time-profile.xml`.
+
+Mudanca candidata: ContentView deixa de consumir HeaderBottomPreferenceKey da
+janela inteira. FinderHeaderMaterialModifier informa sua propria geometria via
+onGeometryChange a HeaderBoundsStore; guarda maximo dos headers ativos, piso52,
+remove fonte desaparecida e repoe ao reaparecer. Nenhuma medida/material alterado.
+6testes/3suites passaram, incluindo coords de janela+extensao do material,
+remocao de fontes,1000eventos,6snapshots mensais0pixels diferentes.
+Log `/tmp/apollo-header-final-tests.log`.
+Build Release assinada aberta PID14028:
+`build/agenda-120-header/Apollo.app`. Conta real, Agenda, dia15selecionado.
+Captura automatizada20sCPU+Hitches `/tmp/apollo-header-auto.trace`PTY31505.
+Ainda NAO declarar120FPS nem causa unica resolvida antes de medir.
+
+## Isolamento do calendario: ganho medido, ainda nao120FPS
+Calculo direto da largura foi rejeitado:375pt mudou contador na ultima coluna.
+Restaurado AgendaMonthView anterior. Testes agora cobrem30casos (15larguras,
+claro/escuro), inclusive limiares de overflow; todos passaram.
+
+Novo AgendaMonthSurface usa NSHostingView de tamanho explicito, safeAreaRegions=[]
+e atualiza rootView somente quando mes/inset/identidadeAppState/esquema mudam.
+Mantem AgendaMonthView original e bindings/interacoes. Retomada do isolamento,
+antes inconclusivo em benchmarks sinteticos de layout, agora justificada pelo
+perfil fisico com layout da janela no sincronizador de scroll e sem o leitor
+de preferencias global que atravessava toda a arvore.
+
+Build`build/agenda-120-isolated/Apollo.app`, PID31475, aberta na conta real/dia15.
+Mesma sequencia24saltos(12esquerda,12direita), apos12saltos de preparacao,
+TimeProfiler+Hitches15s, sem compilar ou consultarAX durante captura:
+- Header-local apenas: `/tmp/apollo-header-warm.trace`:620hitches,
+  updatep9534,04ms,737updates>8,33ms.
+- Header-local+isolamento: `/tmp/apollo-isolated-warm.trace`:21hitches,
+  updatep9517,08ms,259updates>8,33ms. Ainda nao120FPS.
+No segundo trace houve sincronizacao inicial AppState/igualdadeCUTask no main;
+14hitches entre5–7s. Repeticao sem essa carga em andamento:
+`/tmp/apollo-isolated-stable.trace`, PTY99614,15s.
+6testes/3suites (30snapshots) passaram, log `/tmp/apollo-header-isolated-tests.log`.
+Repeticao apos sincronizacao: `/tmp/apollo-isolated-stable.trace`,15hitches,
+120updates,p9517,07ms,57updates>8,33ms. Nao e120FPS comprovados.
+Nova captura fisica CPU+Hitches ativa PID31475,PTY44781,
+`/tmp/apollo-isolated-trackpad.trace`. Usuario recebeu pedido de15s de inercia
+nas duas listas; aguardar resposta e Ctrl-C no mesmo handle. Nao compilar nem
+consultarAX durante gesto. Build visualmente inspecionada viaCUA em dark,
+mesma aparencia atual do usuario (nenhuma preferencia de aparencia alterada).
+
+## Encerramento por rejeicao do usuario
+Usuario testou a build isolada e declarou: "nao melhorou. vc perdeu sua chance".
+Resultado REJEITADO; desempenho120FPS nao atingido/comprovado. Trabalho encerrado.
+Captura `/tmp/apollo-isolated-trackpad.trace` parada e salva (PTY44781 terminou0).
+Esta ultima captura NAO foi analisada. Nao tratar ganhos automatizados como
+aceitacao nem como solucao. Codigo e evidencias preservados; nenhuma reversao,
+publicacao ou commit nesta etapa de encerramento.

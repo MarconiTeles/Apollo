@@ -48,7 +48,7 @@ struct ContentView: View {
     /// notification arrives. Auto-collapses after a few seconds.
     @State private var bellPillNotif:  AppNotification?
     @State private var bellPillTask:   Task<Void, Never>?
-    @State private var headerBottom: CGFloat = 52
+    @StateObject private var headerBounds = HeaderBoundsStore()
     /// Upload pills can be dismissed independently without cancelling the
     /// transfer. The id only lives for this ContentView session.
     @State private var dismissedUploadPillIDs: Set<UUID> = []
@@ -682,7 +682,7 @@ struct ContentView: View {
                                            _ = dismissedUploadPillIDs.insert(upload.id)
                                        }
                                    })
-                        .padding(.top, max(52, headerBottom) + 12)
+                        .padding(.top, headerBounds.bottom + 12)
                         .padding(.trailing, 18)
                         .transition(.asymmetric(
                             insertion: .offset(y: -8).combined(with: .opacity),
@@ -696,7 +696,7 @@ struct ContentView: View {
                                  showNotifs = true
                              },
                              onDismiss: { collapseBellPill() })
-                        .padding(.top, max(52, headerBottom) + 12)
+                        .padding(.top, headerBounds.bottom + 12)
                         .padding(.trailing, 18)
                         // The outer ZStack is already top-trailing. Do not
                         // inflate this toast to a full-window hit-test layer.
@@ -715,7 +715,7 @@ struct ContentView: View {
                 }
             }
             .coordinateSpace(name: "appWindow")
-            .onPreferenceChange(HeaderBottomPreferenceKey.self) { headerBottom = $0 }
+            .environment(\.headerBoundsStore, headerBounds)
             .environment(\.windowSize, windowGeo.size)
             // When the popup closes, defer-reset the openStyle
             // back to default so the next surface that opens a
@@ -1770,6 +1770,23 @@ struct ContentView: View {
     @ViewBuilder
     private func homeDashboardSplit(agendaTopInset: CGFloat,
                                     inboxTopInset: CGFloat) -> some View {
+        #if APOLLO_AGENDA_REACT
+        if AgendaRenderer.usesReact {
+            // DEV build: the whole body (timeline, rule, month) in React.
+            AgendaReactBody(month: $agendaMonth,
+                            agendaTopInset: agendaTopInset,
+                            inboxTopInset: inboxTopInset)
+                .environmentObject(appState)
+        } else {
+            nativeHomeDashboardSplit(agendaTopInset: agendaTopInset, inboxTopInset: inboxTopInset)
+        }
+        #else
+        nativeHomeDashboardSplit(agendaTopInset: agendaTopInset, inboxTopInset: inboxTopInset)
+        #endif
+    }
+
+    private func nativeHomeDashboardSplit(agendaTopInset: CGFloat,
+                                          inboxTopInset: CGFloat) -> some View {
         GeometryReader { geo in
             let total     = max(1, geo.size.width)
             let timelineW = AgendaLayout.timelineWidth(total)
@@ -1781,7 +1798,7 @@ struct ContentView: View {
                     .fill(Editorial.rule.opacity(0.65))
                     .frame(width: 1)
                     .edgeFadedVertical()
-                AgendaMonthView(month: $agendaMonth, topInset: inboxTopInset)
+                AgendaMonthSurface(month: $agendaMonth, topInset: inboxTopInset)
                     .environmentObject(appState)
                     .frame(maxWidth: .infinity)
             }

@@ -288,15 +288,35 @@ private struct PanelGlassMaterial: NSViewRepresentable {
     }
 }
 
-/// Bottom of the active route's complete header in ContentView coordinates.
-struct HeaderBottomPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat { 52 }
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+/// Header sources report only their own geometry. A window-wide preference
+/// reader forces SwiftUI to evaluate preferences through scrolling lazy rows.
+@MainActor
+final class HeaderBoundsStore: ObservableObject {
+    @Published private(set) var bottom: CGFloat = 52
+    private var sources: [UUID: CGFloat] = [:]
+
+    func update(_ id: UUID, bottom: CGFloat?) {
+        guard sources[id] != bottom else { return }
+        sources[id] = bottom
+        let next = max(52, sources.values.max() ?? 52)
+        if self.bottom != next { self.bottom = next }
+    }
+}
+
+private struct HeaderBoundsStoreKey: EnvironmentKey {
+    static let defaultValue: HeaderBoundsStore? = nil
+}
+extension EnvironmentValues {
+    var headerBoundsStore: HeaderBoundsStore? {
+        get { self[HeaderBoundsStoreKey.self] }
+        set { self[HeaderBoundsStoreKey.self] = newValue }
     }
 }
 
 private struct FinderHeaderMaterialModifier: ViewModifier {
+    @Environment(\.headerBoundsStore) private var headerBounds
+    @State private var sourceID = UUID()
+    @State private var measuredBottom: CGFloat?
     let leadingExtension: CGFloat
     let trailingExtension: CGFloat
     let topExtension: CGFloat
@@ -304,7 +324,16 @@ private struct FinderHeaderMaterialModifier: ViewModifier {
     let bottomRule: Bool
 
     func body(content: Content) -> some View {
-        content.background(alignment: .topLeading) {
+        content
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.frame(in: .named("appWindow")).maxY + bottomExtension
+            } action: { bottom in
+                measuredBottom = bottom
+                headerBounds?.update(sourceID, bottom: bottom)
+            }
+            .onAppear { headerBounds?.update(sourceID, bottom: measuredBottom) }
+            .onDisappear { headerBounds?.update(sourceID, bottom: nil) }
+            .background(alignment: .topLeading) {
             GeometryReader { proxy in
                 AppHeaderMaterial()
                     // DEV-only attribution switch (`--board-diag=noheadermaterial`);
@@ -321,8 +350,6 @@ private struct FinderHeaderMaterialModifier: ViewModifier {
                         }
                     }
                     .offset(x: -leadingExtension, y: -topExtension)
-                    .preference(key: HeaderBottomPreferenceKey.self,
-                                value: proxy.frame(in: .named("appWindow")).maxY + bottomExtension)
             }
         }
     }

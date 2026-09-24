@@ -1,0 +1,725 @@
+/* Apollo · Agenda (React port of TimelineView(forwardOnly:) + AgendaMonthView).
+ *
+ * Geometry mirrors AgendaNativeList, AgendaTimelineEventRow, AgendaEventCard,
+ * AgendaDayCell, AgendaDayPanel and AgendaDayEventRow value for value.
+ * Colours are CSS variables resolved natively (AgendaReactTheme); `*-c`
+ * variables are Display-P3 components for the opacities SwiftUI applies.
+ * Editorial.sans/serif sizes are already multiplied by typeScale (0.85);
+ * `--lh-*` are the SwiftUI line heights measured by AppKit. */
+
+:root {
+  color-scheme: light;
+  --p3: display-p3;
+}
+
+:root.dark {
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  font-family: -apple-system, system-ui, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+  -webkit-text-size-adjust: none;
+}
+
+button {
+  all: unset;
+  box-sizing: border-box;
+  cursor: default;
+}
+
+#root,
+.agenda {
+  position: absolute;
+  inset: 0;
+}
+
+/* ─── Columns ──────────────────────────────────────────────────────── */
+
+.column-left {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.column-right {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+}
+
+/* Rectangle().fill(rule.opacity(0.65)).frame(width: 1).edgeFadedVertical() */
+.divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color(display-p3 var(--rule-c) / calc(var(--rule-a) * 0.65));
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 6%, #000 94%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 6%, #000 94%, transparent 100%);
+}
+
+/* ─── Timeline ─────────────────────────────────────────────────────── */
+
+.timeline {
+  position: absolute;
+  inset: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.timeline::-webkit-scrollbar {
+  display: none;
+}
+
+/* Multi-stop → 2-stop fade into paper, 120pt (TimelineView overlay). */
+.timeline-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 120px;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    color(display-p3 var(--paper-c) / 0),
+    color(display-p3 var(--paper-c) / 0.92)
+  );
+}
+
+/* One recyclable row. The NSTableView column places content at x = 8 and
+ * reserves 9pt trailing; the cell adds 20 / 16 (leading / trailing). */
+.trow {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: 17px;
+  padding: 0 25px 0 28px;
+  contain: layout style;
+}
+
+/* AgendaRowView.clipsToBounds at a day's first row. */
+.trow.first {
+  overflow: clip;
+}
+
+.trow.past {
+  opacity: 0.55;
+}
+
+.gutter {
+  position: relative;
+  flex: 0 0 46px;
+  height: 0;
+}
+
+/* AgendaDateColumn: 46×46 centred stack, 6pt top padding. */
+.date {
+  position: absolute;
+  top: 6px;
+  left: 0;
+  width: 46px;
+  height: 46px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  font-family: ui-rounded, -apple-system, system-ui;
+}
+
+.date-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.7px;
+  line-height: var(--lh-dateLabel);
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+
+.date-label.today {
+  color: var(--accent);
+}
+
+.date-number {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: var(--lh-dateNumber);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  flex: 1 1 auto;
+  padding-top: 10px;
+  font-size: 11.475px;
+  font-style: italic;
+  line-height: var(--lh-empty);
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+
+/* ─── Event card ───────────────────────────────────────────────────── */
+
+/* SwiftUI shadows are computed from the drawn alpha (drawingGroup().shadow
+ * and the pill glow), so a translucent card casts a faint shadow and its
+ * text casts its own: drop-shadow, not box-shadow. `.shadow(radius: r)` is
+ * a Gaussian with σ = r: drop-shadow's length is σ, box-shadow's blur is 2σ. */
+.card {
+  --shadow: drop-shadow(0 1px 4px color(display-p3 var(--c) / 0.45));
+  --glow: drop-shadow(0 0 0 color(display-p3 var(--c) / 0));
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 13px;
+  background: color(display-p3 var(--c) / 0.14);
+  filter: var(--shadow) var(--glow);
+  transform: scale(1);
+  transition:
+    transform var(--hover-duration) var(--hover),
+    filter var(--hover-duration) var(--hover);
+}
+
+.card.accepted {
+  --shadow: drop-shadow(0 1px 4px rgb(0 0 0 / 0.18));
+  background: color(display-p3 var(--c));
+}
+
+/* strokeBorder(black 0.08, 0.5) inside the filled shape. */
+.card.accepted::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.08);
+  pointer-events: none;
+}
+
+:root:not(.occluded):not(.scrolling) .card:hover {
+  --glow: drop-shadow(0 3.9px 10.4px color(display-p3 var(--c) / 0.5));
+  transform: scale(1.015);
+}
+
+.card.pressed,
+.card.releasing {
+  transition:
+    transform var(--press-duration) var(--press),
+    filter var(--hover-duration) var(--hover);
+}
+
+.card.pressed,
+:root:not(.occluded):not(.scrolling) .card.pressed:hover {
+  transform: scale(0.96);
+}
+
+.card-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.card.declined .card-text {
+  opacity: 0.6;
+}
+
+.card-title,
+.card-subtitle {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.card-title {
+  font-size: 13.8px;
+  font-weight: 600;
+  line-height: var(--lh-cardTitle);
+  color: var(--label);
+}
+
+.card.accepted .card-title {
+  color: #fff;
+}
+
+.card.declined .card-title {
+  text-decoration: line-through;
+  text-decoration-color: var(--secondary-label);
+}
+
+/* Font.caption (10pt regular) */
+.card-subtitle {
+  font-size: 10px;
+  line-height: var(--lh-cardSubtitle);
+  color: var(--secondary-label);
+}
+
+.card.accepted .card-subtitle {
+  color: rgb(255 255 255 / 0.85);
+}
+
+.card-avatar {
+  position: relative;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color(display-p3 var(--accent-c) / 0.2);
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: var(--lh-avatar);
+}
+
+.card.accepted .card-avatar {
+  background: color(display-p3 var(--accent-c) / 0.35);
+  box-shadow: inset 0 0 0 0.5px rgb(255 255 255 / 0.5);
+  color: #fff;
+}
+
+.card-ripple-clip {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.card-ripple {
+  position: absolute;
+  border-radius: 50%;
+  opacity: 0;
+  mix-blend-mode: plus-lighter;
+  background: radial-gradient(
+    closest-side,
+    color(display-p3 var(--c) / 0.55) 0%,
+    color(display-p3 var(--c) / 0.28) 33.33%,
+    color(display-p3 var(--c) / 0.1) 66.67%,
+    transparent 100%
+  );
+}
+
+/* ─── Month column ─────────────────────────────────────────────────── */
+
+.month {
+  position: absolute;
+  inset: 0;
+  background: var(--paper);
+}
+
+.month-inner {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  padding-left: 16px;
+  padding-right: 16px;
+  padding-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.banner {
+  flex: 0 0 30px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 9.35px;
+  font-weight: 500;
+  line-height: var(--lh-banner);
+}
+
+.banner-icon {
+  flex: none;
+  background: var(--orange);
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+}
+
+.banner-text {
+  color: var(--ink-soft);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.banner-spacer {
+  flex: 1 1 0;
+}
+
+.banner-link {
+  color: var(--link);
+  white-space: nowrap;
+}
+
+.month-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.month-scroll::-webkit-scrollbar,
+.panel-list::-webkit-scrollbar {
+  display: none;
+}
+
+.month-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.weekdays {
+  height: 20px;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.weekday {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-left: 10px;
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  line-height: var(--lh-weekday);
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+
+.weekday.weekend {
+  color: var(--ink-faint);
+}
+
+.week {
+  display: flex;
+  gap: 6px;
+}
+
+/* AgendaDayCell. Two background layers so hover swaps instantly while a
+ * selection change crossfades on the 0.28 s spring. */
+.cell {
+  --ring: var(--page);
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 5px 4px;
+  border-radius: 10px;
+  isolation: isolate;
+}
+
+.cell::before,
+.cell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  transition: opacity var(--select-duration) var(--select);
+}
+
+.cell::before {
+  background: transparent;
+}
+
+.cell.in-month::before {
+  background: var(--page);
+}
+
+.cell.today::before {
+  background: color(display-p3 var(--accent-c) / 0.07);
+}
+
+:root:not(.occluded) .cell:not(.today):hover::before {
+  background: color(display-p3 var(--ink-c) / 0.03);
+}
+
+:root:not(.occluded) .cell.in-month:not(.today):hover::before {
+  background: color(display-p3 var(--ink-c) / 0.05);
+}
+
+.cell::after {
+  background: color(display-p3 var(--accent-c) / 0.12);
+  opacity: 0;
+}
+
+.cell.selected::before {
+  opacity: 0;
+}
+
+.cell.selected::after {
+  opacity: 1;
+}
+
+.cell.selected,
+.cell.today,
+.cell:not(.in-month) {
+  --ring: var(--paper);
+}
+
+.cell-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cell:not(.in-month) .cell-content {
+  opacity: 0.5;
+}
+
+.cell-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cell-number {
+  min-width: 20px;
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 10.625px;
+  font-weight: 600;
+  line-height: var(--lh-cellNumber);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.cell.today .cell-number {
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+}
+
+.cell-month {
+  font-size: 9.35px;
+  font-weight: 500;
+  line-height: var(--lh-cellMonth);
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+
+.dots {
+  position: relative;
+  height: 17px;
+  margin: 0 3px;
+}
+
+.dot-slot {
+  position: absolute;
+  top: 0;
+}
+
+/* AgendaEventDot: disc + white sheen + monogram, ring in the tile colour. */
+.disc {
+  display: block;
+  padding: 1.5px;
+  border-radius: 50%;
+}
+
+.disc.ring {
+  background: var(--ring);
+  box-shadow: 0 0.6px 1.6px rgb(0 0 0 / 0.16);
+  transition: background-color var(--select-duration) var(--select);
+}
+
+.disc-fill {
+  position: relative;
+  width: var(--size);
+  height: var(--size);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.disc:not(.ring) .disc-fill {
+  box-shadow: 0 0.6px 1.6px rgb(0 0 0 / 0.16);
+}
+
+.disc-fill::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: linear-gradient(to bottom, rgb(255 255 255 / 0.28), transparent 50%);
+}
+
+.disc-letter {
+  position: relative;
+  font-family: ui-rounded, -apple-system, system-ui;
+  font-size: calc(var(--size) * 0.56);
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+}
+
+.disc-letter.dark-ink {
+  color: rgb(0 0 0 / 0.72);
+}
+
+.disc-fill.more {
+  background: var(--ink-soft);
+}
+
+.disc-fill.more::before {
+  display: none;
+}
+
+.disc-more {
+  font-family: ui-rounded, -apple-system, system-ui;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--page);
+  white-space: nowrap;
+}
+
+/* ─── Day panel ────────────────────────────────────────────────────── */
+
+.panel {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--page);
+  overflow: hidden;
+}
+
+.panel-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 14px 16px 12px;
+}
+
+/* Folio (uppercased natively): 10.5 × 0.85 semibold, tracking 1.4 */
+.folio {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 8.925px;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  line-height: var(--lh-folio);
+  color: var(--ink-mute);
+}
+
+.panel-relative {
+  flex: none;
+  font-size: 9.35px;
+  font-weight: 500;
+  line-height: var(--lh-relative);
+  color: var(--ink-mute);
+}
+
+.panel-empty {
+  padding: 0 16px 16px;
+  font-size: 10.2px;
+  font-weight: 500;
+  line-height: var(--lh-panelEmpty);
+  color: var(--ink-soft);
+}
+
+.panel-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  animation: panel-in var(--panel-duration) var(--panel);
+}
+
+.reduce-motion .panel-list {
+  animation: none;
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.panel-stack {
+  padding: 0 8px 8px;
+}
+
+.prow {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+
+:root:not(.occluded) .prow:hover {
+  background: color(display-p3 var(--ink-c) / 0.06);
+}
+
+.prow-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.prow-title {
+  font-size: 10.625px;
+  font-weight: 600;
+  line-height: var(--lh-rowTitle);
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.prow-detail {
+  font-size: 9.35px;
+  font-weight: 500;
+  line-height: var(--lh-rowDetail);
+  color: var(--ink-soft);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

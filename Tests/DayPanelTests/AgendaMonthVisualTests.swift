@@ -6,7 +6,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct AgendaMonthVisualTests {
-    @Test(arguments: [430, 600, 850], [false, true])
+    @Test(arguments: [375, 376, 377, 430, 466, 467, 468, 557, 558, 559, 600, 648, 649, 650, 850], [false, true])
     func matchesFrozenReference(width: Int, dark: Bool) async throws {
         ApolloRuntimeEnvironment.activateStudio()
         let state = AppState.preview()
@@ -21,7 +21,7 @@ struct AgendaMonthVisualTests {
                                  colorHex: index % 2 == 0 ? "#039BE5" : "#F6BF26",
                                  calendarId: "calendar-\(index % 10)", isAllDay: index == 1)
         }
-        let current = try await render(AgendaMonthView(month: .constant(today)).environmentObject(state),
+        let current = try await render(AgendaMonthSurface(month: .constant(today), topInset: 110).environmentObject(state),
                                        width: width, dark: dark)
         let reference = try await render(AgendaMonthReferenceView(month: .constant(today)).environmentObject(state),
                                          width: width, dark: dark)
