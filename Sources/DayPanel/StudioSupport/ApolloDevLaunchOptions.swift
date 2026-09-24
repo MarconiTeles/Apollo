@@ -16,6 +16,7 @@ enum ApolloDevLaunchOptions {
     struct Parsed: Equatable {
         var boardRenderer: String?
         var boardFixtureCount: Int?
+        var agendaFixtureCount: Int?
         var route: String?
         var appearance: String?
     }
@@ -38,6 +39,8 @@ enum ApolloDevLaunchOptions {
                 if supportedRenderers.contains(value) { out.boardRenderer = value }
             case "board-fixtures":
                 if let n = Int(value), n > 0, n <= maxFixtureCount { out.boardFixtureCount = n }
+            case "agenda-fixtures":
+                if let n = Int(value), n > 0, n <= maxFixtureCount { out.agendaFixtureCount = n }
             case "route":
                 if supportedRoutes.contains(value) { out.route = value }
             case "appearance":
@@ -61,7 +64,11 @@ enum ApolloDevLaunchOptions {
     /// Parsed once per process; empty outside the DEV build.
     static let current: Parsed = {
         #if APOLLO_DEV
-        return parse(ProcessInfo.processInfo.arguments)
+        var arguments = ProcessInfo.processInfo.arguments
+        if let count = Bundle.main.object(forInfoDictionaryKey: "ApolloAgendaFixtureCount") as? Int {
+            arguments += ["--agenda-fixtures=\(count)", "--route=today"]
+        }
+        return parse(arguments)
         #else
         return Parsed()
         #endif
@@ -72,7 +79,7 @@ enum ApolloDevLaunchOptions {
 
     static var boardFixtureCount: Int? { current.boardFixtureCount }
 
-    static var isFixtureMode: Bool { boardFixtureCount != nil }
+    static var isFixtureMode: Bool { boardFixtureCount != nil || current.agendaFixtureCount != nil }
 
     static var initialRoute: SidebarRoute? {
         switch current.route {
@@ -94,7 +101,7 @@ enum ApolloDevLaunchOptions {
     /// screenshots and accessibility — no layout change).
     static var windowTitle: String {
         isFixtureMode
-            ? "Apollo DEV · DADOS DE TESTE (\(boardFixtureCount ?? 0) tarefas)"
+            ? "Apollo DEV · DADOS DE TESTE (\(current.agendaFixtureCount ?? boardFixtureCount ?? 0) itens)"
             : (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
                 ?? "Apollo DEV")
     }
@@ -105,14 +112,36 @@ enum ApolloDevLaunchOptions {
     /// boundary (in-memory secret store, HTTP blocked for URLSession.shared,
     /// `initialize()` inert) exactly like Apollo Studio.
     static func makeFixtureAppState() -> AppState? {
-        guard let count = boardFixtureCount else { return nil }
+        guard let count = current.agendaFixtureCount ?? boardFixtureCount else { return nil }
         ApolloRuntimeEnvironment.activateStudio()
         // Fresh, deterministic view preferences (card order, subtask toggle…)
         // in the separate fixtures suite on every fixture launch.
         ApolloPreviewFixtures.defaults.removePersistentDomain(
             forName: ApolloPreviewFixtures.defaultsSuiteName)
         let state = AppState.preview(.populated)
-        state.tasks = ApolloBoardFixtureGenerator.tasks(count: count)
+        if current.agendaFixtureCount != nil {
+            state.tasks = []
+            let today = Calendar.current.startOfDay(for: Date())
+            let events = (0..<count).map { index -> CalendarEvent in
+                let calendar = index % 10
+                let date = Calendar.current.date(byAdding: .day, value: (index / 10) % 31, to: today)!
+                let start = date.addingTimeInterval(TimeInterval(9 * 3600 + (index % 60) * 60))
+                return CalendarEvent(id: "agenda-fixture-\(index)",
+                    title: "Reunião de planejamento \(index + 1)", startDate: start,
+                    endDate: start.addingTimeInterval(1800), colorHex: "#039BE5",
+                    calendarId: calendar == 0 ? "primary" : "fixture-\(calendar)@example.test",
+                    isAllDay: index % 19 == 0, location: "Sala de reunião",
+                    attendees: [.init(name: "Participante", email: nil,
+                        status: index % 3 == 0 ? .pending : .accepted, isOrganizer: false)])
+            }
+            // Feed the merged render fixture through the writable offline cache.
+            state.events = events
+            state.sharedCalendars = (1..<10).map {
+                SharedCalendar(email: "fixture-\($0)@example.test", name: "Agenda \($0)", colorHex: "#039BE5")
+            }
+        } else {
+            state.tasks = ApolloBoardFixtureGenerator.tasks(count: count)
+        }
         if let appearance = appearanceOverride {
             // Assign directly: `setAppearanceMode` would persist the choice.
             state.appearanceMode = appearance

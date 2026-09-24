@@ -137,6 +137,9 @@ final class TaskReviewUpdateStore: ObservableObject {
     }
 
     private var watched: [String: WatchedTask] = [:]
+    // Row reuse changes visibility, not freshness. Keep a bounded history so
+    // scrolling out and back does not restart the 45-second probe interval.
+    private var recentlyUnwatched: [String: WatchedTask] = [:]
     private var queued: [String] = []
     private var queuedIds: Set<String> = []
     private var pumpTask: Task<Void, Never>?
@@ -453,7 +456,8 @@ final class TaskReviewUpdateStore: ObservableObject {
     /// and cheap; network work is queued once per task and processed serially.
     func watch(task: CUTask) {
         let now = Date()
-        let prior = watched[task.id]
+        let recent = recentlyUnwatched.removeValue(forKey: task.id)
+        let prior = watched[task.id] ?? (recent?.task == task ? recent : nil)
         watched[task.id] = WatchedTask(task: task, lastProbeAt: prior?.lastProbeAt)
         if let lastProbeAt = prior?.lastProbeAt {
             if now.timeIntervalSince(lastProbeAt) >= refreshInterval {
@@ -466,7 +470,15 @@ final class TaskReviewUpdateStore: ObservableObject {
     }
 
     func unwatch(taskId: String) {
-        watched.removeValue(forKey: taskId)
+        if let item = watched.removeValue(forKey: taskId), item.lastProbeAt != nil {
+            recentlyUnwatched[taskId] = item
+            if recentlyUnwatched.count > 256,
+               let oldest = recentlyUnwatched.min(by: {
+                   ($0.value.lastProbeAt ?? .distantPast) < ($1.value.lastProbeAt ?? .distantPast)
+               })?.key {
+                recentlyUnwatched.removeValue(forKey: oldest)
+            }
+        }
         if queuedIds.remove(taskId) != nil {
             queued.removeAll { $0 == taskId }
         }
@@ -783,16 +795,24 @@ final class TaskReviewUpdateStore: ObservableObject {
             // A physical replacement may have been latched before the media
             // catalog finished loading. Once its stable lineage is known,
             // remove those aliases before inserting the canonical row.
-            for alias in equivalentReviewKeys(
+            let aliases = equivalentReviewKeys(
                 taskId: taskId,
                 activeAtt: update.activeAtt,
                 mediaUrl: update.attachment.url,
                 reviewId: update.meta.reviewId,
                 versionId: Self.authoritativeVersion(update.meta)
-            ) where alias != key {
+            ).filter { $0 != key }
+            let shouldReplace = existing.map {
+                Self.isNewer(update, than: $0) && !Self.hasSameContent(update, $0)
+            } ?? true
+            // Polls commonly return an identical pending review. Mutating the
+            // published dictionary and encoding every latch blocks the main
+            // actor even though neither the UI nor durable state has changed.
+            guard shouldReplace || !aliases.isEmpty else { return }
+            for alias in aliases {
                 updatesByTask[taskId]?.removeValue(forKey: alias)
             }
-            if existing == nil || Self.isNewer(update, than: existing!) {
+            if shouldReplace {
                 updatesByTask[taskId, default: [:]][key] = update
             }
             persistPendingUpdates()
@@ -1188,5 +1208,22 @@ final class TaskReviewUpdateStore: ObservableObject {
 
     private static func isNewer(_ candidate: Update, than current: Update) -> Bool {
         (candidate.meta.updatedAt ?? "") >= (current.meta.updatedAt ?? "")
+    }
+
+    /// Equal timestamps can still carry changed titles, approval or version
+    /// metadata. Suppress only an identical payload, never timestamp ties.
+    private static func hasSameContent(_ lhs: Update, _ rhs: Update) -> Bool {
+        lhs.taskId == rhs.taskId
+            && lhs.attachment == rhs.attachment
+            && lhs.activeAtt == rhs.activeAtt
+            && lhs.meta.exists == rhs.meta.exists
+            && lhs.meta.updatedAt == rhs.meta.updatedAt
+            && lhs.meta.status == rhs.meta.status
+            && lhs.meta.commentCount == rhs.meta.commentCount
+            && lhs.meta.concludedAt == rhs.meta.concludedAt
+            && lhs.meta.reviewId == rhs.meta.reviewId
+            && lhs.meta.currentVersionId == rhs.meta.currentVersionId
+            && lhs.meta.mediaTitle == rhs.meta.mediaTitle
+            && lhs.meta.evaluatedVersionId == rhs.meta.evaluatedVersionId
     }
 }

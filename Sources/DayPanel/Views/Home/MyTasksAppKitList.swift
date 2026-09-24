@@ -3,6 +3,13 @@ import Combine
 import SwiftUI
 
 private extension NSView {
+    /// Live-scroll notifications can finish before the clip view stops moving.
+    /// Native row tracking must follow that movement, including momentum's tail.
+    var isTaskListScrolling: Bool {
+        ScrollGate.shared.active || ScrollStateObserver.isScrollingNow
+            || (enclosingScrollView?.documentView as? MyTasksViewport)?.isScrollMotionActive == true
+    }
+
     /// CALayer stores an immutable CGColor, so dynamic AppKit/SwiftUI colors
     /// must be resolved while this view's effective appearance is current.
     /// Converting outside this scope freezes the Aqua variant and produces a
@@ -537,11 +544,24 @@ final class MyTasksViewport: NSView {
     private var mounted: [String: MyTasksReusableItem] = [:]
     private var pool: [Int: [MyTasksReusableItem]] = [:]
     private var tiling = false
+    private var preparedRect: NSRect?
+    private var idlePreparation: DispatchWorkItem?
+    private var taskRowCount = 0
+    private var geometryDirty = true
+    private var tiledWidth: CGFloat = -1
+    private var populatedRange: Range<Int>?
+    private(set) var reconciliationCount = 0
+    private var lastViewportOrigin: NSPoint?
+    private var lastViewportMovement: CFTimeInterval = -.infinity
+    private static let preparationQuietPeriod: CFTimeInterval = 0.35
     private var contentHeight: CGFloat = 0
     private(set) var createdItemCount = 0
     private(set) var attachmentCount = 0
     private(set) var bindCount = 0
     var rowCount: Int { rows.count }
+    var isScrollMotionActive: Bool {
+        CACurrentMediaTime() - lastViewportMovement < Self.preparationQuietPeriod
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -558,20 +578,34 @@ final class MyTasksViewport: NSView {
     func attach(to scroll: NSScrollView) {
         detach()
         self.scroll = scroll
+        lastViewportOrigin = scroll.contentView.bounds.origin
+        lastViewportMovement = -.infinity
         scroll.contentView.postsBoundsChangedNotifications = true
         observer = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification,
             object: scroll.contentView, queue: nil
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tile() }
+            MainActor.assumeIsolated {
+                guard let self, let scroll = self.scroll else { return }
+                let origin = scroll.contentView.bounds.origin
+                if origin != self.lastViewportOrigin {
+                    self.lastViewportOrigin = origin
+                    self.lastViewportMovement = CACurrentMediaTime()
+                }
+                self.tile()
+            }
         }
         tile()
     }
 
     func detach() {
+        idlePreparation?.cancel()
+        idlePreparation = nil
         if let observer { NotificationCenter.default.removeObserver(observer) }
         observer = nil
         scroll = nil
+        preparedRect = nil
+        populatedRange = nil
         for item in mounted.values {
             item.prepareForReuse()
             item.view.removeFromSuperview()
@@ -584,6 +618,7 @@ final class MyTasksViewport: NSView {
     }
 
     deinit {
+        idlePreparation?.cancel()
         if let observer { NotificationCenter.default.removeObserver(observer) }
     }
 
@@ -595,6 +630,7 @@ final class MyTasksViewport: NSView {
         rebuildGeometry()
         let changed = Set(rows.compactMap { old[$0.id] == $0 ? nil : $0.id })
         tile(rebind: changed, clampOffset: true)
+        scheduleIdlePreparation()
         guard animated else { return }
         for (id, item) in mounted {
             guard let prior = oldFrames[id], prior.origin != item.view.frame.origin,
@@ -609,10 +645,17 @@ final class MyTasksViewport: NSView {
     }
 
     private func rebuildGeometry() {
+        geometryDirty = true
+        populatedRange = nil
         offsets.removeAll(keepingCapacity: true)
         offsets.reserveCapacity(rows.count)
         var y = topInset
-        for row in rows { offsets.append(y); y += row.height }
+        taskRowCount = 0
+        for row in rows {
+            offsets.append(y)
+            y += row.height
+            if row.kind == 0 { taskRowCount += 1 }
+        }
         contentHeight = y
     }
 
@@ -623,6 +666,15 @@ final class MyTasksViewport: NSView {
 
     func indexPathsForVisibleItems() -> Set<IndexPath> {
         Set(mounted.keys.compactMap { indexByID[$0].map { IndexPath(item: $0, section: 0) } })
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        // Expose visible native controls; prepared and pooled offscreen rows
+        // are implementation details of the viewport, not extra AX content.
+        let clip = scroll?.contentView.bounds ?? visibleRect
+        return NSAccessibility.unignoredChildren(from: subviews.filter {
+            !$0.isHidden && $0.frame.intersects(clip)
+        })
     }
 
     fileprivate func item(at path: IndexPath) -> MyTasksReusableItem? {
@@ -645,10 +697,80 @@ final class MyTasksViewport: NSView {
         return min(firstIndex(intersecting: point.y), rows.count - 1)
     }
 
-    override func layout() { super.layout(); tile() }
+    override func layout() { super.layout(); tile(); scheduleIdlePreparation() }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        scheduleIdlePreparation()
+    }
+
+    private var taskReserveCapacity: Int {
+        guard let scroll, scroll.contentView.bounds.width > 0 else { return 0 }
+        let height = scroll.contentView.bounds.height
+        guard height > 0 else { return 0 }
+        return min(taskRowCount, Int(ceil((height + 2 * max(180, height)) / 36)) + 2)
+    }
+
+    private var needsIdlePreparation: Bool {
+        guard window != nil else { return false }
+        let target = taskReserveCapacity
+        let existing = mounted.values.reduce(pool[0, default: []].count) {
+            $0 + ($1 is MyTasksTaskItem ? 1 : 0)
+        }
+        return existing < target
+    }
+
+    private func scheduleIdlePreparation(after delay: TimeInterval = 1.0 / 120) {
+        guard idlePreparation == nil, needsIdlePreparation else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.idlePreparation = nil
+            if ScrollGate.shared.active || ScrollStateObserver.isScrollingNow {
+                self.scheduleIdlePreparation(after: 0.1)
+                return
+            }
+            let quietRemaining = Self.preparationQuietPeriod - (CACurrentMediaTime() - self.lastViewportMovement)
+            if quietRemaining > 0 {
+                self.scheduleIdlePreparation(after: quietRemaining)
+                return
+            }
+            if self.prepareOneReusableRowIfIdle() { self.scheduleIdlePreparation() }
+        }
+        idlePreparation = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Prepare a bounded reserve of blank controls between gestures. Offscreen
+    /// tasks are not bound, subscribed or rendered just because the list is small.
+    @discardableResult
+    func prepareOneReusableRowIfIdle(at now: CFTimeInterval = CACurrentMediaTime()) -> Bool {
+        // Native clip animation may still move after a live-scroll notification.
+        // Observe actual viewport movement as well as event phases so preparing
+        // controls never competes with the slow final frames of inertia.
+        guard !tiling, needsIdlePreparation, let scroll,
+              now - lastViewportMovement >= Self.preparationQuietPeriod,
+              !ScrollGate.shared.active, !ScrollStateObserver.isScrollingNow else { return false }
+        let item = MyTasksTaskItem(nibName: nil, bundle: nil)
+        item.view.isHidden = true
+        item.view.frame = NSRect(x: 0, y: 0, width: scroll.contentView.bounds.width, height: 36)
+        addSubview(item.view)
+        createdItemCount += 1
+        attachmentCount += 1
+        pool[0, default: []].append(item)
+        item.view.layoutSubtreeIfNeeded()
+        return true
+    }
 
     override func prepareContent(in rect: NSRect) {
-        super.prepareContent(in: rect)
+        let visible = scroll?.contentView.bounds ?? visibleRect
+        // AppKit grows overdraw while idle. Dense task rows must not expand
+        // that request into an unbounded batch of text/control creation.
+        // Announce exactly the bounded area we populate, including the full
+        // visible region. Returning the same limit stops further expansion.
+        let limit = visible.insetBy(dx: 0, dy: -max(180, visible.height))
+        let region = rect.intersection(limit).union(visible)
+        preparedRect = region
+        super.prepareContent(in: region)
         tile()
     }
 
@@ -658,7 +780,16 @@ final class MyTasksViewport: NSView {
         defer { tiling = false }
         let clip = scroll.contentView.bounds
         let size = NSSize(width: max(0, clip.width), height: max(contentHeight, clip.height))
-        if frame.size != size { setFrameSize(size) }
+        // NSScrollView can resize the document before invoking our layout.
+        // Compare the last populated width, not just the current view frame.
+        if tiledWidth != size.width {
+            tiledWidth = size.width
+            geometryDirty = true
+        }
+        if frame.size != size {
+            geometryDirty = true
+            setFrameSize(size)
+        }
         // Keep elastic overscroll native, but clamp after a data shrink so
         // collapsing a large group cannot leave the viewport past the end.
         let maxY = max(0, contentHeight - clip.height + scroll.contentInsets.bottom)
@@ -667,64 +798,92 @@ final class MyTasksViewport: NSView {
             scroll.reflectScrolledClipView(scroll.contentView)
         }
         let visible = scroll.contentView.bounds
-        let rect = visible.insetBy(dx: 0, dy: -max(180, visible.height * 0.5))
+        var rect = visible.insetBy(dx: 0, dy: -max(180, visible.height * 0.5))
+        // Like BoardColumnView, populate AppKit's upcoming draw region before
+        // responsive scrolling presents it, not only the current clip bounds.
+        // Layout/bounds notifications can arrive between preparation and
+        // presentation. Keep AppKit's prepared content alive on those passes;
+        // otherwise they recycle the upcoming rows and the next preparation
+        // immediately binds and lays out the same rows again.
+        if let preparedRect, preparedRect.contains(visible) {
+            rect = rect.union(preparedRect)
+        } else {
+            // A jump outside the prepared area must not retain the intervening
+            // document. AppKit will request a new region at the destination.
+            preparedRect = nil
+        }
         let first = firstIndex(intersecting: rect.minY)
         var last = first
         while last < rows.count && offsets[last] <= rect.maxY { last += 1 }
-        let wanted = Set(rows[first..<last].map(\.id))
+        let range = first..<last
+        guard geometryDirty || !changed.isEmpty || populatedRange != range else { return }
+        populatedRange = range
+        reconciliationCount += 1
+        let wanted = Set(rows[range].map(\.id))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         // Recycle before allocating so a jump between far-apart sections has
         // the same bound as incremental scrolling.
-        for id in Array(mounted.keys) where !wanted.contains(id) {
+        for id in Array(mounted.keys)
+        where !wanted.contains(id) {
             guard let item = mounted.removeValue(forKey: id) else { continue }
             let kind = item is MyTasksTaskItem ? 0 : (item is MyTasksHeaderItem ? 1 : 2)
             item.view.layer?.removeAnimation(forKey: "tasks.reflow")
             item.prepareForReuse()
-            if pool[kind, default: []].count < (kind == 0 ? 64 : 16) {
-                // Keep the bounded pool in the same window. Detaching and
-                // reattaching a row makes AppKit recompute appearance and
-                // semantic context for every text field and control.
-                item.view.isHidden = true
-                pool[kind, default: []].append(item)
-            } else {
-                item.view.removeFromSuperview()
-            }
+            // Retain the outgoing batch until destination rows have consumed
+            // it. Trimming now discards views needed later in this very pass
+            // when a long jump crosses more rows than the free-pool limit.
+            pool[kind, default: []].append(item)
         }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        defer { CATransaction.commit() }
         for index in first..<last {
-            let row = rows[index]
-            let item: MyTasksReusableItem
-            let new = mounted[row.id] == nil
-            if let existing = mounted[row.id] { item = existing }
-            else {
-                if let recycled = pool[row.kind]?.popLast() { item = recycled }
-                else {
-                    switch row.kind {
-                    case 0: item = MyTasksTaskItem(nibName: nil, bundle: nil)
-                    case 1: item = MyTasksHeaderItem(nibName: nil, bundle: nil)
-                    default: item = MyTasksDropPlaceholderItem(nibName: nil, bundle: nil)
-                    }
-                    createdItemCount += 1
-                }
-                mounted[row.id] = item
-                if item.view.superview !== self {
-                    addSubview(item.view)
-                    attachmentCount += 1
-                }
+            _ = mountRow(at: index, rebind: changed.contains(rows[index].id))
+        }
+        geometryDirty = false
+        // A row reused in this pass never leaves the visible view hierarchy.
+        // Hide only the leftovers, after assigning the destination rows.
+        for kind in Array(pool.keys) {
+            let limit = kind == 0 ? max(64, taskReserveCapacity) : 16
+            while pool[kind, default: []].count > limit {
+                pool[kind]?.popLast()?.view.removeFromSuperview()
             }
-            if let frame = frameForRow(at: index), item.view.frame != frame { item.view.frame = frame }
-            if new || changed.contains(row.id) {
-                coordinator?.bind(item, to: row)
-                bindCount += 1
-            }
-            if item.view.isHidden { item.view.isHidden = false }
-            // Explicit tiling gives new content final geometry before the
-            // scroll transaction commits; surviving rows need no work.
-            if new || changed.contains(row.id) || item.view.needsLayout {
-                item.view.layoutSubtreeIfNeeded()
+            for item in pool[kind, default: []] where !item.view.isHidden {
+                item.view.isHidden = true
             }
         }
+    }
+
+    @discardableResult
+    private func mountRow(at index: Int, rebind: Bool) -> MyTasksReusableItem {
+        let row = rows[index]
+        let item: MyTasksReusableItem
+        let new = mounted[row.id] == nil
+        if let existing = mounted[row.id] { item = existing }
+        else {
+            if let recycled = pool[row.kind]?.popLast() { item = recycled }
+            else {
+                switch row.kind {
+                case 0: item = MyTasksTaskItem(nibName: nil, bundle: nil)
+                case 1: item = MyTasksHeaderItem(nibName: nil, bundle: nil)
+                default: item = MyTasksDropPlaceholderItem(nibName: nil, bundle: nil)
+                }
+                createdItemCount += 1
+            }
+            mounted[row.id] = item
+            if item.view.superview !== self {
+                addSubview(item.view)
+                attachmentCount += 1
+            }
+        }
+        if let frame = frameForRow(at: index), item.view.frame != frame { item.view.frame = frame }
+        if new || rebind {
+            coordinator?.bind(item, to: row)
+            bindCount += 1
+        }
+        if item.view.isHidden { item.view.isHidden = false }
+        // AppKit batches normal layouts before drawing; force them only in
+        // idle preparation, never once per entering row during a wheel event.
+        return item
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -753,8 +912,8 @@ final class MyTasksViewport: NSView {
     }
 }
 
-/// Same synchronous AppKit scrolling model as the board. Momentum and
-/// elasticity stay native; document tiling runs only when bounds change.
+/// Keep AppKit's responsive scrolling, as on the board. The document prepares
+/// upcoming rows through prepareContent(in:); momentum and elasticity stay native.
 private final class MyTasksScrollView: NSScrollView, HeaderOccludingViewport {
     var headerOcclusionHeight: CGFloat = 0
 
@@ -764,7 +923,6 @@ private final class MyTasksScrollView: NSScrollView, HeaderOccludingViewport {
         return super.hitTest(point)
     }
 
-    override class var isCompatibleWithResponsiveScrolling: Bool { false }
 }
 
 /// Animated insertion slot shown while a drag is over a destination
@@ -906,6 +1064,33 @@ private final class MyTasksTaskItem: MyTasksReusableItem {
     }
 }
 
+/// Only values rendered by the native capsule. Project before scheduling on
+/// the UI run loop so progress/catalog changes for other tasks cost no row work.
+@MainActor
+struct MyTasksMediaPresentation: Equatable {
+    let phase: TaskMediaTransferStore.Phase?
+    let label: String
+    let composing: Bool
+    let progress: CGFloat
+    let badgeCount: Int
+
+    init(batch: TaskMediaTransferStore.BatchState?) {
+        phase = batch?.phase
+        composing = batch.map {
+            $0.phase == .preparing && $0.plan.outputs.contains {
+                $0.hookAssetId != nil && $0.bodyAssetId != nil
+            }
+        } ?? false
+        label = TaskMediaTransferStore.capsuleLabel(
+            phase: phase, completed: batch?.completed ?? 0,
+            total: batch?.total ?? 0, pending: batch?.pendingCount ?? 0,
+            composing: composing)
+        progress = phase == .preparing || phase == .sending
+            ? max(0, min(1, CGFloat(batch?.progress ?? 0))) : 0
+        badgeCount = batch.map { $0.phase == .partialFailure ? $0.pendingCount : $0.total } ?? 0
+    }
+}
+
 final class MyTasksMediaButton: NSButton {
     var onHover: ((Bool) -> Void)?
     private var hoverTracking: NSTrackingArea?
@@ -924,6 +1109,14 @@ final class MyTasksMediaButton: NSButton {
 
     override func mouseEntered(with event: NSEvent) {
         guard !isBehindPageHeader(windowPoint: event.locationInWindow) else { return }
+        // NSScrollView emits tracking transitions as content moves under a
+        // stationary pointer. Reject them before invoking visual callbacks;
+        // suppressing only the final hover color still mutates layers/titles.
+        guard !isTaskListScrolling else {
+            resetHover()
+            return
+        }
+        guard !isPointerInside else { return }
         isPointerInside = true
         onHover?(true)
     }
@@ -1007,6 +1200,9 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
     private var anyPopupCancellable: AnyCancellable?
     private var mediaCancellable: AnyCancellable?
     private var reviewCancellable: AnyCancellable?
+    private var scheduledMediaPresentation: MyTasksMediaPresentation?
+    private var scheduledReviewState: ReviewVisualState?
+    private(set) var mediaSubscriptionCount = 0
     private var watchedReviewTaskId: String?
     private var tracking: NSTrackingArea?
     private var hovered = false
@@ -1166,6 +1362,8 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
             TaskReviewUpdateStore.shared.unwatch(taskId: watchedReviewTaskId)
         }
         watchedReviewTaskId = nil
+        scheduledMediaPresentation = nil
+        scheduledReviewState = nil
         task = nil
         reviewAnimationGeneration += 1
         reviewVisualState = .hidden
@@ -1218,30 +1416,46 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
         more.isEnabled = !appState.anyPopupOpen
         review.isEnabled = !appState.anyPopupOpen && reviewVisualState == .update
         media.isEnabled = !appState.anyPopupOpen
+        updateMediaButton(store: appState.taskMediaTransfers, taskId: task.id)
         if mediaCancellable == nil {
-            mediaCancellable = appState.taskMediaTransfers.objectWillChange
+            mediaSubscriptionCount += 1
+            // The pool reuses this subscription. Project the row's CURRENT
+            // identity before scheduling; recycled rows do not rebuild Combine
+            // chains and unrelated updates never enter the UI run loop.
+            mediaCancellable = appState.taskMediaTransfers.$batches
+                .compactMap { [weak self] batches -> String? in
+                    guard let self, let taskId = self.task?.id else { return nil }
+                    let next = MyTasksMediaPresentation(batch: batches[taskId])
+                    guard next != self.scheduledMediaPresentation else { return nil }
+                    self.scheduledMediaPresentation = next
+                    return taskId
+                }
                 .receive(on: RunLoop.main)
-                .sink { [weak self] _ in
-                    DispatchQueue.main.async {
-                        guard let self, let state = self.appState, let id = self.task?.id else { return }
-                        self.updateMediaButton(store: state.taskMediaTransfers, taskId: id)
-                    }
+                .sink { [weak self] taskId in
+                    guard let self, self.task?.id == taskId, let state = self.appState else { return }
+                    self.updateMediaButton(store: state.taskMediaTransfers, taskId: taskId)
                 }
         }
-        updateMediaButton(store: appState.taskMediaTransfers, taskId: task.id)
         let reviewStore = TaskReviewUpdateStore.shared
         reviewStore.watch(task: task)
+        updateReviewButton(taskId: task.id)
         if reviewCancellable == nil {
-            reviewCancellable = reviewStore.objectWillChange
+            reviewCancellable = reviewStore.$updatesByTask
+                .combineLatest(reviewStore.$reviewedTaskIds)
+                .compactMap { [weak self] updates, reviewed -> String? in
+                    guard let self, let taskId = self.task?.id else { return nil }
+                    let next: ReviewVisualState = reviewed.contains(taskId) ? .reviewed
+                        : (updates[taskId]?.isEmpty == false ? .update : .hidden)
+                    guard next != self.scheduledReviewState else { return nil }
+                    self.scheduledReviewState = next
+                    return taskId
+                }
                 .receive(on: RunLoop.main)
-                .sink { [weak self] _ in
-                    DispatchQueue.main.async {
-                        guard let self, let id = self.task?.id else { return }
-                        self.updateReviewButton(taskId: id)
-                    }
+                .sink { [weak self] taskId in
+                    guard let self, self.task?.id == taskId else { return }
+                    self.updateReviewButton(taskId: taskId)
                 }
         }
-        updateReviewButton(taskId: task.id)
         title.stringValue = task.title
         title.toolTip = task.title
         title.font = NSFont.systemFont(ofSize: 15 * Editorial.typeScale,
@@ -1340,6 +1554,9 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
     /// feedback; the task must remain pixel-stable under the pointer.
     private func setHoverMotion(active: Bool, animated: Bool) {
         guard let layer else { return }
+        let z: CGFloat = active ? 20 : 0
+        guard layer.zPosition != z || !CATransform3DIsIdentity(layer.transform)
+            || layer.animation(forKey: "apolloCapsuleHover") != nil else { return }
         layer.removeAnimation(forKey: "apolloCapsuleHover")
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -1408,8 +1625,7 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
     override func mouseEntered(with event: NSEvent) {
         guard !isBehindPageHeader(windowPoint: event.locationInWindow) else { return }
         guard appState?.anyPopupOpen != true,
-              !ScrollStateObserver.isScrollingNow,
-              !ScrollGate.shared.active else {
+              !isTaskListScrolling else {
             forceExitAllInteraction()
             return
         }
@@ -1423,6 +1639,9 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
     }
 
     override func mouseExited(with event: NSEvent) {
+        // A suppressed entry has no visual state to undo. In particular, the
+        // final tracking exit of momentum must not rewrite an untouched row.
+        guard hovered || pressed else { return }
         hovered = false
         pressed = false
         applyBackground()
@@ -1724,6 +1943,7 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
         case nil: next = .hidden
         }
 
+        scheduledReviewState = next
         guard next != reviewVisualState else { return }
         reviewAnimationGeneration += 1
         let generation = reviewAnimationGeneration
@@ -1897,9 +2117,14 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
     }
 
     private func updateMediaButton(store: TaskMediaTransferStore, taskId: String) {
-        let phase = store.phase(for: taskId)
-        let label = store.capsuleLabel(for: taskId)
-        let composing = store.isComposing(for: taskId)
+        updateMediaButton(presentation: MyTasksMediaPresentation(batch: store.batches[taskId]))
+    }
+
+    private func updateMediaButton(presentation: MyTasksMediaPresentation) {
+        scheduledMediaPresentation = presentation
+        let phase = presentation.phase
+        let label = presentation.label
+        let composing = presentation.composing
         // JUNTANDO (render hook+body) usa um accent clareado — a etapa é
         // visualmente distinta do ENVIANDO cheio e do PREPARANDO comum.
         let accentColor = composing
@@ -1908,7 +2133,7 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
             : NSColor.controlAccentColor
         let accent = phase == .ready || phase == .sending || phase == .partialFailure
         let isActiveProgress = phase == .preparing || phase == .sending
-        let progress = max(0, min(1, CGFloat(store.progress(for: taskId))))
+        let progress = presentation.progress
         mediaUsesAccentFill = accent
         mediaBaseTitleColor = phase == .preparing
             ? accentColor
@@ -1927,7 +2152,7 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
         // Responsáveis. Aqui a cápsula continua "ANEXAR" e apenas ROTEIA
         // para o lote quando há seleção — a contagem vai no tooltip e no
         // rótulo de acessibilidade, onde informa sem poluir.
-        media.title = label
+        if media.title != label { media.title = label }
         if fileDropActive {
             // Alvo de soltura: fundo laranja translúcido e contorno
             // tracejado, o mesmo vocabulário que a folha de lote usa
@@ -1956,9 +2181,7 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
             actsOnSelection
             ? "Anexar vídeos nas \(bulkCount) tarefas selecionadas"
             : "Anexar ou enviar vídeos desta tarefa")
-        let badgeCount = store.batches[taskId].map {
-            phase == .partialFailure ? $0.pendingCount : $0.total
-        } ?? 0
+        let badgeCount = presentation.badgeCount
         mediaBadge.isHidden = (phase != .ready && phase != .partialFailure) || badgeCount <= 0
         if !mediaBadge.isHidden {
             mediaBadge.stringValue = "\(badgeCount)"
@@ -1994,7 +2217,7 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
 
     private func setMediaTitleColor(_ color: NSColor) {
         let baseSize: CGFloat = media.title.count > 11 ? 8.0 : 9.5
-        media.attributedTitle = NSAttributedString(
+        let title = NSAttributedString(
             string: media.title,
             attributes: [
                 .font: NSFont.systemFont(ofSize: baseSize * Editorial.typeScale,
@@ -2002,6 +2225,10 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
                 .foregroundColor: color
             ]
         )
+        // Recycling and clearing hover often preserve the same capsule.
+        // Reassigning identical attributed content invalidates AppKit's
+        // button layout and rebuilds its text layers on the scroll path.
+        if !media.attributedTitle.isEqual(to: title) { media.attributedTitle = title }
     }
 
     private func setReviewTitleColor(_ color: NSColor) {
@@ -2027,8 +2254,7 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
             && review.isEnabled
             && !review.isHidden
             && appState?.anyPopupOpen != true
-            && !ScrollStateObserver.isScrollingNow
-            && !ScrollGate.shared.active
+            && !isTaskListScrolling
         CATransaction.begin()
         CATransaction.setAnimationDuration(shouldActivate ? 0.16 : 0.22)
         CATransaction.setAnimationTimingFunction(
@@ -2044,8 +2270,7 @@ final class MyTasksNativeRowView: NSView, NSDraggingSource {
         let shouldActivate = active
             && media.isEnabled
             && appState?.anyPopupOpen != true
-            && !ScrollStateObserver.isScrollingNow
-            && !ScrollGate.shared.active
+            && !isTaskListScrolling
         CATransaction.begin()
         CATransaction.setAnimationDuration(shouldActivate ? 0.16 : 0.24)
         CATransaction.setAnimationTimingFunction(
@@ -2341,8 +2566,7 @@ final class MyTasksDoneCircle: NSControl {
     override func mouseEntered(with event: NSEvent) {
         guard !isBehindPageHeader(windowPoint: event.locationInWindow) else { return }
         guard isEnabled, !completed,
-              !ScrollStateObserver.isScrollingNow,
-              !ScrollGate.shared.active else {
+              !isTaskListScrolling else {
             resetInteraction(animated: false)
             return
         }

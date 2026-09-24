@@ -1,48 +1,15 @@
 import SwiftUI
+@testable import ApolloRuntime
 
-/// Keep the derived calendar stable when unrelated AppState publications or a
-/// day selection redraw the view. Arrays retain their copy-on-write storage;
-/// full event equality still invalidates changed titles, colours and actions.
-@MainActor
-final class AgendaMonthProjectionCache {
-    struct Projection {
-        let model: AgendaMonth
-        let index: [Date: [CalendarEvent]]
-    }
-    private struct Input: Equatable {
-        let month: Date
-        let calendar: Calendar
-        let primary: [CalendarEvent]
-        let shared: [String: [CalendarEvent]]
-        let fetched: [CalendarEvent]?
-    }
-    private var input: Input?
-    private var projection: Projection?
+// Frozen visual reference from the monthly view before performance changes.
 
-    func resolve(month: Date, calendar: Calendar = .current,
-                 primary: [CalendarEvent], shared: [String: [CalendarEvent]],
-                 fetched: [CalendarEvent]?) -> Projection {
-        let next = Input(month: month, calendar: calendar,
-                         primary: fetched == nil ? primary : [],
-                         shared: fetched == nil ? shared : [:], fetched: fetched)
-        if input == next, let projection { return projection }
-        let model = AgendaMonth(containing: month, calendar: calendar)
-        let events = fetched ?? (primary + shared.values.flatMap { $0 })
-        let value = Projection(model: model, index: model.eventsByDay(events))
-        input = next
-        projection = value
-        return value
-    }
-}
-
-struct AgendaMonthView: View {
+struct AgendaMonthReferenceView: View {
     @EnvironmentObject var appState: AppState
     @Binding var month: Date
     @State private var fetchedEvents: [CalendarEvent]?
     @State private var loading = false
     @State private var error: String?
     @State private var revision = 0
-    @State private var projectionCache = AgendaMonthProjectionCache()
     /// Day shown in the panel under the grid; nil means the default
     /// (today in the current month, otherwise the 1st).
     @State private var selectedDay: Date?
@@ -57,6 +24,9 @@ struct AgendaMonthView: View {
     private var request: Request {
         Request(month: month, revision: revision,
                 connected: appState.googleAuth.isConnected, shared: appState.sharedCalendars)
+    }
+    private var localEvents: [CalendarEvent] {
+        appState.events + appState.sharedEvents.values.flatMap { $0 }
     }
     private func focusedDay(_ model: AgendaMonth) -> Date {
         if let selectedDay, model.days.contains(selectedDay) { return selectedDay }
@@ -77,11 +47,8 @@ struct AgendaMonthView: View {
     private static let gridShare: CGFloat = 0.51
 
     var body: some View {
-        let projection = projectionCache.resolve(month: month, primary: appState.events,
-                                                  shared: appState.sharedEvents, fetched: fetchedEvents)
-        let model = projection.model
-        let index = projection.index
-        let day = focusedDay(model)
+        let model = AgendaMonth(containing: month)
+        let index = model.eventsByDay(fetchedEvents ?? localEvents)
         let weeks = model.days.count / 7
         GeometryReader { geometry in
             let banner: CGFloat = error == nil ? 0 : 38
@@ -95,7 +62,8 @@ struct AgendaMonthView: View {
                 if let error { errorBanner(error) }
                 ScrollView {
                     VStack(spacing: Self.sectionGap) {
-                        monthGrid(model: model, index: index, weeks: weeks, rowHeight: rowHeight, selected: day)
+                        monthGrid(model: model, index: index, weeks: weeks, rowHeight: rowHeight)
+                        let day = focusedDay(model)
                         AgendaDayPanel(day: day, calendar: model.calendar,
                                        events: index[day] ?? [], onOpen: open)
                             .frame(height: panelHeight)
@@ -130,7 +98,7 @@ struct AgendaMonthView: View {
     /// No rules anywhere: each day is a filled tile and the gaps between
     /// tiles carry the structure.
     private func monthGrid(model: AgendaMonth, index: [Date: [CalendarEvent]],
-                           weeks: Int, rowHeight: CGFloat, selected: Date) -> some View {
+                           weeks: Int, rowHeight: CGFloat) -> some View {
         VStack(spacing: Self.cellGap) {
             weekdayHeader
             ForEach(0..<weeks, id: \.self) { week in
@@ -141,13 +109,11 @@ struct AgendaMonthView: View {
                             inMonth: model.calendar.isDate(day, equalTo: month, toGranularity: .month),
                             events: index[day] ?? [],
                             height: rowHeight,
-                            isSelected: selected == day,
-                            isToday: model.calendar.isDateInToday(day),
+                            isSelected: focusedDay(model) == day,
                             onSelect: {
                                 withAnimation(.spring(duration: 0.28, bounce: 0.15)) { selectedDay = day }
                             }
                         )
-                        .equatable()
                     }
                 }
             }
@@ -271,26 +237,16 @@ private enum AgendaFormat {
 
 /// One day of the month grid: the number and one coloured dot per event.
 /// Titles live in the selected day's panel (and in the tooltip).
-private struct AgendaDayCell: View, Equatable {
+private struct AgendaDayCell: View {
     let day: Date
     let calendar: Calendar
     let inMonth: Bool
     let events: [CalendarEvent]
     let height: CGFloat
     let isSelected: Bool
-    let isToday: Bool
     let onSelect: () -> Void
     @State private var hovering = false
-    @State private var visibleSlotCount = 1
-
-    // The selection closure only writes this day's value to the same SwiftUI
-    // state location. Unchanged inputs need no new dot/tooltip/layout graph.
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.day == rhs.day && lhs.calendar == rhs.calendar
-            && lhs.inMonth == rhs.inMonth && lhs.events == rhs.events
-            && lhs.height == rhs.height && lhs.isSelected == rhs.isSelected
-            && lhs.isToday == rhs.isToday
-    }
+    @State private var stackWidth: CGFloat = 0
 
     private static let padding: CGFloat = 5
     private static let numberSize: CGFloat = 20
@@ -304,9 +260,12 @@ private struct AgendaDayCell: View, Equatable {
     /// has more events, the last slot becomes a "+N" disc instead of the
     /// stack collapsing into unreadable slivers.
     private var shownEvents: ArraySlice<CalendarEvent> {
-        return events.count <= visibleSlotCount ? events[...] : events.prefix(max(0, visibleSlotCount - 1))
+        let step = Self.discWidth - Self.overlap
+        let fit = max(1, Int((stackWidth - Self.discWidth) / step) + 1)
+        return events.count <= fit ? events[...] : events.prefix(max(0, fit - 1))
     }
 
+    private var isToday: Bool { calendar.isDateInToday(day) }
     private var number: Int { calendar.component(.day, from: day) }
 
     var body: some View {
@@ -327,10 +286,7 @@ private struct AgendaDayCell: View, Equatable {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .onGeometryChange(for: Int.self) { geometry in
-                    let step = Self.discWidth - Self.overlap
-                    return max(1, Int((geometry.size.width - Self.discWidth) / step) + 1)
-                } action: { visibleSlotCount = $0 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stackWidth = $0 }
                 .padding(.horizontal, 3)
             }
             Spacer(minLength: 0)
@@ -578,7 +534,7 @@ private struct AgendaDayPanel: View {
                 .padding(.bottom, 16)
         } else {
             ScrollView {
-                LazyVStack(spacing: 0) {
+                VStack(spacing: 0) {
                     ForEach(events, id: \.calendarIdentity) { event in
                         AgendaDayEventRow(event: event, onOpen: onOpen)
                     }
