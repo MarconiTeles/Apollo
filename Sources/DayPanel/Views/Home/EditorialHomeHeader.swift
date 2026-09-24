@@ -1,46 +1,27 @@
 import SwiftUI
 
-// Apollo · Editorial+ "Home" header (port of the Claude-design
-// prototype's top band). Sits above the legacy timeline + tasks
-// split on the .today route. Carries:
-//
-//   • Crumb folio "EDIÇÃO DE HOJE"
-//   • Serif headline "Home"
-//   • Italic byline "— a edição de [dia da semana] · [d 'de' MMM]"
-//   • Stats row: date + 4 counts (Atrasadas / Tarefas / Eventos /
-//     Livres) typeset as big serif numbers + caps labels
-//   • Hairline
-//   • Next-event highlight card (when there is one upcoming today)
-//   • AGENDA / TAREFAS section labels (counts only — the actual
-//     content is rendered by `dashboardSplit` below)
+// Fixed section header for the upcoming events and monthly calendar.
 
 struct EditorialHomeHeader: View {
     @EnvironmentObject var appState: AppState
+    @Binding var month: Date
 
     var body: some View {
-        // Page title (crumb + serif "Home" + byline) used to
-        // live here, but was moved up into the toolbar as a
-        // single compact serif badge — see ContentView's
-        // `toolbarPageTitle`. The header now starts directly at
-        // the next event; the numeric summary strip was removed to
-        // keep the top of Today focused on actionable content.
         VStack(alignment: .leading, spacing: 0) {
-            // Next-event highlight card removed — the agenda column already
-            // carries the upcoming event; the header keeps only the labels.
             sectionLabels
-                .padding(.top, 22)
-                .padding(.bottom, 12)
+                .padding(.top, 9)
+                .padding(.bottom, 8)
         }
         .padding(.horizontal, 28)
         .apolloStudioNode("inbox.header",
-                          title: "Header do Inbox",
+                          title: "Header da Agenda",
                           kind: .header,
                           parent: "inbox.page",
                           properties: [
                             .init(kind: .horizontalPadding,
                                   title: "Padding horizontal", value: 28),
                             .init(kind: .verticalPadding,
-                                  title: "Respiro superior", value: 22),
+                                  title: "Respiro superior", value: 9),
                           ])
     }
 
@@ -188,19 +169,16 @@ struct EditorialHomeHeader: View {
     // ────────────────────────────────────────────────────────────────────
 
     private var sectionLabels: some View {
-        // Two-column section header: agenda on the left and the
-        // unified ClickUp + Apollo inbox on the right.
-        HStack(alignment: .firstTextBaseline, spacing: 0) {
-            sectionLabel("Agenda", count: agendaCount)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            sectionLabel(
-                "Inbox",
-                count: appState.notifications.filter {
-                    !$0.read && $0.isHomeInboxEligible
-                }.count
-            )
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        GeometryReader { geometry in
+            HStack(alignment: .center, spacing: 0) {
+                sectionLabel("Próximos eventos", count: agendaCount)
+                    .frame(width: AgendaLayout.timelineWidth(geometry.size.width + 56) - 28,
+                           alignment: .leading)
+                AgendaMonthControls(month: $month)
+                    .padding(.leading, 16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }.frame(height: 30)
     }
 
     private func sectionLabel(_ label: String, count: Int) -> some View {

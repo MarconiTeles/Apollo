@@ -12,6 +12,7 @@ struct ContentView: View {
     @EnvironmentObject var updateService: UpdateService
     @ObservedObject private var reviewPresenter = ReviewPresenter.shared
 
+    @State private var agendaMonth = Date()
     @State private var showSettings    = false
     @State private var showNewEvent    = false
     @State private var showNewTask     = false
@@ -1478,7 +1479,7 @@ struct ContentView: View {
     /// Page title shown in the window toolbar, next to the leading items.
     private var pageTitle: String {
         switch sidebarRoute {
-        case .today: "Inbox"
+        case .today: "Agenda"
         case .tasks: "Tarefas"
         case .board: "Quadro"
         case .assignedComments: "Comentários"
@@ -1627,15 +1628,13 @@ struct ContentView: View {
         // respiro visível entre o chrome e o evento em destaque em 10pt
         // (medida pedida em 20/jul).
         let agendaRestingReserve = chromeHeight - 18
-        // InboxAppKitList is already laid out in the post-toolbar content
-        // region. Giving it the complete chrome height again doubled the
-        // reserve and left a giant empty slab above the first notification.
-        let inboxRestingReserve: CGFloat = 60
+        // The month grid begins below the fixed header controls.
+        let inboxRestingReserve: CGFloat = 110
         return ZStack(alignment: .top) {
             homeDashboardSplit(agendaTopInset: agendaRestingReserve,
                                inboxTopInset: inboxRestingReserve)
 
-            EditorialHomeHeader()
+            EditorialHomeHeader(month: $agendaMonth)
                 .environmentObject(appState)
                 .padding(.top, 52)        // clear the toolbar pills
                 .finderHeaderMaterial()
@@ -1650,7 +1649,7 @@ struct ContentView: View {
                                     inboxTopInset: CGFloat) -> some View {
         GeometryReader { geo in
             let total     = max(1, geo.size.width)
-            let timelineW = (total - 1) * (1.0 / 2.05)
+            let timelineW = AgendaLayout.timelineWidth(total)
             HStack(spacing: 0) {
                 TimelineView(forwardOnly: true,
                              topContentInset: agendaTopInset)
@@ -1659,7 +1658,7 @@ struct ContentView: View {
                     .fill(Editorial.rule.opacity(0.65))
                     .frame(width: 1)
                     .edgeFadedVertical()
-                EditorialHomeInboxColumn(topInset: inboxTopInset)
+                AgendaMonthView(month: $agendaMonth, topInset: inboxTopInset)
                     .environmentObject(appState)
                     .frame(maxWidth: .infinity)
             }

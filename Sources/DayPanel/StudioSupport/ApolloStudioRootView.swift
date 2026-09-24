@@ -8,7 +8,7 @@ public enum ApolloStudioRoute: String, CaseIterable, Identifiable, Codable, Send
 
     public var title: String {
         switch self {
-        case .inbox: "Inbox"
+        case .inbox: "Agenda"
         case .tasks: "Tarefas"
         case .board: "Quadros"
         case .comments: "Comentários"

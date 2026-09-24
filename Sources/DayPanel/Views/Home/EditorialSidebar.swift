@@ -110,7 +110,7 @@ struct EditorialSidebar: View {
 
     private var edicaoSection: some View {
         SidebarSection(label: "Edição") {
-            navRow("Inbox",          count: todayCount,    route: .today)
+            navRow("Agenda",          count: todayCount,    route: .today)
             navRow("Tarefas",        count: tasksCount,    route: .tasks)
             navRow("Quadro",         count: boardCount,    route: .board)
             navRow("Comentários",    count: assignedCommentsCount,
@@ -243,7 +243,7 @@ struct EditorialSidebar: View {
 
     private func icon(for route: SidebarRoute) -> String {
         switch route {
-        case .today:    return "tray"
+        case .today:    return "calendar"
         case .tasks:    return "checklist"
         case .board:    return "rectangle.grid.1x2"
         case .assignedComments: return "text.bubble"
@@ -321,7 +321,7 @@ struct EditorialSidebar: View {
     }
 
     private var todayCount: Int {
-        appState.eventsForToday.count + pool.filter(isInToday).count
+        appState.eventsForToday.count
     }
     /// "Minhas tarefas" is now the single-line view of the currently
     /// selected list (the same universe as Quadro), so its count must

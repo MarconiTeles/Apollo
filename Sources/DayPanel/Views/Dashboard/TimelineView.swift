@@ -144,8 +144,8 @@ struct TimelineView: View {
                     // Left gutter between the window edge and the
                     // events list (17 → 26, +50%). Inter-day gap is
                     // the day row's own `marginBottom: 22`.
-                    .listRowInsets(EdgeInsets(top: 0, leading: 26,
-                                              bottom: 0, trailing: 32))
+                    .listRowInsets(EdgeInsets(top: 0, leading: forwardOnly ? 20 : 26,
+                                              bottom: 0, trailing: forwardOnly ? 16 : 32))
                 }
             }
             .listStyle(.plain)
