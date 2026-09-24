@@ -13,6 +13,7 @@ struct ContentView: View {
     @ObservedObject private var reviewPresenter = ReviewPresenter.shared
 
     @State private var agendaMonth = Date()
+    @State private var commentsScope = AssignedCommentsScope()
     @State private var showSettings    = false
     @State private var showNewEvent    = false
     @State private var showNewTask     = false
@@ -1444,17 +1445,35 @@ struct ContentView: View {
                     }
                     .help("Mês anterior (⌘←)")
                     .keyboardShortcut(.leftArrow, modifiers: .command)
-                    Button { agendaMonth = Date() } label: {
+                    Button(action: jumpAgendaToToday) {
                         Text("Hoje")
                             .font(.system(size: 13, weight: .medium))
                             .padding(.horizontal, 4)
                     }
-                    .help("Voltar para o mês atual")
+                    .help("Ir para hoje")
                     Button { shiftAgendaMonth(1) } label: {
                         Label("Próximo mês", systemImage: "chevron.right")
                     }
                     .help("Próximo mês (⌘→)")
                     .keyboardShortcut(.rightArrow, modifiers: .command)
+                }
+                .toolbarControl(disabled: anyPopupOpen, hidden: setupOwnsWindow)
+            }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.fixed)
+        }
+
+        if sidebarRoute == .assignedComments {
+            ToolbarItem {
+                CommentsScopeTabs(tab: $commentsScope.tab)
+                    .toolbarControl(disabled: anyPopupOpen, hidden: setupOwnsWindow)
+            }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.fixed)
+            ToolbarItem {
+                ToolbarGlassGroup {
+                    commentsFilterMenu
+                    commentsRefreshButton
                 }
                 .toolbarControl(disabled: anyPopupOpen, hidden: setupOwnsWindow)
             }
@@ -1505,6 +1524,57 @@ struct ContentView: View {
             }
             .sharedBackgroundVisibility(.hidden)
         }
+    }
+
+    /// Type, resolved and period in one native menu; the glyph turns
+    /// accent while any option is away from its default.
+    private var commentsFilterMenu: some View {
+        Menu {
+            Picker("Tipo", selection: $commentsScope.kind) {
+                ForEach(AssignedCommentsScope.Kind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            Toggle("Incluir resolvidos", isOn: $commentsScope.includeResolved)
+            Picker("Período", selection: $commentsScope.period) {
+                ForEach(AssignedCommentsScope.Period.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+        } label: {
+            Label("Filtros", systemImage: "line.3.horizontal.decrease")
+                .foregroundStyle(commentsScope.filtersTouched ? Editorial.accent : .primary)
+                .font(.system(size: 15, weight: .regular))
+                .frame(minWidth: 36, minHeight: 36)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Filtro: tipo, resolvidos e período")
+    }
+
+    /// Refresh; while tasks are being scanned it turns into the spinner and
+    /// the scanned/total count moves to its tooltip, so the toolbar keeps
+    /// room for the trailing groups at the default window width.
+    private var commentsRefreshButton: some View {
+        let scanning = appState.assignedCommentsScannedTasks < appState.assignedCommentsTotalTasks
+        let progress = "\(appState.assignedCommentsScannedTasks)/\(appState.assignedCommentsTotalTasks)"
+        return Button {
+            Task { await appState.refreshAssignedComments() }
+        } label: {
+            if appState.assignedCommentsLoading {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "arrow.clockwise")
+            }
+        }
+        .help(scanning ? "Atualizar comentários — \(progress) tarefas verificadas"
+                       : "Atualizar comentários")
+        .accessibilityLabel("Atualizar comentários")
+    }
+
+    /// "Hoje": current month in the grid, today selected in it, and the
+    /// agenda list back at today (`todayJumpToken` drives both views).
+    private func jumpAgendaToToday() {
+        agendaMonth = Date()
+        appState.todayJumpToken &+= 1
     }
 
     private func shiftAgendaMonth(_ value: Int) {
@@ -1574,8 +1644,8 @@ struct ContentView: View {
                         Button { shiftAgendaMonth(-1) } label: { Image(systemName: "chevron.left") }
                             .help("Mês anterior")
                             .accessibilityLabel("Mês anterior")
-                        Button("Hoje") { agendaMonth = Date() }
-                            .help("Voltar para o mês atual")
+                        Button("Hoje", action: jumpAgendaToToday)
+                            .help("Ir para hoje")
                         Button { shiftAgendaMonth(1) } label: { Image(systemName: "chevron.right") }
                             .help("Próximo mês")
                             .accessibilityLabel("Próximo mês")
@@ -1653,7 +1723,7 @@ struct ContentView: View {
             case .today:
                 editorialHomeView
             case .assignedComments:
-                AssignedCommentsView()
+                AssignedCommentsView(scope: $commentsScope)
                     .environmentObject(appState)
             default:
                 dashboardSplit
@@ -2095,6 +2165,53 @@ private struct ToolbarGlassGroup<Content: View>: View {
                     }
                 }
                 .glassEffect(.regular.interactive(), in: .capsule)
+        }
+    }
+}
+
+/// Comments scope switch: the two tabs share one toolbar glass capsule and
+/// a single selection pill slides between them.
+private struct CommentsScopeTabs: View {
+    @Binding var tab: AssignedCommentsScope.Tab
+    @Environment(\.colorScheme) private var colorScheme
+    @Namespace private var selection
+
+    var body: some View {
+        GlassEffectContainer {
+            HStack(spacing: 0) {
+                ForEach(AssignedCommentsScope.Tab.allCases, id: \.self) { option in
+                    let selected = tab == option
+                    Button {
+                        withAnimation(.spring(duration: 0.3, bounce: 0.18)) { tab = option }
+                    } label: {
+                        Text(option.shortTitle)
+                            .font(.system(size: 13, weight: selected ? .semibold : .medium))
+                            .foregroundStyle(selected ? Color.primary : Color.secondary)
+                            .padding(.horizontal, 12)
+                            .frame(height: 30)
+                            .background {
+                                if selected {
+                                    Capsule()
+                                        .fill(Editorial.accent.opacity(colorScheme == .dark ? 0.28 : 0.14))
+                                        .matchedGeometryEffect(id: "tab", in: selection)
+                                }
+                            }
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help(option.rawValue)
+                    .accessibilityLabel(option.rawValue)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .padding(.horizontal, 3)
+            .frame(height: 36)
+            .background {
+                if colorScheme == .dark {
+                    Capsule().fill(Color.black.opacity(0.4))
+                }
+            }
+            .glassEffect(.regular.interactive(), in: .capsule)
         }
     }
 }

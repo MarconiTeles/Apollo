@@ -25,7 +25,7 @@ const SPIN_RATE = 0.11;
  *   crescent to a half moon while the disc spins down to its resting turn;
  *   a shockwave rolls out, two orbits trace in, the spacecraft (the icon's
  *   four-point star) begins to circle, a meteor crosses as the wordmark
- *   tracks in letter by letter, and a glint catches the lit limb.
+ *   tracks in letter by letter.
  * Exit: the moon flares and opens into an iris that reveals the dashboard
  *   already rendered underneath the transparent WKWebView.
  */
@@ -42,7 +42,6 @@ export function Splash() {
   const motesRef = useRef<HTMLCanvasElement>(null);
   const flareRef = useRef<HTMLDivElement>(null);
   const shockRef = useRef<HTMLDivElement>(null);
-  const glintRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
@@ -225,13 +224,6 @@ export function Splash() {
           )
           .fromTo(".rule", { opacity: 0, scaleX: 0.1 }, { opacity: 1, scaleX: 1, duration: 0.8, ease: EASE_OUT }, 1.65)
           .fromTo(".rule b", { scaleX: 0 }, { scaleX: 0.68, duration: 1.3, ease: EASE_OUT }, 1.7)
-          .fromTo(
-            glintRef.current,
-            { opacity: 0, scale: 0.3, rotate: -24 },
-            { opacity: 1, scale: 1, rotate: 0, duration: 0.35, ease: EASE_OUT, immediateRender: false },
-            2.15,
-          )
-          .to(glintRef.current, { opacity: 0, scale: 0.6, rotate: 28, duration: 0.8, ease: EASE_OUT }, 2.5)
       );
     };
 
@@ -352,11 +344,6 @@ export function Splash() {
       <canvas ref={motesRef} className="layer motes" aria-hidden />
 
       <div ref={flareRef} className="flare" aria-hidden />
-      <div ref={glintRef} className="glint" aria-hidden>
-        <svg viewBox="-10 -10 20 20">
-          <path d="M0 -10 Q1.4 -1.4 10 0 Q1.4 1.4 0 10 Q-1.4 1.4 -10 0 Q-1.4 -1.4 0 -10 Z" />
-        </svg>
-      </div>
 
       <div ref={titleRef} className="title" role="img" aria-label="Apollo">
         <div className="wordmark">

@@ -58,10 +58,10 @@ struct EditorialMyTasksView: View {
     /// Sticky chrome height (52pt toolbar band + title row + column-header
     /// row) — one continuous glass element up to the window top. Rows start
     /// below it but scroll through underneath.
-    // 132pt is the measured toolbar + route title + column-header chrome.
-    // The additional 30pt is deliberate breathing room before the first
-    // status group, while rows can still scroll back underneath the material.
-    private let chromeInset: CGFloat = 162
+    // 82pt is the toolbar reserve (52) + column-header row (30). The extra
+    // 10pt is the gap before the first status group; rows can still scroll
+    // back underneath the material.
+    private let chromeInset: CGFloat = 82 + 10
 
     var body: some View {
         GeometryReader { geo in

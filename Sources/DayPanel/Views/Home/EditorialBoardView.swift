@@ -71,13 +71,19 @@ struct EditorialBoardView: View {
         // drag/drop and the labels' shared horizontal offset.
         GeometryReader { viewport in
             ZStack(alignment: .top) {
+                // The loading scene is transparent: the board beneath must not
+                // show through it (cached cards under fallback columns read as
+                // a fake, partial load).
                 boardViewport
                     .frame(width: viewport.size.width,
                            height: viewport.size.height)
+                    .opacity(showsLoadingScene ? 0 : 1)
+                    .allowsHitTesting(!showsLoadingScene)
                 if showsLoadingScene {
                     boardLoadingScene
                         .frame(width: viewport.size.width,
-                               height: viewport.size.height)
+                               height: viewport.size.height,
+                               alignment: .topLeading)
                         .transition(.opacity)
                 }
                 headerChrome
@@ -166,6 +172,7 @@ struct EditorialBoardView: View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: 52)   // reserva da toolbar
             labelsRow
+                .opacity(showsLoadingScene ? 0 : 1)
                 .padding(.top, 6)
                 .padding(.bottom, 10)
                 .overlay(alignment: .trailing) {
@@ -496,9 +503,8 @@ struct EditorialBoardView: View {
         // scroll alcança x=0, então colunas roladas pra esquerda
         // DESENHAM sob o pane de vidro flutuante da sidebar — o
         // efeito "cards passando por trás do vidro" do MINIMAL TP.
-        // Em repouso o conteúdo começa depois do pane (230pt do
-        // pane + 28 de respiro).
-        .contentMargins(.leading, 258, for: .scrollContent)
+        // Em repouso o primeiro card alinha com a cápsula da toolbar.
+        .contentMargins(.leading, BoardViewportView.leadingMargin, for: .scrollContent)
         .contentMargins(.trailing, 28, for: .scrollContent)
         .frame(maxHeight: .infinity)
         // Catch-all: any drop that falls through the columns/cards (e.g.
@@ -530,21 +536,26 @@ struct EditorialBoardView: View {
     // MARK: Column
     // ────────────────────────────────────────────────────────────────────
 
-    /// True when the board is in a cold-start state: no source
-    /// tasks loaded yet AND a sync is in flight. Drives the
-    /// skeleton placeholders. Once data lands, an empty column
-    /// renders nothing (matches TaskListView / MyTasks gating).
+    /// Same gate as the task list (`EditorialMyTasksView.isLoadingData`).
+    /// At launch the tasks come from the disk cache but the statuses only
+    /// arrive midway through the first sync; "cached tasks, no statuses"
+    /// is still loading, never a board of fallback columns.
     private var isColdLoading: Bool {
-        appState.tasks.isEmpty
-            && appState.clickUpAuthService.isConnected
-            && (appState.isSyncing || appState.syncStatus == .idle)
+        appState.clickUpAuthService.isConnected
+            && EditorialMyTasksView.isLoadingData(
+                hasList: !appState.activeListId.isEmpty,
+                online: appState.isOnline,
+                hasTasks: !TaskSurfaceScope.openTasks(in: appState.tasks,
+                                                      activeListId: appState.activeListId).isEmpty,
+                hasStatuses: !appState.availableStatuses.isEmpty,
+                isSyncing: appState.isSyncing,
+                neverSynced: appState.syncStatus == .idle,
+                completedSessionSync: SyncJournal.shared.hasCompletedSync)
     }
 
-    /// The AppKit board draws its cold start through one sync-aware scene;
-    /// the SwiftUI fallback renderer keeps its per-column skeletons.
-    private var showsLoadingScene: Bool {
-        usesAppKitRenderer && isColdLoading
-    }
+    /// Both renderers draw their cold start through the one sync-aware
+    /// scene the task list uses.
+    private var showsLoadingScene: Bool { isColdLoading }
 
     /// Ghost cards on the exact native column grid, with the sync account
     /// floating over the visible canvas (right of the 220 pt sidebar).
@@ -1483,18 +1494,25 @@ private struct BoardLoadingFallback: View {
                                               top: top,
                                               size: SyncLoadingLayout.boardCard,
                                               gap: SyncLoadingLayout.boardCardGap)
-        HStack(alignment: .top,
-               spacing: BoardViewportView.columnWidth + BoardViewportView.columnGap - BoardCardLayout.width) {
-            ForEach(0..<columns, id: \.self) { _ in
-                BoardColumnSkeletons(count: cards)
+        // The columns are wider than the window. They live in an overlay so
+        // that width never reaches the layout: as a sized child it widened the
+        // surface's ZStack, the board's fixed-width frame centred it, and
+        // both the native and the web scene lost columns on BOTH edges.
+        Color.clear
+            .overlay(alignment: .topLeading) {
+                HStack(alignment: .top,
+                       spacing: BoardViewportView.columnWidth + BoardViewportView.columnGap
+                           - BoardCardLayout.width) {
+                    ForEach(0..<columns, id: \.self) { _ in
+                        BoardColumnSkeletons(count: cards)
+                    }
+                }
+                .fixedSize()
+                .padding(.leading, BoardViewportView.leadingMargin
+                         + (BoardViewportView.columnWidth - BoardCardLayout.width) / 2)
+                .padding(.top, top)
             }
-        }
-        .fixedSize()
-        .padding(.leading, BoardViewportView.leadingMargin
-                 + (BoardViewportView.columnWidth - BoardCardLayout.width) / 2)
-        .padding(.top, top)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .clipped()
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+            .clipped()
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
     }
 }

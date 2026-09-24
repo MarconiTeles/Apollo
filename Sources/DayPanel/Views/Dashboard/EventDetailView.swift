@@ -64,6 +64,10 @@ struct EventDetailView: View {
     }
 
     private let headerHeight: CGFloat = 126
+    /// Real header height: a two-line title grows it past `headerHeight`.
+    @State private var measuredHeaderHeight: CGFloat = 0
+    /// Breathing room between the header's bottom edge and the body.
+    private let bodyTopGap: CGFloat = 10
 
     private func computeScrollMaxH(for window: CGSize) -> CGFloat {
         let h = window.height
@@ -87,7 +91,7 @@ struct EventDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     // Resting content begins below the header; when scrolled,
                     // this spacer leaves and real content travels under glass.
-                    Color.clear.frame(height: headerHeight)
+                    Color.clear.frame(height: max(headerHeight, measuredHeaderHeight) + bodyTopGap)
                     if let url = event.meetingURL {
                         reveal(0,
                                meetingButton(url: url)
@@ -141,6 +145,9 @@ struct EventDetailView: View {
 
             header
                 .frame(minHeight: headerHeight, alignment: .top)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    measuredHeaderHeight = $0
+                }
                 .opacity(entered ? 1 : 0)
                 .offset(y: (entered || reduceMotion) ? 0 : 6)
                 .animation(settle, value: entered)

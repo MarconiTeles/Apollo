@@ -72,7 +72,9 @@ final class BoardDocumentView: NSView {
 final class BoardViewportView: NSView, HeaderOccludingViewport {
     var headerOcclusionHeight: CGFloat = 0
     override var isFlipped: Bool { true }
-    static let leadingMargin: CGFloat = 258
+    /// First card edge = the leading toolbar capsule's edge (7.5pt past
+    /// the 220pt sidebar pane), measured on the running window.
+    static let leadingMargin: CGFloat = 217.5
     static let trailingMargin: CGFloat = 28
     static let columnWidth: CGFloat = 260
     static let columnGap: CGFloat = 20
