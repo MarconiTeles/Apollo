@@ -5,6 +5,19 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 2.0.6</title>
+      <pubDate>Thu, 24 Sep 2026 21:47:50 +0000</pubDate>
+      <sparkle:version>106</sparkle:version>
+      <sparkle:shortVersionString>2.0.6</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Corrige o Quadro: ao sair e voltar para ele, a rolagem horizontal travava e as colunas da direita não apareciam.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v2.0.6/Apollo-2.0.6.zip"
+        sparkle:edSignature="u8GWnqvK+NFUMxxnzEDlD7Zly9w3wukua6yVzircegKTsrnulI3KPlFl7Et4+3MvSvrVpcVToVUP8pvU78EWCQ=="
+        length="44190299"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 2.0.5</title>
       <pubDate>Thu, 24 Sep 2026 21:01:03 +0000</pubDate>
       <sparkle:version>105</sparkle:version>
