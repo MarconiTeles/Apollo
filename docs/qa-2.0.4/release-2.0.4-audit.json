@@ -1,0 +1,67 @@
+{
+  "version": "2.0.4",
+  "build": 104,
+  "source_base_commit": "b0f73665cf8908b0a9f02ea700e31b741f890334",
+  "review_commit": "5256f8644633131044ba9f6142f120b0b8be6475",
+  "architectures": {
+    "Apollo": [
+      "x86_64",
+      "arm64"
+    ],
+    "Apollo Review": [
+      "x86_64",
+      "arm64"
+    ]
+  },
+  "minimum_system_version": "26.0",
+  "bundle_resources_sha256": {
+    "ApolloTasks": "0742b885d93e8359bcba7101a1c56eb4b77b9db45f987c28912a1165cb37a681",
+    "ApolloAgenda": "61cb1c0be720ad8e9fbbc3d5fafa53c1afadfc9eed9496366fcd4ce1fb0c612c",
+    "ApolloSplash": "1b6ce8f47b938b756c393d8a485f5e217fd53d1ed69731f52a3afa50bc172eec",
+    "ApolloLoading": "c60ddb2b9af28b4620a9eea622efc9cbfe147f3be1c4cca2b15cd035479e343c"
+  },
+  "artifacts": [
+    {
+      "name": "Apollo-2.0.4.zip",
+      "bytes": 43463427,
+      "sha256": "cbd117d60a2249e3cad059fcfb8228339f83fd4f4c173b788b2c5815238975b6"
+    },
+    {
+      "name": "Apollo-2.0.4.dmg",
+      "bytes": 50461092,
+      "sha256": "a80d6a5f61180646df6370db1d2169a6bd8d2c5a00e45624a819aeb1f8f2613a"
+    }
+  ],
+  "executable_sha256": "89b42c0a43b0ef67530bd3dd7997fca2f62fd05a1ae3e8461599d7b9689459e5",
+  "sparkle_public_key_unchanged": true,
+  "sparkle_signature_verified": true,
+  "gatekeeper": {
+    "app": "/Users/marconi/Documents/PROJETOS/AGENTS/Apollo/t3/build/Apollo.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: Marconi Lima (CU544M36UD)",
+    "dmg": "/Users/marconi/Documents/PROJETOS/AGENTS/Apollo/t3/dist/Apollo-2.0.4.dmg: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: Marconi Lima (CU544M36UD)"
+  },
+  "publication_state": "validated locally; not yet published",
+  "archive_validation": {
+    "zip": "extracted, signature/staple/Gatekeeper passed; executable, helper, Info.plist and React resources match",
+    "dmg": "mounted read-only, signature/staple/Gatekeeper passed; executable, helper, Info.plist and React resources match"
+  },
+  "tests": {
+    "xctest_executed": 261,
+    "xctest_skipped": 4,
+    "xctest_failures": 0,
+    "swift_testing_passed": 33,
+    "swift_testing_failures": 0,
+    "command": "swift test -Xswiftc -DAPOLLO_TASKS_REACT -Xswiftc -DAPOLLO_AGENDA_REACT --no-parallel"
+  },
+  "notarization": {
+    "app": {
+      "id": "52dd4e6d-23a7-4450-935b-6a303c45b54b",
+      "status": "Accepted"
+    },
+    "dmg": {
+      "id": "8aa9309d-e49b-48bb-97a6-087d630c7bfc",
+      "status": "Accepted"
+    }
+  },
+  "production_smoke": "Launched the app extracted from final ZIP on Apple Silicon. Tasks loaded real data; scrolled to verify sticky frosted category and full-width bottom rule. Agenda loaded real events and single portraits on left; selected September 25 and returned to Today. No external mutations exercised.",
+  "release_pipeline_notes": "Resumed notarization with the existing profile used for 2.0.3 after the script default profile was absent. Signed the final Sparkle ZIP using the existing backup key directly; no key was copied, exposed or rotated. Verified signature against unchanged app public key."
+}
