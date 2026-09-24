@@ -1,0 +1,9 @@
+# Apollo 2.0.5 (105)
+
+Ships the React Quadro in production (`APOLLO_BOARD_REACT` joins `APOLLO_TASKS_REACT` and `APOLLO_AGENDA_REACT`), with cover placeholders: a sweeping glint while a thumbnail downloads, covers discovered after the card is on screen open from zero instead of pushing the column, and cards rise in with a capped cascade. Production identity, Sparkle feed/public key and macOS 26 minimum are unchanged. Apollo and Apollo Review are universal arm64/x86_64.
+
+`swift test -Xswiftc -DAPOLLO_TASKS_REACT -Xswiftc -DAPOLLO_AGENDA_REACT -Xswiftc -DAPOLLO_BOARD_REACT --no-parallel` passed 263 XCTest tests (4 skipped) and 33 Swift Testing tests. The board page passed TypeScript checking; in the Vite fixture, 28 cards animated in with 34 ms staggers, a late cover animated 0 → 135 px (layout height, correct under a scaled card) and showed the glint until loaded.
+
+App and DMG notarized (app 18d21a77-260a-4881-97a4-e04ae21de7c5), stapled and accepted by Gatekeeper as Notarized Developer ID. Stapling needed retries: Apple's CloudKit ticket service refused connections intermittently; `release.sh` now retries those steps. Sparkle signature verified against the unchanged public key. The final ZIP's executable and React resources match the build; the app extracted from it launched with real Tasks data. The Quadro in the final artifact was not navigated in-app (no accessibility permission for automated clicks); the same board code was exercised earlier in a production-identity local build with real data. In-place Sparkle installation and Intel execution were not exercised.
+
+Published 2026-09-24: https://github.com/MarconiTeles/Apollo/releases/tag/v2.0.5. Public downloads match: ZIP `0edfb639e42bfe41355a4e0be05e7a139b36336d6794913864abf38d42f057bd` (44190934 bytes), DMG `ff7d3424b711f57e8167358b62f7b4b232071408bb989361524a729bfa737057`.
