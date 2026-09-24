@@ -26,6 +26,9 @@
   --prio-3: #56708a;
   --prio-4: #7c7e84;
   --cover-bg: rgba(20, 20, 22, 0.05);
+  /* Cover placeholder glint, same tones as the loading scene's bones. */
+  --glint: rgba(255, 255, 255, 0.7);
+  --glint-core: rgba(255, 255, 255, 0.95);
 
   --col-w: 260px;
   --card-radius: 13.2px;
@@ -52,6 +55,8 @@
   --rule: rgba(255, 255, 255, 0.07);
   --rule-soft: rgba(255, 255, 255, 0.045);
   --cover-bg: rgba(255, 255, 255, 0.05);
+  --glint: rgba(204, 237, 255, 0.16);
+  --glint-core: rgba(214, 240, 255, 0.28);
   color-scheme: dark;
 }
 
@@ -343,6 +348,41 @@ textarea {
 
 .card-cover[data-ready] img {
   opacity: 1;
+}
+
+/* Placeholder while the thumbnail downloads: the loading scene's glint
+   sweeping the reserved cover, fading out as the image fades in. */
+.card-cover::after {
+  content: "";
+  position: absolute;
+  inset: 0 -40%;
+  background: linear-gradient(
+    100deg,
+    transparent 22%,
+    var(--glint) 42%,
+    var(--glint-core) 50%,
+    var(--glint) 58%,
+    transparent 78%
+  );
+  transform: translateX(-100%);
+  animation: cover-glint 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  transition: opacity 320ms var(--ease);
+  pointer-events: none;
+}
+
+.card-cover[data-ready]::after {
+  opacity: 0;
+  animation: none;
+}
+
+@keyframes cover-glint {
+  0% {
+    transform: translateX(-100%);
+  }
+  70%,
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 .card-body {

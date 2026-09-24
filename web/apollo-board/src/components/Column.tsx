@@ -39,6 +39,11 @@ interface ColumnProps {
 }
 
 const REFLOW_MS = 220;
+/** Cards that appear on screen (first paint, filters, moves, new tasks)
+ * rise into place in a short cascade, capped so long columns never wait. */
+const ENTER_MS = 280;
+const ENTER_STAGGER_MS = 34;
+const ENTER_STAGGER_CAP_MS = 300;
 /** Cards mounted per step: a 1.000-task column opens with the first page
  * and grows as its end approaches (ClickUp also pages long columns). */
 const PAGE = 36;
@@ -70,12 +75,32 @@ export const Column = memo(function Column(props: ColumnProps) {
     if (!list) return;
     const next = new Map<string, number>();
     const reduced = prefersReducedMotion();
+    const scroller = list.parentElement;
+    const viewTop = scroller?.scrollTop ?? 0;
+    const viewBottom = viewTop + (scroller?.clientHeight ?? window.innerHeight);
+    let entering = 0;
     for (const element of list.querySelectorAll<HTMLElement>(":scope > [data-flip]")) {
       const key = element.dataset.flip!;
       const top = element.offsetTop;
       next.set(key, top);
       const before = tops.current.get(key);
-      if (before == null || reduced) continue;
+      if (before == null) {
+        // Only real cards that land inside the visible part of the column.
+        if (key.startsWith("__") || top > viewBottom || top + element.offsetHeight < viewTop) continue;
+        const delay = Math.min(entering * ENTER_STAGGER_MS, ENTER_STAGGER_CAP_MS);
+        entering += 1;
+        element.animate(
+          reduced
+            ? [{ opacity: 0 }, { opacity: 1 }]
+            : [
+                { opacity: 0, transform: "translateY(10px) scale(0.97)" },
+                { opacity: 1, transform: "none" },
+              ],
+          { duration: ENTER_MS, easing: EASE_OUT, delay, fill: "backwards" },
+        );
+        continue;
+      }
+      if (reduced) continue;
       const delta = before - top;
       if (Math.abs(delta) < 1) continue;
       element.animate([{ transform: `translateY(${delta}px)` }, { transform: "translateY(0)" }], {

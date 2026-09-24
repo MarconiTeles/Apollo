@@ -104,7 +104,7 @@ fi
 mkdir -p "$OUT_DIR" "$WORK_DIR"
 
 run_build_sh() {
-    local signing="$1" legacy="$2"
+    local signing="$1" legacy="$2" no_timestamp="${3:-}"
     APOLLO_APP_DISPLAY_NAME="$APP_NAME" \
     APOLLO_APP_PATH="$APP" \
     APOLLO_BUNDLE_ID="$BUNDLE_ID" \
@@ -115,19 +115,27 @@ run_build_sh() {
     APOLLO_EXTRA_SWIFT_FLAGS="$SWIFT_FLAGS" \
     APOLLO_SIGNING_ID="$signing" \
     APOLLO_FORCE_LEGACY_SECRET_STORE="$legacy" \
+    APOLLO_DEV_NO_TIMESTAMP="$no_timestamp" \
         ./build.sh "$CONFIG"
 }
 
+TIMESTAMP_FLAG="--timestamp"
 echo "═══ Building $APP_NAME ($CONFIG, $SWIFT_FLAGS) — signing: $SIGNING_ID"
 if ! run_build_sh "$SIGNING_ID" ""; then
     # Fall back to ad-hoc only when the compile/package steps succeeded and
     # signing was what failed (the executable is already in the bundle).
     if [ "$SIGNING_ID" != "-" ] && [ -f "$APP/Contents/MacOS/DayPanel" ]; then
-        echo "⚠︎ Signing with '$SIGNING_ID' failed; retrying ad-hoc." >&2
-        SIGNING_ID="-"
-        # Ad-hoc signatures change on every build, so keep secrets in the DEV
-        # container's local file store instead of prompting Keychain ACLs.
-        run_build_sh "-" "1"
+        # Usually Apple's timestamp server being unreachable. Keep the Developer
+        # ID (and so the Keychain session) and only drop the timestamp.
+        echo "⚠︎ Signing with '$SIGNING_ID' failed; retrying without Apple's timestamp." >&2
+        TIMESTAMP_FLAG="--timestamp=none"
+        if ! run_build_sh "$SIGNING_ID" "" "1"; then
+            echo "⚠︎ Signing with '$SIGNING_ID' failed again; retrying ad-hoc." >&2
+            SIGNING_ID="-"
+            # Ad-hoc signatures change on every build, so keep secrets in the DEV
+            # container's local file store instead of prompting Keychain ACLs.
+            run_build_sh "-" "1"
+        fi
     else
         echo "✗ DEV build failed before signing." >&2
         exit 1
@@ -279,7 +287,7 @@ cp "$MANIFEST_TMP" "$APP/Contents/Resources/$MANIFEST_NAME"
 # Re-seal only the outer bundle with the exact entitlements it already had.
 SIGNED_ENTS="$WORK_DIR/signed-app.entitlements"
 codesign -d --entitlements - --xml "$APP" > "$SIGNED_ENTS" 2>/dev/null
-codesign --force --options runtime --timestamp \
+codesign --force --options runtime "$TIMESTAMP_FLAG" \
     --sign "$SIGNING_ID" --entitlements "$SIGNED_ENTS" "$APP" > /dev/null
 
 FINAL_VERIFY_OUT="$(codesign --verify --deep --strict "$APP" 2>&1)" && FINAL_VERIFY_RC=0 || FINAL_VERIFY_RC=$?

@@ -6,10 +6,11 @@
 // appear only on hover (or always, from View Options), so a card never
 // carries decoration it doesn't need. Selection is ⌘/⇧-click, like Tarefas.
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { post, rectOf } from "../lib/bridge";
 import { dateTone, relativeDate } from "../lib/dates";
+import { EASE_OUT, prefersReducedMotion } from "../lib/motion";
 import type { CardPayload, CardSize, Person, TagPayload } from "../lib/types";
 import { AvatarStack } from "./Avatar";
 import { Composer } from "./Composer";
@@ -81,6 +82,9 @@ function FieldButton({
   );
 }
 
+/** A cover discovered after the card is on screen opens instead of jumping. */
+const COVER_OPEN_MS = 360;
+
 const firstName = (name: string) => {
   const token = name.split(/[\s._@-]+/)[0] ?? "";
   return token ? token.charAt(0).toUpperCase() + token.slice(1) : "";
@@ -108,6 +112,21 @@ export const Card = memo(function Card(props: CardProps) {
   const priority = show("priority") && card.priority >= 1 && card.priority <= 4 ? card.priority : 0;
   const tone = card.due != null ? dateTone(card.due, card.closed) : undefined;
   const cover = covers && show("cover") ? card.cover : undefined;
+  const coverRef = useRef<HTMLDivElement>(null);
+  const hadCover = useRef(cover !== undefined);
+
+  // Covers arrive with the card metadata, after the card is laid out. The
+  // reserved 16:9 box opens from zero (the column below follows it) rather
+  // than pushing everything down in a single frame.
+  useLayoutEffect(() => {
+    const had = hadCover.current;
+    hadCover.current = cover !== undefined;
+    const element = coverRef.current;
+    if (had || !element || prefersReducedMotion()) return;
+    const height = element.getBoundingClientRect().height;
+    if (height < 1) return;
+    element.animate([{ height: "0px" }, { height: `${height}px` }], { duration: COVER_OPEN_MS, easing: EASE_OUT });
+  }, [cover]);
   const subtasks = props.subtasks ?? [];
   // Native breadcrumb row: the parent for subtasks, else workspace · list.
   const crumb =
@@ -190,7 +209,7 @@ export const Card = memo(function Card(props: CardProps) {
       onDragEnd={handlers.dragEnd}
     >
       {cover && (
-        <div className="card-cover" data-ready={loadedCover === cover ? "" : undefined}>
+        <div ref={coverRef} className="card-cover" data-ready={loadedCover === cover ? "" : undefined}>
           <img
             src={cover}
             alt=""

@@ -32,12 +32,13 @@ if [ "$IDENTITY_VARIANT" = "dev" ] && [ "$BUNDLE_ID" = "$PRODUCTION_BUNDLE_ID" ]
     exit 1
 fi
 APOLLO_SWIFT_ARGS=()
-# Production includes the current task and agenda surfaces. Keep the
+# Production includes the current task, agenda and board surfaces. Keep the
 # isolated DEV scripts free to select one renderer for their A/B checks.
 if [ "$IDENTITY_VARIANT" != "dev" ]; then
-    APOLLO_SWIFT_ARGS+=(-Xswiftc -DAPOLLO_TASKS_REACT -Xswiftc -DAPOLLO_AGENDA_REACT)
+    APOLLO_SWIFT_ARGS+=(-Xswiftc -DAPOLLO_TASKS_REACT -Xswiftc -DAPOLLO_AGENDA_REACT -Xswiftc -DAPOLLO_BOARD_REACT)
     export APOLLO_BUNDLE_TASKS_REACT=1
     export APOLLO_BUNDLE_AGENDA_REACT=1
+    export APOLLO_BUNDLE_BOARD_REACT=1
 fi
 if [ -n "${APOLLO_SCRATCH_PATH:-}" ]; then
     APOLLO_SWIFT_ARGS+=(--scratch-path "$APOLLO_SCRATCH_PATH")
@@ -389,6 +390,12 @@ xattr -dr com.apple.quarantine "$OLLAMA_BUNDLE" 2>/dev/null || true
 # Override via APOLLO_SIGNING_ID env var if a future signing
 # identity rotates in.
 SIGNING_ID="${APOLLO_SIGNING_ID:-Developer ID Application: Marconi Lima (CU544M36UD)}"
+# DEV bundles may skip Apple's timestamp server (unreachable at times); a local
+# DEV app never goes to the notary. Production always keeps --timestamp.
+TIMESTAMP_FLAG="--timestamp"
+if [ "$IDENTITY_VARIANT" = "dev" ] && [ "${APOLLO_DEV_NO_TIMESTAMP:-}" = "1" ]; then
+    TIMESTAMP_FLAG="--timestamp=none"
+fi
 ENTITLEMENTS_PATH="Sources/DayPanel/Resources/Apollo.entitlements"
 SPARKLE_ENT_DIR="Sources/DayPanel/Resources/SparkleEntitlements"
 
@@ -455,11 +462,11 @@ if [ -d "$SPARKLE_FW" ]; then
         local target="$1"
         local entitlements="$2"
         if [ -z "$entitlements" ] || [ "$entitlements" = "-" ]; then
-            codesign --force --options runtime --timestamp \
+            codesign --force --options runtime "$TIMESTAMP_FLAG" \
                 --sign "$SIGNING_ID" \
                 "$target" > /dev/null
         else
-            codesign --force --options runtime --timestamp \
+            codesign --force --options runtime "$TIMESTAMP_FLAG" \
                 --sign "$SIGNING_ID" \
                 --entitlements "$entitlements" \
                 "$target" > /dev/null
@@ -490,7 +497,7 @@ fi
 # Embedded Ollama runtime — needs its own signature otherwise
 # the outer --deep walk reports "not signed at all".
 if [ -f "$OLLAMA_BUNDLE" ]; then
-    codesign --force --options runtime --timestamp \
+    codesign --force --options runtime "$TIMESTAMP_FLAG" \
         --sign "$SIGNING_ID" \
         "$OLLAMA_BUNDLE" > /dev/null
 fi
@@ -498,12 +505,12 @@ fi
 # Sign the standalone Review helper before the containing app. It deliberately
 # has no Apollo/Keychain entitlements; review state is passed explicitly and
 # the helper owns only its network-backed ReviewKit session.
-codesign --force --options runtime --timestamp \
+codesign --force --options runtime "$TIMESTAMP_FLAG" \
     --sign "$SIGNING_ID" \
     "$REVIEW_HELPER" > /dev/null
 
 # Outer .app — apply entitlements, hardened runtime, timestamp.
-codesign --force --options runtime --timestamp \
+codesign --force --options runtime "$TIMESTAMP_FLAG" \
     --sign "$SIGNING_ID" \
     --entitlements "$SIGNING_ENTITLEMENTS_PATH" \
     "$APP" > /dev/null

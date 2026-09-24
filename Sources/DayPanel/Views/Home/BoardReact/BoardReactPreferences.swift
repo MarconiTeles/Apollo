@@ -69,8 +69,15 @@ final class BoardReactPreferences: ObservableObject {
     private var prefsByList: [String: Prefs]
     private var ordersByList: [String: [String: [String]]]
 
-    init(defaults: UserDefaults = ApolloDevLaunchOptions.isFixtureMode
-            ? ApolloPreviewFixtures.defaults : .standard) {
+    /// Fixture storage exists only in DEBUG/DEV builds.
+    private nonisolated static var defaultStore: UserDefaults {
+        #if DEBUG || APOLLO_DEV
+        if ApolloDevLaunchOptions.isFixtureMode { return ApolloPreviewFixtures.defaults }
+        #endif
+        return .standard
+    }
+
+    init(defaults: UserDefaults = BoardReactPreferences.defaultStore) {
         self.defaults = defaults
         prefsByList = Self.decode(defaults.string(forKey: prefsKey)) ?? [:]
         ordersByList = Self.decode(defaults.string(forKey: ordersKey)) ?? [:]
