@@ -5,6 +5,19 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 2.0.4</title>
+      <pubDate>Thu, 24 Sep 2026 14:50:23 +0000</pubDate>
+      <sparkle:version>104</sparkle:version>
+      <sparkle:shortVersionString>2.0.4</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Tarefas e Agenda atualizadas, com categorias fixadas em vidro fosco suave e borda discreta. Fotos dos participantes na Agenda, com um avatar por evento na lista. Refinamentos de navegação, layout e carregamento.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v2.0.4/Apollo-2.0.4.zip"
+        sparkle:edSignature="YpS1fE/hS3VLXtvAXyLRqXZVfnEJaIZPzWIXjbWcaki0nwsUDZyIzQgJcPUM/POPGOalGEpqxutf7SBpfTt9CA=="
+        length="43463427"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 2.0.3</title>
       <pubDate>Thu, 24 Sep 2026 01:48:36 +0000</pubDate>
       <sparkle:version>102</sparkle:version>
