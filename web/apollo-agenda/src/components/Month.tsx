@@ -2,7 +2,8 @@ import { memo, useLayoutEffect, useRef, useState } from "react";
 import { post } from "../lib/bridge";
 import { Squircle, useBoxSize } from "../lib/squircle";
 import { BoxText } from "./BoxText";
-import type { EventPayload, Glyph, MonthCell, MonthPayload, PersonPayload } from "../lib/types";
+import { People } from "./People";
+import type { EventPayload, Glyph, MonthCell, MonthPayload } from "../lib/types";
 
 // AgendaMonthView: weekday header, month grid of filled tiles with stacked
 // event discs, and the selected day's panel. Sizes follow the native
@@ -106,8 +107,6 @@ const DayCell = memo(function DayCell({ cell, height, stackWidth, selected, onSe
   );
 });
 
-const MAX_PEOPLE = 4;
-
 function Mask({ glyph, className }: { glyph?: Glyph; className: string }) {
   if (!glyph) return null;
   return (
@@ -120,33 +119,6 @@ function Mask({ glyph, className }: { glyph?: Glyph; className: string }) {
         maskImage: `url(${glyph.url})`,
       }}
     />
-  );
-}
-
-/** Guests as stacked discs, organizer first and ringed in the accent (the
- *  month grid's disc language), photos when ClickUp knows the person. */
-function People({ people }: { people: PersonPayload[] }) {
-  if (people.length === 0) return null;
-  const shown = people.length > MAX_PEOPLE + 1 ? people.slice(0, MAX_PEOPLE) : people;
-  const more = people.length - shown.length;
-  return (
-    <span className="people" title={people.map((person) => person.name).join("\n")}>
-      {shown.map((person, index) => (
-        <span
-          key={`${person.name}-${index}`}
-          className={`person${person.organizer ? " organizer" : ""}`}
-          style={{ zIndex: shown.length - index, background: person.color }}
-        >
-          <span className="person-initials">{person.initials}</span>
-          {person.photo && <img className="person-photo" src={person.photo} alt="" draggable={false} />}
-        </span>
-      ))}
-      {more > 0 && (
-        <span className="person more" style={{ zIndex: 0 }}>
-          <span className="person-initials">+{more}</span>
-        </span>
-      )}
-    </span>
   );
 }
 

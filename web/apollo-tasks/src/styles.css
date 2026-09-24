@@ -518,8 +518,8 @@ html.hover-on .list:not(.inert) .review.update:hover .track {
 }
 
 /* The 34pt band sticks under the page header while its group scrolls and
- * is pushed away by the next group. Opaque paper (no backdrop blur): it
- * costs nothing per scrolled frame and matches the canvas when not stuck. */
+ * is pushed away by the next group. Frost the rows passing behind it,
+ * keeping the category labels sharp and the resting canvas unchanged. */
 .hrow {
   position: sticky;
   top: var(--sticky-top, 0px);
@@ -527,6 +527,22 @@ html.hover-on .list:not(.inert) .review.update:hover .track {
   height: 34px;
   background: var(--paper);
   contain: layout style;
+}
+
+@supports ((-webkit-backdrop-filter: blur(9px)) or (backdrop-filter: blur(9px))) {
+  .hrow {
+    background: color-mix(in srgb, var(--paper) 72%, transparent);
+    -webkit-backdrop-filter: blur(9px) saturate(135%);
+    backdrop-filter: blur(9px) saturate(135%);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .hrow {
+    background: var(--paper);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 .hrow.empty .chevron,

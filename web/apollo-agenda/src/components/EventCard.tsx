@@ -5,6 +5,7 @@ import { pressSpring } from "../lib/motion";
 import { Squircle, squircle, useBoxSize } from "../lib/squircle";
 import type { ShadowLayer } from "../lib/squircle";
 import type { EventPayload } from "../lib/types";
+import { People } from "./People";
 
 // AgendaEventCard + interactivePillFeedback(glow, hoverScale 1.015,
 // pulseFromClick). Hover/press scale and the glow are CSS transitions on
@@ -63,7 +64,11 @@ export const EventCard = memo(function EventCard({ event }: { event: EventPayloa
     );
   };
 
-  const style = { "--c": event.cardc } as React.CSSProperties;
+  const people = event.people.slice(0, 1);
+  const style = {
+    "--c": event.cardc,
+    "--card-people-width": `${people.length > 0 ? 24 + (people[0].organizer ? 4 : 0) : 0}px`,
+  } as React.CSSProperties;
   return (
     <button
       ref={card}
@@ -83,7 +88,7 @@ export const EventCard = memo(function EventCard({ event }: { event: EventPayloa
       {!event.accepted && (
         // The group shadow of the text sits under the 14% fill (drawingGroup):
         // a transparent copy casts it from behind the squircle.
-        <span className={`card-text card-text-shadow${event.initials !== undefined ? " with-avatar" : ""}`} aria-hidden>
+        <span className={`card-text card-text-shadow${event.people.length > 0 ? " with-people" : ""}`} aria-hidden>
           <span className="card-title">{event.title}</span>
           <span className="card-subtitle">{event.subtitle}</span>
         </span>
@@ -100,11 +105,7 @@ export const EventCard = memo(function EventCard({ event }: { event: EventPayloa
         <span className="card-title">{event.title}</span>
         <span className="card-subtitle">{event.subtitle}</span>
       </span>
-      {event.initials !== undefined && (
-        <span className="card-avatar">
-          <span>{event.initials || "?"}</span>
-        </span>
-      )}
+      <People people={people} />
       <span
         className="card-ripple-clip"
         style={{ clipPath: `path("${squircle(0, 0, size.width, size.height, 13)}")` }}

@@ -255,8 +255,12 @@ button {
   text-shadow: 0 1px 8px color(display-p3 var(--c) / 0.45);
 }
 
-.card-text-shadow.with-avatar {
-  right: 44px;
+.card-text-shadow.with-people {
+  right: calc(22px + var(--card-people-width));
+}
+
+.card > .people {
+  position: relative;
 }
 
 .card-text-shadow .card-title,
