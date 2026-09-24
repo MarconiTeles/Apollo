@@ -3,14 +3,23 @@ import SwiftUI
 // Fixed section header for the upcoming events and monthly calendar.
 
 struct EditorialHomeHeader: View {
+    /// Band below the 52pt toolbar reserve: 4 + 14 + 11 = 29pt, so the
+    /// whole chrome is 81pt (was 99pt with the month controls row).
+    static let labelTop: CGFloat = 4
+    static let labelHeight: CGFloat = 14
+    static let labelBottom: CGFloat = 11
+    static var chromeHeight: CGFloat { 52 + labelTop + labelHeight + labelBottom }
+
     @EnvironmentObject var appState: AppState
-    @Binding var month: Date
+    let month: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Labels sit on the band's bottom rule (as the original
+            // AGENDA / INBOX labels did), not floating mid-band.
             sectionLabels
-                .padding(.top, 9)
-                .padding(.bottom, 8)
+                .padding(.top, EditorialHomeHeader.labelTop)
+                .padding(.bottom, EditorialHomeHeader.labelBottom)
         }
         .padding(.horizontal, 28)
         .apolloStudioNode("inbox.header",
@@ -21,7 +30,7 @@ struct EditorialHomeHeader: View {
                             .init(kind: .horizontalPadding,
                                   title: "Padding horizontal", value: 28),
                             .init(kind: .verticalPadding,
-                                  title: "Respiro superior", value: 9),
+                                  title: "Respiro superior", value: EditorialHomeHeader.labelTop),
                           ])
     }
 
@@ -170,15 +179,18 @@ struct EditorialHomeHeader: View {
 
     private var sectionLabels: some View {
         GeometryReader { geometry in
-            HStack(alignment: .center, spacing: 0) {
+            HStack(alignment: .lastTextBaseline, spacing: 0) {
                 sectionLabel("Próximos eventos", count: agendaCount)
                     .frame(width: AgendaLayout.timelineWidth(geometry.size.width + 56) - 28,
                            alignment: .leading)
-                AgendaMonthControls(month: $month)
+                // Month navigation lives in the window toolbar; the band
+                // only names what each column shows.
+                Folio(AgendaMonth(containing: month).title)
                     .padding(.leading, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-        }.frame(height: 30)
+            .frame(height: geometry.size.height, alignment: .bottom)
+        }.frame(height: EditorialHomeHeader.labelHeight)
     }
 
     private func sectionLabel(_ label: String, count: Int) -> some View {

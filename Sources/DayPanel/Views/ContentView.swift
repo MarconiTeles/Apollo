@@ -1431,6 +1431,32 @@ struct ContentView: View {
 
         ToolbarSpacer(.flexible)
 
+        if sidebarRoute == .today {
+            ToolbarItem {
+                ToolbarGlassGroup {
+                    Button { shiftAgendaMonth(-1) } label: {
+                        Label("Mês anterior", systemImage: "chevron.left")
+                    }
+                    .help("Mês anterior (⌘←)")
+                    .keyboardShortcut(.leftArrow, modifiers: .command)
+                    Button { agendaMonth = Date() } label: {
+                        Text("Hoje")
+                            .font(.system(size: 13, weight: .medium))
+                            .padding(.horizontal, 4)
+                    }
+                    .help("Voltar para o mês atual")
+                    Button { shiftAgendaMonth(1) } label: {
+                        Label("Próximo mês", systemImage: "chevron.right")
+                    }
+                    .help("Próximo mês (⌘→)")
+                    .keyboardShortcut(.rightArrow, modifiers: .command)
+                }
+                .toolbarControl(disabled: anyPopupOpen)
+            }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.fixed)
+        }
+
         if appState.clickUpAuthService.isConnected {
             ToolbarItem {
                 ToolbarGlassGroup { listPickerToolbarButton }
@@ -1474,6 +1500,10 @@ struct ContentView: View {
             }
             .sharedBackgroundVisibility(.hidden)
         }
+    }
+
+    private func shiftAgendaMonth(_ value: Int) {
+        agendaMonth = AgendaMonth(containing: agendaMonth).shifted(by: value)
     }
 
     /// Page title shown in the window toolbar, next to the leading items.
@@ -1532,6 +1562,23 @@ struct ContentView: View {
             .controlSize(.large)
 
             Spacer(minLength: 0)
+
+            if sidebarRoute == .today {
+                GlassEffectContainer(spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button { shiftAgendaMonth(-1) } label: { Image(systemName: "chevron.left") }
+                            .help("Mês anterior")
+                            .accessibilityLabel("Mês anterior")
+                        Button("Hoje") { agendaMonth = Date() }
+                            .help("Voltar para o mês atual")
+                        Button { shiftAgendaMonth(1) } label: { Image(systemName: "chevron.right") }
+                            .help("Próximo mês")
+                            .accessibilityLabel("Próximo mês")
+                    }
+                }
+                .buttonStyle(.glass)
+                .controlSize(.large)
+            }
 
             GlassEffectContainer(spacing: 8) {
                 HStack(spacing: 8) {
@@ -1621,20 +1668,21 @@ struct ContentView: View {
         // agenda/inbox rows to travel behind the material. Their own scroll
         // content carries the resting reserve instead, so the first items keep
         // the same 30pt breathing room and then naturally pass under the band.
-        let chromeHeight: CGFloat = 99
+        let chromeHeight = EditorialHomeHeader.chromeHeight
         // The SwiftUI Agenda list begins at the window's top and therefore
         // needs the full chrome reserve plus a comfortable resting gap.
         // A primeira linha da List já reserva 28pt fixos; o -18 aqui fecha o
         // respiro visível entre o chrome e o evento em destaque em 10pt
         // (medida pedida em 20/jul).
         let agendaRestingReserve = chromeHeight - 18
-        // The month grid begins below the fixed header controls.
-        let inboxRestingReserve: CGFloat = 110
+        // The month grid's top edge lines up with the first event card of
+        // the agenda column (measured 25pt below the header rule).
+        let inboxRestingReserve = chromeHeight + 25
         return ZStack(alignment: .top) {
             homeDashboardSplit(agendaTopInset: agendaRestingReserve,
                                inboxTopInset: inboxRestingReserve)
 
-            EditorialHomeHeader(month: $agendaMonth)
+            EditorialHomeHeader(month: agendaMonth)
                 .environmentObject(appState)
                 .padding(.top, 52)        // clear the toolbar pills
                 .finderHeaderMaterial()
