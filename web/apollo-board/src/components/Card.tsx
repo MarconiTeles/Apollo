@@ -123,7 +123,8 @@ export const Card = memo(function Card(props: CardProps) {
     hadCover.current = cover !== undefined;
     const element = coverRef.current;
     if (had || !element || prefersReducedMotion()) return;
-    const height = element.getBoundingClientRect().height;
+    // Layout height, not the transformed box: a hovered or entering card is scaled.
+    const height = element.offsetHeight;
     if (height < 1) return;
     element.animate([{ height: "0px" }, { height: `${height}px` }], { duration: COVER_OPEN_MS, easing: EASE_OUT });
   }, [cover]);
