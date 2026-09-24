@@ -99,6 +99,17 @@ done
 
 # ── Version handling ──────────────────────────────────────────────────────
 PB=/usr/libexec/PlistBuddy
+# Apple's stapling (CloudKit) and timestamp services drop connections at
+# times; a notarized build must not be lost to one refused request.
+retry() {
+    local i
+    for i in 1 2 3 4 5 6 7 8; do
+        "$@" && return 0
+        echo "  (attempt $i failed, retrying)" >&2
+        sleep 6
+    done
+    return 1
+}
 CURRENT_VERSION="$($PB -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
 CURRENT_BUILD="$($PB -c 'Print :CFBundleVersion' "$INFO_PLIST")"
 
@@ -256,8 +267,8 @@ fi
 echo "✓ Notarization accepted (id=$NOTARY_ID)"
 
 echo "→ Stapling ticket onto the .app bundle…"
-xcrun stapler staple "$APP_PATH"
-xcrun stapler validate "$APP_PATH" >/dev/null
+retry xcrun stapler staple "$APP_PATH"
+retry xcrun stapler validate "$APP_PATH" >/dev/null
 
 # Remove the submission ZIP — we re-zip below with the stapled
 # bundle so Sparkle ships the ticket-carrying copy.
@@ -329,7 +340,7 @@ echo "✓ DMG rebuilt at $DMG_PATH (stapled bundle preserved)"
 # its own ticket, but stapling the outer image lets Gatekeeper validate the
 # downloaded installer offline before it is mounted.
 # Gatekeeper evaluates the downloaded container independently of its app.
-codesign --force --timestamp \
+retry codesign --force --timestamp \
     --sign "${APOLLO_SIGNING_ID:-Developer ID Application: Marconi Lima (CU544M36UD)}" \
     "$DMG_PATH"
 echo "→ Submitting rebuilt DMG to Apple notary…"
@@ -337,8 +348,8 @@ xcrun notarytool submit "$DMG_PATH" \
     --keychain-profile "$NOTARY_PROFILE" \
     --wait
 echo "→ Stapling ticket onto the DMG…"
-xcrun stapler staple "$DMG_PATH"
-xcrun stapler validate "$DMG_PATH" > /dev/null
+retry xcrun stapler staple "$DMG_PATH"
+retry xcrun stapler validate "$DMG_PATH" > /dev/null
 echo "✓ DMG notarized and stapled"
 
 # ── ZIP for Sparkle ───────────────────────────────────────────────────────
