@@ -211,6 +211,21 @@ if [ -n "${APOLLO_BUNDLE_AGENDA_REACT:-}" ]; then
     cp "$AGENDA_BUILD" "$APP/Contents/Resources/ApolloAgenda/index.html"
 fi
 
+# React board (ClickUp parity), only in its dedicated DEV variant.
+if [ -n "${APOLLO_BUNDLE_BOARD_REACT:-}" ]; then
+    BOARD_WEB_DIR="web/apollo-board"
+    BOARD_BUILD="Sources/DayPanel/Resources/ApolloBoard/index.html"
+    if [ -d "$BOARD_WEB_DIR/node_modules" ]; then
+        echo "Building React board..."
+        (cd "$BOARD_WEB_DIR" && npm run --silent build >/dev/null) \
+            || { echo "ERROR: board build failed (npm run build in $BOARD_WEB_DIR)" >&2; exit 1; }
+    fi
+    [ -f "$BOARD_BUILD" ] \
+        || { echo "ERROR: $BOARD_BUILD missing — run npm ci && npm run build in $BOARD_WEB_DIR" >&2; exit 1; }
+    mkdir -p "$APP/Contents/Resources/ApolloBoard"
+    cp "$BOARD_BUILD" "$APP/Contents/Resources/ApolloBoard/index.html"
+fi
+
 # Apollo Review is a real secondary macOS application bundled with Apollo.
 # Keeping it as a nested .app gives the review surface its own NSWindow,
 # traffic lights, independent movement/resize and lifetime, while both hosts

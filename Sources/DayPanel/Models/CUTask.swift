@@ -288,6 +288,14 @@ struct CUTask: Identifiable, Codable, Equatable {
         /// derived links) don't carry an uploader.
         let uploaderId: Int?
 
+        /// ClickUp-generated preview (`thumbnail_large`, falling back to the
+        /// smaller sizes) for images and videos. The board uses it as the
+        /// card cover. Optional so older cached payloads still decode.
+        var thumbnailURL: String? = nil
+        /// Upload time (`date`), used to find the first image — ClickUp's
+        /// default cover — since the attachment list is sorted by title.
+        var dateAdded: Date? = nil
+
         var isApolloMediaTechnical: Bool {
             title.hasPrefix(TaskMediaTechnicalName.sourcePrefix)
                 || title.hasPrefix(TaskMediaTechnicalName.manifestPrefix)

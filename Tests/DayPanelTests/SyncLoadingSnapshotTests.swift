@@ -208,4 +208,29 @@ final class ListMetadataFallbackTests: XCTestCase {
         XCTAssertEqual(statuses.first?.color, "#5F55EE")
         XCTAssertEqual(statuses.last?.type, "closed")
     }
+
+    // MARK: - Agenda
+
+    func testAgendaSceneFollowsTheCalendarRead() {
+        var input = SyncLoadingInputs()
+        input.googleConnected = true
+        input.journal[.calendar] = .active
+        var snapshot = SyncLoadingSnapshot.make(.agenda, input)
+        XCTAssertEqual(snapshot.headline, "Montando sua agenda")
+        XCTAssertEqual(snapshot.steps.map(\.id), ["google", "events", "shared", "month"])
+        XCTAssertEqual(snapshot.steps[1].state, .active)
+        XCTAssertEqual(snapshot.steps[2].state, .active)
+        XCTAssertNil(snapshot.metric)
+
+        input.journal[.calendar] = .done(count: 12)
+        snapshot = SyncLoadingSnapshot.make(.agenda, input)
+        XCTAssertEqual(snapshot.metric?.value, 12)
+        XCTAssertEqual(snapshot.steps[1].state, .done)
+        XCTAssertEqual(snapshot.steps[3].state, .done)
+    }
+
+    func testAgendaWithoutGoogleSkipsTheAccount() {
+        let snapshot = SyncLoadingSnapshot.make(.agenda, SyncLoadingInputs())
+        XCTAssertEqual(snapshot.steps[0].state, .skipped)
+    }
 }

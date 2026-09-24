@@ -28,6 +28,9 @@ struct EditorialMyTasksView: View {
     /// Gives SwiftUI one responsive frame to paint a truthful skeleton
     /// before constructing the recycled task rows on route/list changes.
     @State private var listMountReady = false
+    /// The React list painted this mount (WebRevealGate). Until then the
+    /// loading scene covers it, so the route is never an empty canvas.
+    @State private var reactListReady = false
     private var mediaFlowRequest: TaskMediaFlowRequest? {
         get { appState.mediaFlowRequest }
         nonmutating set {
@@ -339,8 +342,20 @@ struct EditorialMyTasksView: View {
                     beginFileDrop(task: task, urls: urls)
                 },
                 onListFileDragChanged: { fileDragOverList = $0 },
-                onListFileDrop: { deliverListFileURLs($0) }
+                onListFileDrop: { deliverListFileURLs($0) },
+                onReadyChange: { ready in
+                    withAnimation(.easeOut(duration: 0.18)) { reactListReady = ready }
+                }
             )
+            .overlay(alignment: .top) {
+                if !reactListReady {
+                    SyncLoadingSurface(scene: .tasks) {
+                        MyTasksLoadingPlaceholder()
+                    }
+                    .padding(.top, MyTasksLoadingPlaceholder.topReserve)
+                    .transition(.opacity)
+                }
+            }
         } else {
             appKitTaskList
         }
@@ -1013,11 +1028,9 @@ private struct MyTasksLoadingPlaceholder: View {
     /// Clears the 52 pt toolbar band plus breathing room (the column header
     /// row is hidden while loading).
     static let topReserve: CGFloat = 74
-    /// Height of the sync account the web scene draws above the groups
-    /// (`.scene-tasks` in web/apollo-loading): 40 + 21 + 16 + 16 pt. Reserved
-    /// here too so the cross-fade from this skeleton to the scene never moves
-    /// a single row.
-    static let consoleReserve: CGFloat = 93
+    /// The scenes carry no text block (shapes only): groups start at the top,
+    /// in the web scene and here alike, so the cross-fade never moves a row.
+    static let consoleReserve: CGFloat = 0
     @State private var height: CGFloat = 0
 
     var body: some View {
@@ -1026,7 +1039,6 @@ private struct MyTasksLoadingPlaceholder: View {
         let groups = SyncLoadingLayout.taskGroups(height: height, top: Self.consoleReserve)
         LunarSkeletonSurface {
             VStack(alignment: .leading, spacing: 0) {
-                Color.clear.frame(height: Self.consoleReserve)
                 ForEach(Array(groups.enumerated()), id: \.offset) { index, count in
                     if index > 0 { Color.clear.frame(height: SyncLoadingLayout.taskGroupGap) }
                     skeletonHeader(width: index.isMultiple(of: 2) ? 96 : 76)

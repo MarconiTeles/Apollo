@@ -13,6 +13,10 @@ import SwiftUI
 // gating rules in TaskListView / EditorialMyTasksView).
 
 struct EditorialSkeletonCard: View {
+    /// The React board's card carries an indicator row (description,
+    /// attachments) between title and footer.
+    var indicators = false
+
     var body: some View {
         LunarSkeletonSurface {
             VStack(alignment: .leading, spacing: 12) {
@@ -36,6 +40,17 @@ struct EditorialSkeletonCard: View {
                         .frame(height: 13)
                         .frame(maxWidth: 180)
                 }
+                if indicators {
+                    HStack(spacing: 10) {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(LunarSkeleton.faint)
+                            .frame(width: 12, height: 10)
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(LunarSkeleton.faint)
+                            .frame(width: 22, height: 10)
+                    }
+                    .frame(height: 10)
+                }
                 // Footer: avatar + name + date stand-ins
                 HStack(spacing: 8) {
                     Circle()
@@ -55,13 +70,14 @@ struct EditorialSkeletonCard: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 12)
+        // The real card's surface: BoardCardLayout.radius, 0.5pt rule inside.
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: BoardCardLayout.radius, style: .continuous)
                 .fill(Editorial.page)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Editorial.rule.opacity(0.4), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: BoardCardLayout.radius, style: .continuous)
+                .strokeBorder(Editorial.rule, lineWidth: 0.5)
         )
     }
 }

@@ -484,12 +484,17 @@ final class BoardColumnView: NSView {
 /// Cold-start placeholders, identical to the reference LazyVStack prefix.
 struct BoardColumnSkeletons: View {
     var count = 3
+    /// React board card shape (indicator row).
+    var indicators = false
+    /// Column position: the loading scene's cards land as one diagonal wave
+    /// across the columns (column + 1.5 × row, 60 ms a step).
+    var column = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: BoardColumnMetrics.cardSpacing) {
             ForEach(0..<count, id: \.self) { i in
-                EditorialSkeletonCard()
-                    .cascadeAppear(index: i)
+                EditorialSkeletonCard(indicators: indicators)
+                    .cascadeAppear(index: column * 2 + i * 3, step: 0.03, cap: 1)
             }
         }
         .frame(width: BoardCardLayout.width, alignment: .leading)

@@ -2,7 +2,7 @@
 // SyncLoading/SyncLoadingSnapshot.swift). Swift owns every fact and every
 // word; the scenes only present them.
 
-export type SceneId = "tasks" | "board" | "comments" | "inbox";
+export type SceneId = "tasks" | "board" | "comments" | "inbox" | "agenda";
 export type StepState = "pending" | "active" | "done" | "failed" | "skipped";
 
 export type Step = {
@@ -34,7 +34,12 @@ export type Snapshot = {
     columnWidth: number;
     columnGap: number;
     cardWidth: number;
+    /** Ghost card height; React board cards add an indicator row. */
+    cardHeight?: number;
+    indicators?: boolean;
   } | null;
+  /** Agenda: resting y of the first event card and of the month grid. */
+  agenda?: { eventsTop: number; monthTop: number } | null;
   theme: "dark" | "light";
   accent: string;
 };

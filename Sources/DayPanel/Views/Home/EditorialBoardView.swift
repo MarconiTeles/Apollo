@@ -57,6 +57,10 @@ struct EditorialBoardView: View {
     /// mover horizontalmente não invalida/recalcula todas as colunas e cards.
     @State private var boardScrollRelay = BoardHorizontalScrollRelay()
 
+    /// The React board painted this mount (WebRevealGate); until then the
+    /// board's loading scene covers it.
+    @State private var reactBoardReady = false
+
     var body: some View {
         // `labelsRow` deliberately has the intrinsic width of every status
         // column so its pills can track the horizontal document 1:1. Without
@@ -134,13 +138,16 @@ struct EditorialBoardView: View {
         .onReceive(NotificationCenter.default.publisher(for: .apolloTaskDropCompleted)) { _ in
             clearSelection()
         }
-        .onChange(of: boardTasks.map(\.id)) { _, visibleIds in
+        .onChange(of: selectableTaskIds) { _, visibleIds in
             let visible = Set(visibleIds)
             selectedTaskIds.formIntersection(visible)
             if let anchor = selectionAnchorId, !visible.contains(anchor) {
                 selectionAnchorId = nil
             }
         }
+        #if APOLLO_BOARD_REACT
+        .onAppear { if BoardReactRenderer.usesReact { BoardReactHost.shared.prewarm() } }
+        #endif
         .apolloStudioNode("board.page",
                           title: "Página de quadros",
                           kind: .page,
@@ -171,15 +178,40 @@ struct EditorialBoardView: View {
         // vive inline na própria linha dos labels, pinado à direita.
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: 52)   // reserva da toolbar
-            labelsRow
-                .opacity(showsLoadingScene ? 0 : 1)
-                .padding(.top, 6)
-                .padding(.bottom, 10)
-                .overlay(alignment: .trailing) {
-                    subtaskToggle
-                        .padding(.trailing, 24)
-                        .padding(.bottom, 4)
-                }
+            #if APOLLO_BOARD_REACT
+            if showsReactBoard {
+                // Same band as the native board: the page's group pills,
+                // drawn natively on the one header material and tracking the
+                // native horizontal scroll through the relay.
+                BoardReactHeaderTrack(preferences: .shared,
+                                      appState: appState,
+                                      scrollRelay: boardScrollRelay)
+                    .opacity(showsLoadingScene ? 0 : 1)
+                    // While the board loads, the band keeps its pills as
+                    // ghosts on the same columns as the scene's cards.
+                    .overlay(alignment: .topLeading) {
+                        if showsLoadingScene {
+                            BoardHeaderSkeletonTrack(
+                                statuses: visibleStatuses,
+                                columnX: BoardViewportView.leadingMargin + 10)
+                            .transition(.opacity)
+                        }
+                    }
+                    .padding(.top, 6)
+                    .padding(.bottom, 10)
+            }
+            #endif
+            if !showsReactBoard {
+                labelsRow
+                    .opacity(showsLoadingScene ? 0 : 1)
+                    .padding(.top, 6)
+                    .padding(.bottom, 10)
+                    .overlay(alignment: .trailing) {
+                        subtaskToggle
+                            .padding(.trailing, 24)
+                            .padding(.bottom, 4)
+                    }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .finderHeaderMaterial(bottomRule: true)
@@ -333,12 +365,35 @@ struct EditorialBoardView: View {
     }
 
     private var selectedTasks: [CUTask] {
-        orderedVisibleBoardTasks.filter { selectedTaskIds.contains($0.id) }
+        // The React board's scope can include closed tasks and tasks added
+        // from other lists, which the status projection below leaves out.
+        if showsReactBoard {
+            return appState.tasks.filter { selectedTaskIds.contains($0.id) }
+        }
+        return orderedVisibleBoardTasks.filter { selectedTaskIds.contains($0.id) }
     }
 
+    /// Ids a selection may keep: the visible board, or for the React board
+    /// every loaded task (its own projection filters what is on screen).
+    private var selectableTaskIds: [String] {
+        showsReactBoard ? appState.tasks.map(\.id) : boardTasks.map(\.id)
+    }
+
+    private var showsReactBoard: Bool {
+        #if APOLLO_BOARD_REACT
+        BoardReactRenderer.usesReact
+        #else
+        false
+        #endif
+    }
+
+    /// `ordered`: the renderer's visual order (React groups and sorts in the
+    /// page); nil uses the native status projection.
     private func activate(_ task: CUTask,
                           modifiers: NSEvent.ModifierFlags,
-                          rect: CGRect) {
+                          rect: CGRect,
+                          ordered: [CUTask]? = nil) {
+        let visibleOrder = ordered ?? orderedVisibleBoardTasks
         let intent: TaskSelectionIntent
         if modifiers.contains(.shift) {
             intent = .range
@@ -351,14 +406,14 @@ struct EditorialBoardView: View {
             current: selectedTaskIds,
             anchor: selectionAnchorId,
             clicked: task.id,
-            ordered: orderedVisibleBoardTasks.map(\.id),
+            ordered: visibleOrder.map(\.id),
             intent: intent
         )
         if resolution.shouldOpen {
             appState.openTaskDetail(
                 task,
                 origin: rect,
-                navigationTasks: orderedVisibleBoardTasks,
+                navigationTasks: visibleOrder,
                 style: .bottomSlide
             )
             return
@@ -399,12 +454,52 @@ struct EditorialBoardView: View {
 
     @ViewBuilder
     private var boardViewport: some View {
+        #if APOLLO_BOARD_REACT
+        if BoardReactRenderer.usesReact {
+            reactBoard
+        } else {
+            nativeBoardViewport
+        }
+        #else
+        nativeBoardViewport
+        #endif
+    }
+
+    @ViewBuilder
+    private var nativeBoardViewport: some View {
         if usesAppKitRenderer {
             appKitBoard
         } else {
             board
         }
     }
+
+    #if APOLLO_BOARD_REACT
+    /// DEV `APOLLO_BOARD_REACT`: the ClickUp-parity board in React.
+    private var reactBoard: some View {
+        BoardReactView(
+            appState: appState,
+            selectedTaskIds: selectedTaskIds,
+            topInset: headerChromeHeight,
+            // The lanes keep running under the floating bulk toolbar (cards
+            // show through its glass); only their scroll gains room so the
+            // last card can rise above it.
+            overlayInset: selectedTaskIds.isEmpty ? 0 : 96,
+            onActivate: { task, modifiers, rect, ordered in
+                activate(task, modifiers: modifiers, rect: rect, ordered: ordered)
+            },
+            onSetSelection: { ids, anchor in
+                withAnimation(.easeOut(duration: 0.14)) {
+                    selectedTaskIds = ids
+                    selectionAnchorId = anchor
+                }
+            },
+            onClearSelection: clearSelection,
+            onHorizontalScroll: { boardScrollRelay.send($0) },
+            onReadyChange: { reactBoardReady = $0 }
+        )
+    }
+    #endif
 
     /// One pass over the tasks per body evaluation: scope, filters, columns
     /// and local order (see `BoardRenderSnapshot.make`).
@@ -555,24 +650,34 @@ struct EditorialBoardView: View {
 
     /// Both renderers draw their cold start through the one sync-aware
     /// scene the task list uses.
-    private var showsLoadingScene: Bool { isColdLoading }
+    private var showsLoadingScene: Bool {
+        isColdLoading || (showsReactBoard && !reactBoardReady)
+    }
 
     /// Ghost cards on the exact native column grid, with the sync account
     /// floating over the visible canvas (right of the 220 pt sidebar).
     private var boardLoadingScene: some View {
         let top = BoardColumnMetrics(headerChromeHeight: headerChromeHeight).topInset
         let statuses = visibleStatuses
+        // The React board starts its columns 10pt further in and its card
+        // carries the indicator row; the scene draws that card there.
+        let react = showsReactBoard
+        let columnX = BoardViewportView.leadingMargin + (react ? 10 : 0)
+        let cardHeight = react ? SyncLoadingLayout.boardReactCard : SyncLoadingLayout.boardCard
         return SyncLoadingSurface(
             scene: .board,
             statuses: statuses,
             geometry: .init(top: top,
                             leading: 220,
-                            columnX: BoardViewportView.leadingMargin,
+                            columnX: columnX,
                             columnWidth: BoardViewportView.columnWidth,
                             columnGap: BoardViewportView.columnGap,
-                            cardWidth: BoardCardLayout.width)
+                            cardWidth: BoardCardLayout.width,
+                            cardHeight: Double(cardHeight),
+                            indicators: react)
         ) {
-            BoardLoadingFallback(columns: statuses.count, top: top)
+            BoardLoadingFallback(columns: statuses.count, top: top,
+                                 columnX: columnX, cardHeight: cardHeight, indicators: react)
         }
     }
 
@@ -833,6 +938,130 @@ private struct BoardLabelsTrack: View {
         .onReceive(scrollRelay.offsets.removeDuplicates()) { scrollX = $0 }
     }
 }
+
+#if APOLLO_BOARD_REACT
+/// Group pills of the React board, in the native header band. The page
+/// reports each column's document x and width; the relay carries the native
+/// scroll offset, so the pills move with the columns in the same frame.
+private struct BoardReactHeaderTrack: View {
+    @ObservedObject var preferences: BoardReactPreferences
+    let appState: AppState
+    let scrollRelay: BoardHorizontalScrollRelay
+
+    @State private var scrollX: CGFloat = 0
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(preferences.headers) { header in
+                pill(header)
+                    .padding(.horizontal, header.collapsed ? 0 : 10)
+                    .frame(width: header.width, alignment: header.collapsed ? .center : .leading)
+                    .offset(x: header.x - scrollX)
+            }
+        }
+        // Row height of the native labels row (21pt pill + 2pt padding × 2).
+        .frame(maxWidth: .infinity, minHeight: 25, alignment: .topLeading)
+        .clipped()
+        .onAppear { scrollX = scrollRelay.current }
+        .onReceive(scrollRelay.offsets.removeDuplicates()) { scrollX = $0 }
+    }
+
+    @ViewBuilder
+    private func pill(_ header: BoardReactHeader) -> some View {
+        let color = color(for: header)
+        if header.collapsed {
+            Text("\(header.count)")
+                .font(Editorial.sans(11, .semibold))
+                .foregroundStyle(color.opacity(0.7))
+                .monospacedDigit()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .modifier(StatusGlassPill(color: color))
+        } else {
+            HStack(spacing: 9) {
+                HStack(spacing: 7) {
+                    Circle().fill(color).frame(width: 7, height: 7)
+                    Text(header.title.uppercased())
+                        .font(Editorial.sans(10.5, .semibold))
+                        .tracking(1.2)
+                        .foregroundStyle(color)
+                        .lineLimit(1)
+                    Text("\(header.count)")
+                        .font(Editorial.sans(11, .semibold))
+                        .foregroundStyle(color.opacity(0.6))
+                        .monospacedDigit()
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .modifier(StatusGlassPill(color: color))
+                .layoutPriority(1)
+
+                Spacer(minLength: 4)
+                if header.canCreate {
+                    Button {
+                        preferences.commands.send("compose:\(header.gk)")
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Editorial.inkMute)
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Adicionar tarefa")
+                }
+                Button {
+                    BoardReactHost.shared.client?.popUpColumnMenu(for: header)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Editorial.inkFaint)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help("Opções do grupo")
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+        }
+    }
+
+    /// The same colours the page uses for each grouping.
+    private func color(for header: BoardReactHeader) -> Color {
+        switch header.kind {
+        case "status":
+            let status = appState.availableStatuses.first { $0.status.lowercased() == header.key }
+                ?? BoardOrdering.fallbackStatuses.first { $0.status.lowercased() == header.key }
+            return status.map { Color(statusHex: $0.displayHex) } ?? Editorial.inkMute
+        case "priority":
+            switch header.key {
+            case "1": return Color(hex: "#A8392A")
+            case "2": return Color(hex: "#9A7B1F")
+            case "3": return Color(hex: "#56708A")
+            case "4": return Color(hex: "#7C7E84")
+            default: return Editorial.inkMute
+            }
+        case "assignee":
+            let member = appState.availableMembers.first { String($0.id) == header.key }
+            return member?.color.map { Color(hex: $0) } ?? Editorial.inkMute
+        case "tag":
+            let tag = appState.availableTags.first { $0.name == header.key }
+            return tag.map { Color(hex: $0.background) } ?? Editorial.inkMute
+        case "due":
+            switch header.key {
+            case "overdue": return Editorial.overdue
+            case "today": return Editorial.accent
+            default: return Editorial.inkMute
+            }
+        default:
+            return Editorial.inkMute
+        }
+    }
+}
+#endif
 
 /// Mechanical extraction of the former `columnHeader` method. Geometry,
 /// materials, hit targets and actions intentionally remain byte-for-byte
@@ -1481,18 +1710,87 @@ private struct BoardScrollXReader: ViewModifier {
 }
 
 
+/// The header band of the loading board: one ghost group pill per column
+/// (status dot, title and count bones) with the column's `+` and `···`,
+/// where `BoardReactHeaderTrack` draws the real ones. Shows after the same
+/// half-second grace as the scene under it.
+private struct BoardHeaderSkeletonTrack: View {
+    let statuses: [CUStatus]
+    let columnX: CGFloat
+    @State private var shown = false
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(Array(statuses.enumerated()), id: \.offset) { index, status in
+                let color = Color(statusHex: status.displayHex)
+                HStack(spacing: 9) {
+                    HStack(spacing: 7) {
+                        Circle().fill(color).frame(width: 7, height: 7)
+                        LunarSkeletonSurface {
+                            HStack(spacing: 7) {
+                                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                    .fill(LunarSkeleton.primary)
+                                    .frame(width: 54 + CGFloat((index * 37) % 5) * 9, height: 8)
+                                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                    .fill(LunarSkeleton.secondary)
+                                    .frame(width: 12, height: 8)
+                            }
+                        }
+                    }
+                    .frame(height: 11)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .modifier(StatusGlassPill(color: color))
+                    Spacer(minLength: 4)
+                    Group {
+                        Image(systemName: "plus")
+                        Image(systemName: "ellipsis")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Editorial.inkFaint.opacity(0.6))
+                    .frame(width: 18, height: 18)
+                }
+                // Same insets as the real pill row (BoardReactHeaderTrack).
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .padding(.horizontal, 10)
+                .frame(width: BoardViewportView.columnWidth, alignment: .leading)
+                // Lands with its column's first card (the scene's wave).
+                .opacity(shown ? 1 : 0)
+                .offset(y: shown ? 0 : 6)
+                .animation(.timingCurve(0.23, 1, 0.32, 1, duration: 0.6)
+                               .delay(Double(index) * 0.06),
+                           value: shown)
+                .offset(x: columnX + CGFloat(index)
+                        * (BoardViewportView.columnWidth + BoardViewportView.columnGap))
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 25, alignment: .topLeading)
+        .clipped()
+        .allowsHitTesting(false)
+        .task {
+            try? await Task.sleep(for: SyncLoadingSurface<EmptyView>.grace)
+            guard !Task.isCancelled else { return }
+            shown = true
+        }
+    }
+}
+
 /// Native stand-in for the board's loading scene: the same three skeleton
 /// cards per column, on the same grid the scene and the real cards use.
 private struct BoardLoadingFallback: View {
     let columns: Int
     let top: CGFloat
+    var columnX: CGFloat = BoardViewportView.leadingMargin
+    var cardHeight: CGFloat = SyncLoadingLayout.boardCard
+    var indicators = false
     @State private var height: CGFloat = 0
 
     var body: some View {
         // Whole cards above the scene's capsule, like the scene.
         let cards = SyncLoadingLayout.fitting(bottom: height - SyncLoadingLayout.boardCapsuleReserve,
                                               top: top,
-                                              size: SyncLoadingLayout.boardCard,
+                                              size: cardHeight,
                                               gap: SyncLoadingLayout.boardCardGap)
         // The columns are wider than the window. They live in an overlay so
         // that width never reaches the layout: as a sized child it widened the
@@ -1503,12 +1801,13 @@ private struct BoardLoadingFallback: View {
                 HStack(alignment: .top,
                        spacing: BoardViewportView.columnWidth + BoardViewportView.columnGap
                            - BoardCardLayout.width) {
-                    ForEach(0..<columns, id: \.self) { _ in
-                        BoardColumnSkeletons(count: cards)
+                    ForEach(0..<columns, id: \.self) { column in
+                        BoardColumnSkeletons(count: cards, indicators: indicators,
+                                             column: column)
                     }
                 }
                 .fixedSize()
-                .padding(.leading, BoardViewportView.leadingMargin
+                .padding(.leading, columnX
                          + (BoardViewportView.columnWidth - BoardCardLayout.width) / 2)
                 .padding(.top, top)
             }

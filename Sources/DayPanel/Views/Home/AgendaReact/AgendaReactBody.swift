@@ -34,6 +34,9 @@ struct AgendaReactBody: View {
     let agendaTopInset: CGFloat
     let inboxTopInset: CGFloat
     @StateObject private var loader = AgendaReactMonthLoader()
+    @ObservedObject private var journal = SyncJournal.shared
+    /// The page painted this mount (WebRevealGate).
+    @State private var pageReady = false
 
     /// TimelineView.headerToFirstCardSpacing.
     private static let headerToFirstCardSpacing: CGFloat = 43
@@ -41,14 +44,18 @@ struct AgendaReactBody: View {
     var body: some View {
         GeometryReader { geo in
             let timelineW = AgendaLayout.timelineWidth(max(1, geo.size.width))
+            let eventsTop = Self.headerToFirstCardSpacing + agendaTopInset
             AgendaReactView(month: month,
                             appState: appState,
                             loader: loader,
-                            agendaTop: Self.headerToFirstCardSpacing + agendaTopInset,
+                            agendaTop: eventsTop,
                             monthTop: inboxTopInset,
-                            occlusion: EditorialHomeHeader.chromeHeight)
+                            occlusion: EditorialHomeHeader.chromeHeight,
+                            onReadyChange: { pageReady = $0 })
                 // TimelineView's floating "add coworker's calendar" search,
                 // anchored to the events column's bottom-trailing corner.
+                // It is page content: below the loading scene and hidden
+                // with the page while the scene (or its grace) is up.
                 .overlay(alignment: .bottomLeading) {
                     SharedCalendarSearchBar()
                         .environmentObject(appState)
@@ -57,13 +64,164 @@ struct AgendaReactBody: View {
                         .padding(.bottom, 16)
                         .frame(width: timelineW, alignment: .trailing)
                 }
+                .opacity(showsLoading ? 0 : 1)
+                .allowsHitTesting(!showsLoading)
+                // Whenever the agenda has nothing real to show — the page is
+                // not painted yet, or the events are still on their way —
+                // the agenda loading scene covers it (after the shared 0.5 s
+                // tolerance of SyncLoadingSurface).
+                .overlay {
+                    if showsLoading {
+                        SyncLoadingSurface(scene: .agenda,
+                                           agenda: .init(eventsTop: Double(eventsTop),
+                                                         monthTop: Double(inboxTopInset)),
+                                           monthLoading: loader.loading) {
+                            AgendaLoadingPlaceholder(eventsTop: eventsTop,
+                                                     monthTop: inboxTopInset,
+                                                     timelineWidth: timelineW)
+                        }
+                        .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.24), value: showsLoading)
                 // AgendaMonthView's loading indicator.
                 .overlay(alignment: .bottomTrailing) {
-                    if loader.loading {
+                    if loader.loading && !showsLoading {
                         ProgressView().controlSize(.small).padding(.trailing, 24).padding(.bottom, 24)
                     }
                 }
         }
+    }
+}
+
+extension AgendaReactBody {
+    /// Events still coming: Google is connected and online, nothing has
+    /// landed yet, and this session's calendar read has not finished.
+    private var eventsLoading: Bool {
+        guard appState.googleAuth.isConnected, appState.isOnline, appState.events.isEmpty else { return false }
+        if case .active = journal.states[.calendar] { return true }
+        return !journal.hasCompletedSync
+    }
+
+    fileprivate var showsLoading: Bool { !pageReady || eventsLoading }
+}
+
+/// Native lunar skeleton of the agenda (fallback of the web scene, same
+/// geometry): the sync console and day-grouped event capsules in the
+/// events column, the month grid and the day panel on the right.
+private struct AgendaLoadingPlaceholder: View {
+    let eventsTop: CGFloat
+    let monthTop: CGFloat
+    let timelineWidth: CGFloat
+
+    /// No text block in the scenes (shapes only): capsules start at the top.
+    static let consoleReserve: CGFloat = 0
+    static let card: CGFloat = 47
+    static let cardGap: CGFloat = 6
+    static let groupGap: CGFloat = 18
+
+    @State private var size: CGSize = .zero
+
+    var body: some View {
+        LunarSkeletonSurface {
+            ZStack(alignment: .topLeading) {
+                Color.clear
+                timeline
+                month
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+        .accessibilityElement()
+        .accessibilityLabel("Carregando agenda")
+    }
+
+    private var timeline: some View {
+        let top = eventsTop + Self.consoleReserve
+        let groups = Self.groups(height: size.height - 24, top: top)
+        return VStack(alignment: .leading, spacing: Self.groupGap) {
+            ForEach(Array(groups.enumerated()), id: \.offset) { index, count in
+                // Running row of this day's first capsule: the same cascade
+                // as the web scene (capsule i lands i × 40 ms in).
+                let first = groups.prefix(index).reduce(0, +)
+                HStack(alignment: .top, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        RoundedRectangle(cornerRadius: 3).fill(LunarSkeleton.secondary)
+                            .frame(width: 26, height: 7)
+                        RoundedRectangle(cornerRadius: 5).fill(LunarSkeleton.primary)
+                            .frame(width: 30, height: 22)
+                    }
+                    .frame(width: 55, alignment: .leading)
+                    .cascadeAppear(index: first, step: 0.032, cap: 1)
+                    VStack(spacing: Self.cardGap) {
+                        ForEach(0..<count, id: \.self) { k in
+                            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                .fill(LunarSkeleton.faint)
+                                .frame(height: Self.card)
+                                .cascadeAppear(index: first + k, step: 0.04, cap: 1)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.leading, 36)
+        .frame(width: max(0, timelineWidth - 26), alignment: .leading)
+        .padding(.top, top)
+    }
+
+    private var month: some View {
+        let left = timelineWidth + 17
+        let width = max(0, size.width - left - 12)
+        let cell = max(0, (width - 6 * 6.5) / 7)
+        return VStack(alignment: .leading, spacing: 6.5) {
+            HStack(spacing: 6.5) {
+                ForEach(0..<7, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: 3).fill(LunarSkeleton.secondary)
+                        .frame(width: 22, height: 7)
+                        .frame(width: cell)
+                }
+            }
+            .padding(.bottom, 6)
+            ForEach(0..<5, id: \.self) { r in
+                HStack(spacing: 6.5) {
+                    ForEach(0..<7, id: \.self) { c in
+                        // Diagonal wave from the first Monday, as the scene.
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(LunarSkeleton.faint)
+                            .frame(width: cell, height: 51)
+                            .cascadeAppear(index: r + c, step: 0.035, cap: 1)
+                    }
+                }
+            }
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(LunarSkeleton.faint)
+                .frame(width: width)
+                .frame(maxHeight: .infinity)
+                .cascadeAppear(index: 1, step: 0.3, cap: 1)
+                .padding(.top, 14)
+                .padding(.bottom, 24)
+        }
+        .frame(width: width, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .padding(.top, monthTop + 8)
+        .padding(.leading, left)
+    }
+
+    /// Day groups of 3, 4, then 3s — whole capsules only (web: agendaGroups).
+    static func groups(height: CGFloat, top: CGFloat) -> [Int] {
+        var groups: [Int] = []
+        var y = top
+        while true {
+            let wanted = groups.isEmpty ? 3 : (groups.count == 1 ? 4 : 3)
+            if !groups.isEmpty { y += groupGap }
+            let fit = Int((height - y + cardGap) / (card + cardGap))
+            guard fit > 0 else { break }
+            let rows = min(wanted, fit)
+            groups.append(rows)
+            y += CGFloat(rows) * (card + cardGap) - cardGap
+            if rows < wanted { break }
+        }
+        return groups
     }
 }
 
@@ -153,6 +311,8 @@ struct AgendaReactView: NSViewRepresentable {
     let agendaTop: CGFloat
     let monthTop: CGFloat
     let occlusion: CGFloat
+    /// False while the page has not painted this mount (loading scene covers it).
+    var onReadyChange: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> AgendaReactCoordinator { AgendaReactCoordinator() }
 
@@ -451,7 +611,7 @@ final class AgendaReactCoordinator: NSObject {
     // Last state sent to the page.
     private var needsFull = true
     private var seq = 0
-    private var revealSeq: Int?
+    private let gate = WebRevealGate()
     private var sentTheme: [String: String]?
     private var sentScale: CGFloat?
     private var sentLayout: AgendaReactLayout?
@@ -487,8 +647,15 @@ final class AgendaReactCoordinator: NSObject {
         webView.autoresizingMask = [.width, .height]
         webView.onAppearanceChange = { [weak self] in self?.appearanceChanged() }
         // Hidden until the page has painted THIS mount: the shared page may
-        // still hold the previous mount's scroll offset.
-        webView.alphaValue = 0
+        // still hold the previous mount's scroll offset. Resent / revealed
+        // by the gate if the confirmation never arrives.
+        gate.resend = { [weak self] in
+            self?.needsFull = true
+            self?.refresh()
+        }
+        gate.onReadyChange = { [weak self] ready in self?.parent?.onReadyChange(ready) }
+        gate.begin(hiding: webView)
+        gate.armed(seq: .max)
         container.addSubview(webView)
         needsFull = true
         subscribe(parent.appState, loader: parent.loader)
@@ -503,6 +670,7 @@ final class AgendaReactCoordinator: NSObject {
     }
 
     func detach() {
+        gate.end()
         cancellables.removeAll()
         parent?.loader.cancel()
         releaseWebView()
@@ -701,7 +869,7 @@ final class AgendaReactCoordinator: NSObject {
             pendingScroll = nil
             changed = true
         }
-        if needsFull { revealSeq = patch.seq }
+        let revealing = needsFull
         needsFull = false
         webView.headerOcclusionHeight = parent.occlusion
         guard changed else { return }
@@ -709,6 +877,7 @@ final class AgendaReactCoordinator: NSObject {
         guard let data = try? Self.encoder.encode(patch),
               let json = String(data: data, encoding: .utf8) else { return }
         host.send(json)
+        if revealing { gate.armed(seq: patch.seq) }
     }
 
     private static let encoder: JSONEncoder = {
@@ -965,10 +1134,7 @@ final class AgendaReactCoordinator: NSObject {
         let key = message["key"] as? String
         switch type {
         case "rendered":
-            if let revealSeq, let seq = message["seq"] as? Int, seq >= revealSeq {
-                self.revealSeq = nil
-                webView?.alphaValue = 1
-            }
+            if let seq = message["seq"] as? Int { gate.acknowledge(seq: seq) }
         case "open", "openMonth":
             guard let key, let event = (type == "open" ? timelineEvents : monthEvents)[key] else { return }
             // Existing detail mutations update AppState's event cache. Seed

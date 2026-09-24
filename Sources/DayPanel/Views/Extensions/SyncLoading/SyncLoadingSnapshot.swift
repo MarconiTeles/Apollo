@@ -1,11 +1,12 @@
 import Foundation
 
-/// The four surfaces that own a sync-aware loading scene.
+/// The surfaces that own a sync-aware loading scene.
 enum SyncLoadingScene: String, Codable, CaseIterable {
     case tasks
     case board
     case comments
     case inbox
+    case agenda
 }
 
 /// Everything a loading scene may say, gathered from `AppState` and
@@ -33,6 +34,10 @@ struct SyncLoadingInputs: Equatable {
     var commentsTotal = 0
     var commentsFound = 0
     var commentsScanCap = 90
+    var googleConnected = false
+    var eventCount = 0
+    var sharedCalendars = 0
+    var monthLoading = false
 
     func state(_ stage: SyncJournal.Stage) -> SyncJournal.State {
         journal[stage] ?? .pending
@@ -81,6 +86,10 @@ struct SyncLoadingSnapshot: Encodable, Equatable {
         var columnWidth: Double
         var columnGap: Double
         var cardWidth: Double
+        /// Ghost card height and whether it carries the indicator row (the
+        /// React board's card; the native board's card has none).
+        var cardHeight: Double = Double(SyncLoadingLayout.boardCard)
+        var indicators = false
     }
 
     var scene: SyncLoadingScene
@@ -100,6 +109,13 @@ struct SyncLoadingSnapshot: Encodable, Equatable {
     var lastSyncedAt: Double?
     var online: Bool
     var geometry: Geometry?
+    /// Agenda body geometry: where the first event card and the month grid
+    /// rest (points from the web view's top), so ghosts sit on the real ones.
+    struct AgendaGeometry: Encodable, Equatable {
+        var eventsTop: Double
+        var monthTop: Double
+    }
+    var agenda: AgendaGeometry?
     var theme: String = "dark"
     var accent: String = "#0A84FF"
 
@@ -181,6 +197,35 @@ struct SyncLoadingSnapshot: Encodable, Equatable {
             metric = Metric(value: input.commentsFound,
                             label: plural(input.commentsFound, "encontrado", "encontrados"))
 
+        case .agenda:
+            let calendar = input.state(.calendar)
+            let landed: Bool = {
+                switch calendar {
+                case .done, .cached: true
+                default: false
+                }
+            }()
+            let events = count(of: calendar) ?? (input.eventCount > 0 ? input.eventCount : nil)
+            steps = [
+                Step(id: "google", label: "Google Agenda",
+                     detail: input.googleConnected ? "Conectada" : "Não conectada",
+                     state: input.googleConnected ? .done : .skipped),
+                Step(id: "events", label: "Eventos",
+                     detail: sourceDetail(calendar, count: events, noun: ("evento", "eventos")),
+                     state: stepState(calendar)),
+                Step(id: "shared", label: "Agendas compartilhadas",
+                     detail: input.sharedCalendars > 0
+                         ? "\(input.sharedCalendars) \(plural(input.sharedCalendars, "agenda", "agendas"))"
+                         : "Só a sua",
+                     state: landed ? .done : (calendar == .active ? .active : .pending)),
+                Step(id: "month", label: "Mês",
+                     detail: input.monthLoading ? "Carregando o mês" : nil,
+                     state: input.monthLoading ? .active : (landed ? .done : .pending)),
+            ]
+            headline = input.online ? "Montando sua agenda" : "Sem conexão"
+            context = Self.today.string(from: Date())
+            if let events { metric = Metric(value: events, label: plural(events, "evento", "eventos")) }
+
         case .inbox:
             let clickUp = input.state(.tasks)
             let calendar = input.state(.calendar)
@@ -251,6 +296,13 @@ struct SyncLoadingSnapshot: Encodable, Equatable {
     }
 
     // MARK: - Copy
+
+    private static let today: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "pt_BR")
+        formatter.dateFormat = "EEEE, d 'de' MMMM"
+        return formatter
+    }()
 
     private static let clock: DateFormatter = {
         let formatter = DateFormatter()

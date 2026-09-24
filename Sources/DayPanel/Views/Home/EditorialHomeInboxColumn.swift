@@ -96,7 +96,6 @@ private struct InboxLoadingFallback: View {
                                                  gap: SyncLoadingLayout.inboxGap)
         LunarSkeletonSurface {
             VStack(spacing: SyncLoadingLayout.inboxGap) {
-                Color.clear.frame(height: SyncLoadingLayout.inboxTop - SyncLoadingLayout.inboxGap)
                 ForEach(0..<capsules, id: \.self) { i in
                     capsule(i)
                 }

@@ -566,7 +566,7 @@ body,
 }
 
 .task-groups {
-  margin-top: 16px;
+  margin-top: 0;
 }
 
 .task-group + .task-group {
@@ -596,7 +596,13 @@ body,
 .status-dot {
   width: 7px;
   height: 7px;
+  flex: none;
   border-radius: 50%;
+  background: var(--bone);
+  transition: background-color 0.5s var(--ease-out);
+}
+
+.status-dot[data-known] {
   background: var(--status);
 }
 
@@ -620,6 +626,16 @@ body,
 .group-header {
   animation: cascade-in 0.6s var(--ease-out) both;
   animation-delay: calc(var(--r) * 32ms);
+}
+
+/* Every entry waits for the scene to be on screen: Swift sets data-play
+   when the surface appears (after the 0.5 s tolerance). Run from page load,
+   the cascade was over before anyone saw it and the shapes just popped in. */
+:root:not([data-play]) .scene,
+:root:not([data-play]) .scene *,
+:root:not([data-play]) .scene *::before,
+:root:not([data-play]) .scene *::after {
+  animation-play-state: paused !important;
 }
 
 /* Rows, cards and capsules land one after another over the native
@@ -700,6 +716,182 @@ body,
   }
 }
 
+/* ═════════════════════════ Agenda ══════════════════════════════════════ */
+
+.agenda-timeline {
+  position: absolute;
+  left: 0;
+  padding: 0 26px 0 36px;
+}
+
+.scene-agenda .console {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  animation: rise 0.55s var(--ease-out) 0.06s both;
+}
+
+/* 40 + 16 + 18 = 74 pt above the first capsule, reserved by the native
+   fallback (AgendaLoadingPlaceholder.consoleReserve). */
+.scene-agenda .steps-inline {
+  flex-wrap: nowrap;
+  height: 16px;
+  overflow: hidden;
+  animation: rise 0.55s var(--ease-out) 0.12s both;
+}
+
+.agenda-days {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 0;
+}
+
+.agenda-day {
+  display: flex;
+  align-items: flex-start;
+}
+
+.day-marker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 55px;
+  flex: none;
+  animation: cascade-in 0.6s var(--ease-out) both;
+  animation-delay: calc(var(--r) * 32ms);
+}
+
+.day-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The event card: a soft capsule of the calendar colour's family, with the
+   title/time lines and the attendee disc — the timeline's real card. */
+.event-capsule {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 47px;
+  padding: 0 12px 0 16px;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--card));
+  box-shadow: inset 0 0 0 0.5px var(--rule);
+  animation: cascade-in 0.6s var(--ease-out) both;
+  animation-delay: calc(var(--i) * 40ms);
+  transition: background-color 0.5s var(--ease-out);
+  transition-delay: calc(var(--i) * 45ms);
+}
+
+.event-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Events started landing: the capsules take their calendar tint. */
+.event-capsule[data-lit] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--card));
+}
+
+.event-capsule[data-wave="a"] {
+  animation: wave-a 0.9s var(--ease-out) calc(var(--i) * 45ms) both;
+}
+
+.event-capsule[data-wave="b"] {
+  animation: wave-b 0.9s var(--ease-out) calc(var(--i) * 45ms) both;
+}
+
+.agenda-month {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+}
+
+.month-weekdays {
+  display: flex;
+  height: 14px;
+  margin-bottom: 12px;
+}
+
+.month-weekdays span {
+  display: flex;
+  justify-content: flex-start;
+  padding-left: 6px;
+  animation: cascade-in 0.6s var(--ease-out) both;
+}
+
+.month-grid {
+  display: grid;
+}
+
+.month-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 9px 8px 8px;
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 0.5px var(--rule);
+  animation: cascade-in 0.6s var(--ease-out) both;
+  animation-delay: calc(var(--i) * 35ms);
+}
+
+.day-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 20px;
+  padding: 18px 22px;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 0.5px var(--rule);
+  animation: rise 0.6s var(--ease-out) 0.3s both;
+}
+
+.panel-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  animation: cascade-in 0.6s var(--ease-out) both;
+  animation-delay: calc(360ms + (var(--r) - 8) * 60ms);
+}
+
+.panel-time {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  width: 48px;
+  flex: none;
+}
+
+.panel-bar {
+  width: 3px;
+  height: 40px;
+  flex: none;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.panel-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* ═════════════════════════ Quadro ══════════════════════════════════════ */
 
 .board-column {
@@ -710,22 +902,24 @@ body,
 }
 
 .ghost-card {
-  animation: card-in 0.7s var(--ease-out) both;
-  animation-delay: calc(var(--col) * 80ms + var(--k) * 55ms);
+  /* The Tarefas cascade, as one diagonal wave across the columns. */
+  animation: cascade-in 0.6s var(--ease-out) both;
+  animation-delay: calc((var(--col) + var(--k) * 1.5) * 60ms);
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 12px;
-  border-radius: 6px;
+  /* The real card: BoardCardLayout.radius, 0.5pt rule inside its bounds. */
+  border-radius: 13.2px;
   background: var(--page);
-  border: 0.5px solid color-mix(in srgb, var(--rule) 40%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--rule);
 }
 
-@keyframes card-in {
-  from {
-    opacity: 0.2;
-    transform: translateY(10px) scale(0.985);
-  }
+.card-indicators {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 10px;
 }
 
 .card-crumb,
@@ -1226,7 +1420,7 @@ body,
   display: flex;
   flex-direction: column;
   gap: 9px;
-  margin-top: 18px;
+  margin-top: 0;
 }
 
 .capsule {
@@ -1325,8 +1519,16 @@ body,
   }
 
   .task-row,
+  .event-capsule,
+  .month-cell,
+  .day-marker,
+  .day-panel,
+  .scene-agenda .console,
+  .scene-agenda .steps-inline,
   .group-header,
   .ghost-card,
+  .month-weekdays span,
+  .panel-row,
   .comment-card,
   .capsule,
   .scene-tasks .console,

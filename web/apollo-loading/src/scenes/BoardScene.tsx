@@ -1,13 +1,7 @@
 import { Bone } from "../components/Bone";
-import { Elapsed } from "../components/Elapsed";
-import { Metric } from "../components/Metric";
-import { MoonPhase } from "../components/MoonPhase";
-import { ProgressRail } from "../components/ProgressRail";
-import { StepsInline } from "../components/Steps";
-import { replay, seeded, useArrivals, useCreep } from "../lib/motion";
+import { replay, seeded, useArrivals } from "../lib/motion";
 import type { Snapshot } from "../lib/types";
 import { fitting, useViewport } from "../lib/viewport";
-import { tone } from "./TasksScene";
 
 // Quadro — "columns filling up".
 //
@@ -19,23 +13,21 @@ import { tone } from "./TasksScene";
 // an intake line from its header: while cards are being fetched a packet of
 // light runs down it, and every batch that lands makes the cards settle in
 // sequence. Card status dots take their column's colour once the structure
-// is known. A floating capsule, centred in the visible canvas, reports the
-// sync.
+// is known. No words or numbers: shapes and light only.
 
-const CARD = 106;
+const CARD = 106; // native board card (SyncLoadingLayout.boardCard)
 const CARD_GAP = 12;
-/** Capsule (64) + its bottom margin (28) + breathing room (16): cards stop
- *  above it instead of running underneath. Mirrored in Swift. */
-const CAPSULE_RESERVE = 108;
-const DEFAULT_GEOMETRY = { top: 150, leading: 220, columnX: 258, columnWidth: 260, columnGap: 20, cardWidth: 240 };
+/** Bottom margin of the lanes (no status capsule). Mirrored in Swift. */
+const CAPSULE_RESERVE = 24;
+const DEFAULT_GEOMETRY: NonNullable<Snapshot["geometry"]> = { top: 150, leading: 220, columnX: 258, columnWidth: 260, columnGap: 20, cardWidth: 240 };
 
 export function BoardScene({ s }: { s: Snapshot }) {
-  const progress = useCreep(s.progress, s.ceiling);
   const settle = useArrivals(s.metric?.value);
   const { h } = useViewport();
   const g = s.geometry ?? DEFAULT_GEOMETRY;
   const columns = s.columns.length > 0 ? s.columns : Array.from({ length: 5 }, () => null);
-  const cards = fitting(h - CAPSULE_RESERVE, g.top, CARD, CARD_GAP);
+  const cardHeight = g.cardHeight ?? CARD;
+  const cards = fitting(h - CAPSULE_RESERVE, g.top, cardHeight, CARD_GAP);
   const fetching = s.steps.some((step) => step.id === "tasks" && step.state === "active");
 
   return (
@@ -77,11 +69,17 @@ export function BoardScene({ s }: { s: Snapshot }) {
                     <Bone h={13} r={3} c={2} />
                     <Bone w={Math.round(110 + seeded(n + 5) * 70)} h={13} r={3} c={3} />
                   </div>
+                  {g.indicators && (
+                    <div className="card-indicators">
+                      <Bone w={12} h={10} r={3} tone="faint" c={4} />
+                      <Bone w={22} h={10} r={3} tone="faint" c={5} />
+                    </div>
+                  )}
                   <div className="card-footer">
-                    <Bone h={18} round c={4} />
-                    <Bone w={60} h={9} r={3} tone="secondary" c={5} />
+                    <Bone h={18} round c={6} />
+                    <Bone w={60} h={9} r={3} tone="secondary" c={7} />
                     <span className="row-spacer" />
-                    <Bone w={48} h={9} r={3} tone="faint" c={6} />
+                    <Bone w={48} h={9} r={3} tone="faint" c={8} />
                   </div>
                 </div>
               );
@@ -90,23 +88,6 @@ export function BoardScene({ s }: { s: Snapshot }) {
         );
       })}
 
-      <aside className="board-capsule">
-        <MoonPhase value={progress} tone={tone(s)} size={24} />
-        <div className="console-text">
-          <h1 className="headline">{s.headline}</h1>
-          {s.context && <p className="context">{s.context}</p>}
-        </div>
-        <span className="capsule-rule" />
-        <div className="capsule-steps">
-          <ProgressRail steps={s.steps} value={progress} />
-          <StepsInline steps={s.steps.filter((step) => step.id !== "account")} />
-        </div>
-        <span className="capsule-rule" />
-        <div className="console-aside">
-          <Metric value={s.metric?.value ?? 0} label={s.metric?.label ?? "cartões"} />
-          <Elapsed since={s.startedAt} />
-        </div>
-      </aside>
     </main>
   );
 }

@@ -43,6 +43,8 @@ struct MyTasksReactList: NSViewRepresentable {
     let onListFileDragChanged: (Bool) -> Void
     /// Finder files dropped on the list while 2+ tasks are selected.
     let onListFileDrop: ([URL]) -> Void
+    /// False while the page has not painted this mount (loading scene covers it).
+    var onReadyChange: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> MyTasksReactCoordinator { MyTasksReactCoordinator() }
 
@@ -408,7 +410,7 @@ final class MyTasksReactCoordinator: NSObject, MyTasksReactFileDropDelegate {
     private var needsFull = true
     private var pendingResetScroll = true
     private var seq = 0
-    private var revealSeq: Int?
+    private let gate = WebRevealGate()
 
     private var tasksById: [String: CUTask] = [:]
     private var orderedTasks: [CUTask] = []
@@ -442,7 +444,15 @@ final class MyTasksReactCoordinator: NSObject, MyTasksReactFileDropDelegate {
         webView.onAppearanceChange = { [weak self] in self?.appearanceChanged() }
         // Hidden until the page has painted THIS list: the shared page may
         // still hold the previous mount's rows and scroll offset.
-        webView.alphaValue = 0
+        gate.onReadyChange = { [weak self] ready in self?.parent?.onReadyChange(ready) }
+        gate.resend = { [weak self] in
+            guard let self else { return }
+            self.needsFull = true
+            self.pendingResetScroll = true
+            self.refresh()
+        }
+        gate.begin(hiding: webView)
+        gate.armed(seq: .max)
         container.addSubview(webView)
         for anchor in [statusAnchor, originAnchor] where anchor.superview !== webView {
             webView.addSubview(anchor)
@@ -454,6 +464,7 @@ final class MyTasksReactCoordinator: NSObject, MyTasksReactFileDropDelegate {
     }
 
     func detach() {
+        gate.end()
         cancellables.removeAll()
         statusBubble.dismiss(animated: false)
         for id in watchedTasks.keys { TaskReviewUpdateStore.shared.unwatch(taskId: id) }
@@ -598,10 +609,11 @@ final class MyTasksReactCoordinator: NSObject, MyTasksReactFileDropDelegate {
             sentScale = scale
             changed = true
         }
+        var revealing = false
         if pendingResetScroll {
             patch.resetScroll = true
             pendingResetScroll = false
-            revealSeq = patch.seq
+            revealing = true
         }
         needsFull = false
         webView.headerOcclusionHeight = parent.headerOcclusionHeight
@@ -611,6 +623,7 @@ final class MyTasksReactCoordinator: NSObject, MyTasksReactFileDropDelegate {
         guard let data = try? Self.encoder.encode(patch),
               let json = String(data: data, encoding: .utf8) else { return }
         host.send(json)
+        if revealing { gate.armed(seq: patch.seq) }
     }
 
     private static let encoder: JSONEncoder = {
@@ -869,10 +882,7 @@ final class MyTasksReactCoordinator: NSObject, MyTasksReactFileDropDelegate {
         let task = (message["id"] as? String).flatMap { tasksById[$0] }
         switch type {
         case "rendered":
-            if let revealSeq, let seq = message["seq"] as? Int, seq >= revealSeq {
-                self.revealSeq = nil
-                webView?.alphaValue = 1
-            }
+            if let seq = message["seq"] as? Int { gate.acknowledge(seq: seq) }
         case "activate":
             guard let task, !appState.anyPopupOpen else { return }
             var flags: NSEvent.ModifierFlags = []

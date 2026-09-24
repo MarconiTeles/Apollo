@@ -260,16 +260,22 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayRows, offsets, state.insets]);
 
-  // ── Ack every patch after it is painted (native reveal / sequencing) ─
+  // ── Ack patches after they are painted (native reveal / sequencing) ─
+  // One pending double-frame at a time that reports the LATEST seq when it
+  // fires. Cancelling on every new patch (the previous version) starved the
+  // acknowledgement during a patch burst and left the list hidden.
+  const ackSeq = useRef(0);
+  const ackPending = useRef(false);
   useEffect(() => {
-    let second = 0;
-    const first = requestAnimationFrame(() => {
-      second = requestAnimationFrame(() => post({ type: "rendered", seq: state.seq }));
-    });
-    return () => {
-      cancelAnimationFrame(first);
-      cancelAnimationFrame(second);
-    };
+    ackSeq.current = state.seq;
+    if (ackPending.current) return;
+    ackPending.current = true;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        ackPending.current = false;
+        post({ type: "rendered", seq: ackSeq.current });
+      }),
+    );
   }, [state.seq]);
 
   // ── Native hooks (file drags from Finder are handled natively) ─────

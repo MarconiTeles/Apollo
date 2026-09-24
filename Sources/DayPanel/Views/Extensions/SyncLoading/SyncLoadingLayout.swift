@@ -36,13 +36,16 @@ enum SyncLoadingLayout {
 
     // Item metrics of the scenes (see styles.css).
     static let boardCard: CGFloat = 106
+    /// React board card: + indicator row (8 + 14) = 128 pt.
+    static let boardReactCard: CGFloat = 128
     static let boardCardGap: CGFloat = 12
-    /// Capsule (64) + bottom margin (28) + breathing room (16).
-    static let boardCapsuleReserve: CGFloat = 108
-    static let commentsTop: CGFloat = 112
+    /// Bottom margin of the lanes. The scenes carry no text block or status
+    /// capsule — shapes only — so nothing else is reserved.
+    static let boardCapsuleReserve: CGFloat = 24
+    static let commentsTop: CGFloat = 0
     static let commentCard: CGFloat = 116
     static let commentGap: CGFloat = 12
-    static let inboxTop: CGFloat = 166.5
+    static let inboxTop: CGFloat = 0
     static let inboxCapsule: CGFloat = 58
     static let inboxGap: CGFloat = 9
 }

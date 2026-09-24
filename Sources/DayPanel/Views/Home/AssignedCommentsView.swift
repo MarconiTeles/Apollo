@@ -320,7 +320,6 @@ private struct CommentsLoadingFallback: View {
                                               size: SyncLoadingLayout.commentCard,
                                               gap: SyncLoadingLayout.commentGap)
         VStack(spacing: SyncLoadingLayout.commentGap) {
-            Color.clear.frame(height: SyncLoadingLayout.commentsTop - SyncLoadingLayout.commentGap)
             ForEach(0..<cards, id: \.self) { _ in CommentSkeletonCard() }
         }
         .padding(.horizontal, 28)

@@ -90,6 +90,27 @@ function snapshotAt(t: number, startedAt: number): Snapshot {
     return { ...base, headline: "Buscando novidades", context: "Última sincronização às 14:32", steps, ...progressOf(steps) };
   }
 
+  if (scene === "agenda") {
+    const calendar = pick(t, [[0.3, "active"], [3.2, "done"]]);
+    const events = stream(t, 1.0, 3.2, [8, 19, 31]);
+    const month = pick(t, [[3.2, "active"], [4.0, "done"]]);
+    const steps: Step[] = [
+      { id: "google", label: "Google Agenda", detail: "Conectada", state: "done" },
+      { id: "events", label: "Eventos", detail: calendar === "done" ? "31 eventos" : events ? `${events} eventos…` : "Lendo", state: calendar },
+      { id: "shared", label: "Agendas compartilhadas", detail: "9 agendas", state: calendar === "done" ? "done" : calendar },
+      { id: "month", label: "Mês", detail: month === "active" ? "Carregando o mês" : null, state: month },
+    ];
+    return {
+      ...base,
+      headline: "Montando sua agenda",
+      context: "quinta-feira, 24 de setembro",
+      steps,
+      ...progressOf(steps),
+      metric: events ? { value: calendar === "done" ? 31 : events, label: "eventos" } : null,
+      agenda: { eventsTop: 106, monthTop: 106 },
+    };
+  }
+
   const structure = pick(t, [[0.2, "active"], [1.0, "done"]]);
   const tasksState = pick(t, [[1.0, "active"], [4.2, "done"]]);
   const received = stream(t, 1.5, 4.2, [100, 200, 300, 346]);
@@ -117,7 +138,11 @@ function snapshotAt(t: number, startedAt: number): Snapshot {
     ...progressOf(steps),
     metric: received ? { value: tasksState === "done" ? 346 : received, label: isBoard ? "cartões" : "tarefas" } : null,
     columns: structure === "done" || isBoard ? (structure === "done" ? STATUSES : STATUSES.map(() => ({ name: "", color: "transparent" }))) : [],
-    geometry: isBoard ? { top: 150, leading: 220, columnX: 258, columnWidth: 260, columnGap: 20, cardWidth: 240 } : null,
+    geometry: isBoard
+      ? params.get("board") === "react"
+        ? { top: 124, leading: 220, columnX: 227.5, columnWidth: 260, columnGap: 20, cardWidth: 240, cardHeight: 128, indicators: true }
+        : { top: 150, leading: 220, columnX: 258, columnWidth: 260, columnGap: 20, cardWidth: 240 }
+      : null,
   };
 }
 
@@ -128,6 +153,7 @@ const DEMO_CSS = `
   html[data-theme="light"] body { background: #f5f5f6; }
   .scene-tasks, .scene-comments { top: 82px; left: 220px; }
   .scene-inbox { top: 150px; left: calc(50% + 110px); }
+  .scene-agenda { left: 220px; }
 `;
 
 export function startDemo() {

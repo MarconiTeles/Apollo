@@ -14,7 +14,11 @@ final class SyncLoadingController: NSObject, ObservableObject {
     @Published private(set) var isReady = false
     @Published private(set) var webView: WKWebView?
     private var lastPushed: SyncLoadingSnapshot?
+    /// What the page actually has (bootstrap or last `update`).
+    private var delivered: SyncLoadingSnapshot?
     private var readyWatchdog: Timer?
+    /// The scene's motion was started (`data-play`).
+    private var playing = false
 
     private static let log = Logger(subsystem: "com.painellunar.app", category: "SyncLoading")
     /// Past this the scene would appear after most loads already finished —
@@ -44,6 +48,8 @@ final class SyncLoadingController: NSObject, ObservableObject {
         self.webView = webView
         isReady = false
         lastPushed = initial
+        delivered = initial
+        playing = false
         readyWatchdog = Timer.scheduledTimer(withTimeInterval: Self.readyTimeout, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, !self.isReady else { return }
@@ -53,11 +59,31 @@ final class SyncLoadingController: NSObject, ObservableObject {
         }
     }
 
-    /// Sends a new snapshot; identical snapshots are dropped.
+    /// Sends a new snapshot; identical snapshots are dropped. Until the page
+    /// reports `ready` it is only remembered: the scene then still shows the
+    /// bootstrap, and a geometry that changed meanwhile (the header measured
+    /// right after mount) would otherwise be lost for the scene's lifetime.
     func push(_ snapshot: SyncLoadingSnapshot) {
-        guard snapshot != lastPushed, let webView, let json = Self.json(snapshot) else { return }
+        guard snapshot != lastPushed, webView != nil else { return }
         lastPushed = snapshot
-        webView.evaluateJavaScript("window.apolloLoading && window.apolloLoading.update(\(json))")
+        if isReady { deliver(snapshot) }
+    }
+
+    private func deliver(_ snapshot: SyncLoadingSnapshot, then done: (() -> Void)? = nil) {
+        guard let webView, let json = Self.json(snapshot) else { done?(); return }
+        delivered = snapshot
+        webView.evaluateJavaScript("window.apolloLoading && window.apolloLoading.update(\(json))") { _, _ in
+            done?()
+        }
+    }
+
+    /// Starts the scene's motion. The page holds every animation paused at
+    /// its first frame until this, so the entry cascade plays when the
+    /// surface is actually visible, not behind the half-second tolerance.
+    func play() {
+        guard let webView, isReady, !playing else { return }
+        playing = true
+        webView.evaluateJavaScript("document.documentElement.dataset.play = ''")
     }
 
     func tearDown() {
@@ -70,6 +96,8 @@ final class SyncLoadingController: NSObject, ObservableObject {
         webView.removeFromSuperview()
         self.webView = nil
         lastPushed = nil
+        delivered = nil
+        playing = false
         isReady = false
     }
 
@@ -81,7 +109,18 @@ final class SyncLoadingController: NSObject, ObservableObject {
         case "ready":
             guard webView != nil else { return }
             readyWatchdog?.invalidate()
-            isReady = true
+            // Changes made while the page was still booting had nowhere to
+            // go (no `window.apolloLoading` yet). Send the latest one and only
+            // then cross-fade, so the scene never shows the stale bootstrap
+            // (e.g. its cards 47pt low, under the provisional header height).
+            if let lastPushed, lastPushed != delivered {
+                deliver(lastPushed) { [weak self] in
+                    guard let self, self.webView != nil else { return }
+                    self.isReady = true
+                }
+            } else {
+                isReady = true
+            }
         case "error":
             let detail = message["message"] as? String ?? "unknown"
             Self.log.error("ApolloLoading script error: \(detail, privacy: .public)")

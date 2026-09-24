@@ -2316,6 +2316,11 @@ final class ClickUpService {
             // Uploader id lives under `user.id` on the
             // structured attachment payload.
             let uploaderId = (raw["user"] as? [String: Any])?["id"] as? Int
+            let thumbnail = ["thumbnail_large", "thumbnail_medium", "thumbnail_small"]
+                .lazy.compactMap { raw[$0] as? String }.first { !$0.isEmpty }
+            let dateAdded = ((raw["date"] as? String).flatMap(Double.init)
+                ?? (raw["date"] as? Double))
+                .map { Date(timeIntervalSince1970: $0 / 1000) }
 
             byURL[url] = CUTask.Attachment(
                 id:               id,
@@ -2325,7 +2330,9 @@ final class ClickUpService {
                 sizeString:       sizeStr,
                 totalComments:    totalComments,
                 resolvedComments: resolvedComments,
-                uploaderId:       uploaderId
+                uploaderId:       uploaderId,
+                thumbnailURL:     thumbnail,
+                dateAdded:        dateAdded
             )
         }
 

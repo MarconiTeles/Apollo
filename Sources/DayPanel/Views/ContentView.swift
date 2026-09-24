@@ -1431,6 +1431,8 @@ struct ContentView: View {
                 .help("Nova tarefa")
                 .accessibilityIdentifier("newTaskButton")
             }
+            // 10pt more breathing room from the sidebar on every screen.
+            .padding(.leading, 10)
             .toolbarControl(disabled: anyPopupOpen, hidden: setupOwnsWindow)
         }
         .sharedBackgroundVisibility(.hidden)
@@ -1481,6 +1483,17 @@ struct ContentView: View {
             ToolbarSpacer(.fixed)
         }
 
+        #if APOLLO_BOARD_REACT
+        if sidebarRoute == .board && BoardReactRenderer.usesReact {
+            ToolbarItem {
+                ToolbarGlassGroup { BoardReactToolbarMenus(preferences: .shared) }
+                    .toolbarControl(disabled: anyPopupOpen, hidden: setupOwnsWindow)
+            }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.fixed)
+        }
+        #endif
+
         if appState.clickUpAuthService.isConnected {
             ToolbarItem {
                 ToolbarGlassGroup { listPickerToolbarButton }
@@ -1492,10 +1505,23 @@ struct ContentView: View {
 
         ToolbarItem {
             ToolbarGlassGroup {
+                // On the React board the magnifier searches the board (it
+                // expands into a native field); ⌘K still opens the palette.
+                #if APOLLO_BOARD_REACT
+                if boardOwnsSearch {
+                    BoardToolbarSearch(preferences: .shared)
+                } else {
+                    Button(action: openSearch) {
+                        Label("Buscar", systemImage: "magnifyingglass")
+                    }
+                    .help("Buscar (⌘K)")
+                }
+                #else
                 Button(action: openSearch) {
                     Label("Buscar", systemImage: "magnifyingglass")
                 }
                 .help("Buscar (⌘K)")
+                #endif
                 Button(action: toggleNotifications) {
                     Label("Notificações", systemImage: "bell")
                         .overlay(alignment: .topTrailing) {
@@ -1525,6 +1551,14 @@ struct ContentView: View {
             }
             .sharedBackgroundVisibility(.hidden)
         }
+    }
+
+    private var boardOwnsSearch: Bool {
+        #if APOLLO_BOARD_REACT
+        sidebarRoute == .board && BoardReactRenderer.usesReact
+        #else
+        false
+        #endif
     }
 
     /// Type, resolved and period in one native menu; the glyph turns
@@ -1710,6 +1744,9 @@ struct ContentView: View {
             case .board:
                 EditorialBoardView()
                     .environmentObject(appState)
+                    #if APOLLO_BOARD_REACT
+                    .modifier(BoardReactSearchModifier(preferences: .shared))
+                    #endif
                     // The board keeps drawing edge-to-edge UNDER the system
                     // sidebar: its view extends into the column's leading
                     // safe area, and the resting inset comes from the

@@ -1,0 +1,803 @@
+/* Apollo · Quadro — the native board's editorial language (BoardCard,
+ * StatusGlassPill, finderHeaderMaterial) carrying ClickUp's board features.
+ *
+ * Sizes follow Apollo's type scale: Editorial.sans(x) = x × 0.85 pt.
+ * Colours arrive from Swift (`theme`), resolved by AppKit under the
+ * current appearance; the values below only serve the browser fixture. */
+
+:root {
+  /* Native spring (response 0.30, damping 0.73) and strong ease-out. */
+  --spring: cubic-bezier(0.3, 1.3, 0.5, 1);
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+
+  --paper: #f5f5f4;
+  --page: #ffffff;
+  --ink: #141416;
+  --ink-soft: rgba(20, 20, 22, 0.78);
+  --ink-mute: rgba(20, 20, 22, 0.56);
+  --ink-faint: rgba(20, 20, 22, 0.36);
+  --rule: rgba(20, 20, 22, 0.1);
+  --rule-soft: rgba(20, 20, 22, 0.06);
+  --accent: #0a84ff;
+  --on-accent: #ffffff;
+  --overdue: #ff3b30;
+  --prio-1: #a8392a;
+  --prio-2: #9a7b1f;
+  --prio-3: #56708a;
+  --prio-4: #7c7e84;
+  --cover-bg: rgba(20, 20, 22, 0.05);
+
+  --col-w: 260px;
+  --card-radius: 13.2px;
+  --inset-top: 52px;
+  --inset-leading: 217.5px;
+  --inset-bottom: 24px;
+  --inset-overlay: 0px;
+
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  font-size: 11.05px;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  font-synthesis: none;
+}
+
+:root.dark {
+  --paper: #1c1c1e;
+  --page: #2a2a2d;
+  --ink: #ffffff;
+  --ink-soft: rgba(255, 255, 255, 0.78);
+  --ink-mute: rgba(255, 255, 255, 0.55);
+  --ink-faint: rgba(255, 255, 255, 0.34);
+  --rule: rgba(255, 255, 255, 0.07);
+  --rule-soft: rgba(255, 255, 255, 0.045);
+  --cover-bg: rgba(255, 255, 255, 0.05);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html.demo body {
+  background: var(--paper);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+  cursor: default;
+}
+
+button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 0;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* ── Shell ─────────────────────────────────────────────────────────── */
+
+.app {
+  position: fixed;
+  inset: 0;
+}
+
+.app[data-inert] {
+  pointer-events: none;
+}
+
+.app[data-size="s"] {
+  --col-w: 236px;
+}
+
+.app[data-size="l"] {
+  --col-w: 300px;
+}
+
+/* The page is as wide as its columns; AppKit scrolls it horizontally. */
+.board {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.columns {
+  display: flex;
+  gap: 20px;
+  height: 100%;
+  width: max-content;
+  padding: 0 28px 0 var(--inset-leading);
+}
+
+/* ── Columns ───────────────────────────────────────────────────────── */
+
+.column {
+  position: relative;
+  flex: none;
+  width: var(--col-w);
+  height: 100%;
+  border-radius: 8px;
+  transition: background-color 120ms var(--ease), box-shadow 120ms var(--ease);
+}
+
+/* Native drop wash: page at 65% and an accent hairline. */
+.column[data-drop] {
+  background: color-mix(in srgb, var(--page) 65%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  color: var(--ink-mute);
+  transition: background-color 120ms var(--ease), color 120ms var(--ease);
+}
+
+.icon-button:hover {
+  background: var(--rule-soft);
+  color: var(--ink-soft);
+}
+
+/* The lane scrolls from the window top so cards pass behind the native
+   header material. Rest position = BoardColumnMetrics: header + 8 + 20 + 6
+   on top, 8 + 24 + 8 at the end. */
+.column-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  scrollbar-width: none;
+  padding: calc(var(--inset-top) + 34px) 10px
+    calc(var(--inset-bottom) + 16px + var(--inset-overlay));
+}
+
+.column-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.column-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.add-task {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 10px;
+  color: var(--ink-faint);
+  font-size: 10.2px;
+  font-weight: 500;
+  transition: background-color 120ms var(--ease), color 120ms var(--ease);
+}
+
+.add-task:hover {
+  background: var(--rule-soft);
+  color: var(--ink-soft);
+}
+
+.drop-slot {
+  border-radius: var(--card-radius);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  animation: slot-in 200ms var(--ease) both;
+}
+
+@keyframes slot-in {
+  from {
+    opacity: 0;
+    transform: scaleY(0.94);
+  }
+}
+
+.column-collapsed {
+  width: 44px;
+}
+
+.collapsed-strip {
+  position: absolute;
+  top: calc(var(--inset-top) + 10px);
+  bottom: var(--inset-bottom);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-radius: 12px;
+  color: var(--lane);
+  transition: background-color 120ms var(--ease);
+}
+
+.collapsed-strip:hover {
+  background: var(--rule-soft);
+}
+
+.collapsed-count {
+  font-size: 9.35px;
+  font-weight: 600;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.collapsed-label {
+  writing-mode: vertical-rl;
+  font-size: 8.925px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.empty-search {
+  position: absolute;
+  top: calc(var(--inset-top) + 28px);
+  left: var(--inset-leading);
+  color: var(--ink-faint);
+  font-size: 11.05px;
+}
+
+/* ── Card (BoardCard) ──────────────────────────────────────────────── */
+
+.card {
+  position: relative;
+  border-radius: var(--card-radius);
+  background: var(--page);
+  overflow: hidden;
+  outline: none;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
+  transition:
+    transform 300ms var(--spring),
+    box-shadow 300ms var(--spring),
+    opacity 200ms var(--ease),
+    background-color 140ms var(--ease);
+}
+
+/* strokeBorder(rule, 0.5): the hairline sits INSIDE the card bounds, over
+   the cover too, exactly where the native card draws it. */
+.card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 0.5px var(--rule);
+  pointer-events: none;
+}
+
+@starting-style {
+  .card {
+    opacity: 0;
+  }
+}
+
+/* Hover lift with the status-coloured shadow, like the native card. */
+.card:hover {
+  z-index: 1;
+  transform: translateY(-1px) scale(1.018);
+  box-shadow: 0 1.5px 6px color-mix(in srgb, var(--tint) 34%, transparent);
+}
+
+.card[data-selected] {
+  background: color-mix(in srgb, var(--accent) 7.5%, var(--page));
+  box-shadow: 0 0 0 1.1px color-mix(in srgb, var(--accent) 58%, transparent),
+    0 1.5px 7px color-mix(in srgb, var(--tint) 16%, transparent);
+}
+
+.card[data-dragging] {
+  opacity: 0.35;
+  transform: scale(0.98);
+}
+
+.card-cover {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: var(--cover-bg);
+  overflow: hidden;
+}
+
+.card[data-size="s"] .card-cover {
+  aspect-ratio: 2.4 / 1;
+}
+
+.card-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 320ms var(--ease);
+}
+
+.card-cover[data-ready] img {
+  opacity: 1;
+}
+
+.card-body {
+  padding: 12px;
+}
+
+.card[data-size="s"] .card-body {
+  padding: 10px;
+}
+
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 16px;
+  margin-bottom: 10px;
+}
+
+.status-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tint);
+}
+
+.crumb {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-mute);
+  font-size: 8.075px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* PriorityChip: dot + spaced caps on a 10% capsule of the priority hue. */
+.priority-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 8.075px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  background: color-mix(in srgb, var(--p) 10%, transparent);
+  color: var(--p);
+  transition: background-color 120ms var(--ease);
+}
+
+.p1 { --p: var(--prio-1); }
+.p2 { --p: var(--prio-2); }
+.p3 { --p: var(--prio-3); }
+.p4 { --p: var(--prio-4); }
+
+/* A set normal/low priority: the flag stays visible in its hue. */
+.ghost-icon.set {
+  opacity: 1;
+  color: var(--p);
+}
+
+.priority-chip:hover {
+  background: color-mix(in srgb, var(--p) 18%, transparent);
+}
+
+.priority-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.card-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 11.05px;
+  line-height: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.card[data-closed] .card-title {
+  color: var(--ink-mute);
+}
+
+.card[data-size="s"] .card-title {
+  -webkit-line-clamp: 2;
+}
+
+.card[data-size="l"] .card-title {
+  -webkit-line-clamp: 4;
+  font-size: 11.9px;
+  line-height: 15px;
+}
+
+.card-indicators {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 8px;
+  color: var(--ink-faint);
+  font-size: 9.35px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 14px;
+}
+
+.indicator[data-done] {
+  color: var(--ink-mute);
+}
+
+.indicator-button {
+  padding: 0 3px;
+  margin: 0 -3px;
+  border-radius: 4px;
+  transition: background-color 120ms var(--ease);
+}
+
+.indicator-button:hover {
+  background: var(--rule-soft);
+  color: var(--ink-mute);
+}
+
+.indicator-chevron {
+  transition: transform 200ms var(--ease);
+}
+
+.indicator-button[aria-expanded="true"] .indicator-chevron {
+  transform: rotate(180deg);
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px -3px 0;
+  padding: 2px 3px;
+  border-radius: 6px;
+  text-align: left;
+  transition: background-color 120ms var(--ease);
+}
+
+.tag-row:hover {
+  background: var(--rule-soft);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  max-width: 130px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 7.65px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-soft);
+  background: var(--rule-soft);
+}
+
+.card-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 18px;
+  margin-top: 10px;
+}
+
+.footer-spacer {
+  flex: 1;
+}
+
+/* Footer fields are quiet until pointed at: a soft wash, no borders. */
+.assignee,
+.due,
+.ghost-icon {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  transition: background-color 120ms var(--ease), color 120ms var(--ease), opacity 160ms var(--ease);
+}
+
+.assignee {
+  gap: 8px;
+  min-width: 0;
+  max-width: 150px;
+  padding: 2px 5px 2px 2px;
+  margin: -2px 0 -2px -2px;
+}
+
+.assignee-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-soft);
+  font-size: 9.775px;
+  font-weight: 500;
+}
+
+.assignee.unassigned .assignee-name {
+  color: var(--ink-faint);
+}
+
+.due {
+  gap: 3px;
+  padding: 2px 4px;
+  margin: -2px -4px -2px 0;
+}
+
+.due-text {
+  color: var(--ink-mute);
+  font-size: 9.35px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.due-arrow {
+  color: var(--ink-faint);
+}
+
+.due-text[data-tone="today"],
+.due-text[data-tone="today"] + .due-arrow {
+  color: var(--accent);
+}
+
+.due-text[data-tone="overdue"],
+.due-text[data-tone="overdue"] + .due-arrow {
+  color: var(--overdue);
+}
+
+.ghost-icon {
+  justify-content: center;
+  width: 20px;
+  height: 18px;
+  color: var(--ink-faint);
+  opacity: 0;
+}
+
+.card:hover .ghost-icon,
+.card[data-empty-fields] .ghost-icon,
+.ghost-icon:focus-visible {
+  opacity: 1;
+}
+
+.assignee:hover,
+.due:hover,
+.ghost-icon:hover {
+  background: var(--rule-soft);
+  color: var(--ink-soft);
+}
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 700;
+  overflow: hidden;
+  background: var(--ink-faint);
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.avatar-stack {
+  display: inline-flex;
+}
+
+.avatar-stack .avatar {
+  box-shadow: 0 0 0 1.5px var(--page);
+}
+
+.avatar-stack .avatar + .avatar {
+  margin-left: -5px;
+}
+
+.avatar-more {
+  background: var(--rule);
+  color: var(--ink-mute);
+}
+
+.avatar-empty {
+  width: 18px;
+  height: 18px;
+  color: var(--ink-faint);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+
+.subtask-list {
+  list-style: none;
+  margin: 8px -6px 0;
+  padding: 4px 0 0;
+  box-shadow: inset 0 0.5px 0 var(--rule);
+}
+
+.subtask-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  text-align: left;
+  font-size: 10.2px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  transition: background-color 120ms var(--ease);
+}
+
+.subtask-row:hover {
+  background: var(--rule-soft);
+}
+
+.subtask-status {
+  display: inline-grid;
+  flex: none;
+}
+
+.subtask-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.card-composer {
+  margin-top: 8px;
+}
+
+/* ── Composer (an NSTextField-like card) ───────────────────────────── */
+
+.composer {
+  padding: 12px;
+  border-radius: var(--card-radius);
+  background: var(--page);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 80%, transparent),
+    0 0 0 3.5px color-mix(in srgb, var(--accent) 25%, transparent);
+  animation: composer-in 220ms var(--ease) both;
+}
+
+.composer[data-compact] {
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+@keyframes composer-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.composer textarea {
+  display: block;
+  width: 100%;
+  min-height: 14px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  padding: 0;
+  background: none;
+  font-size: 11.05px;
+  line-height: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+}
+
+.composer textarea::placeholder {
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+
+.composer-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 11.05px;
+  font-weight: 600;
+  color: var(--ink-mute);
+}
+
+.composer-pending-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.composer-spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--rule);
+  border-top: 1.5px solid var(--accent);
+  animation: spin 800ms cubic-bezier(0.5, 0.1, 0.5, 0.9) infinite;
+}
+
+.composer-pending[data-failed] .composer-spinner {
+  animation: none;
+  border-top-color: var(--overdue);
+  box-shadow: inset 0 0 0 1.5px var(--overdue);
+}
+
+.composer-failed {
+  color: var(--overdue);
+  font-size: 9.35px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.drag-canvas {
+  position: fixed;
+  top: -1000px;
+  left: -1000px;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-property: opacity, background-color, color, box-shadow !important;
+  }
+}

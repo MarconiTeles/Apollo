@@ -11,6 +11,8 @@ async function boot() {
     const { startDemo } = await import("./lib/demo");
     startDemo();
   }
+  // Hosted, Swift starts the motion when the surface is on screen.
+  if (!isHosted) document.documentElement.dataset.play = "";
   createRoot(document.getElementById("root")!).render(<App />);
 }
 

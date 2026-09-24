@@ -54,6 +54,7 @@ let package = Package(
                 "Resources/ApolloLoading",
                 "Resources/ApolloTasks",
                 "Resources/ApolloAgenda",
+                "Resources/ApolloBoard",
                 "Resources/APOLLO_ICON_06.png",
                 "Resources/APOLLO.icon",
                 "Resources/Apollo.entitlements",

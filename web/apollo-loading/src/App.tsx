@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { post, read, subscribe } from "./lib/bridge";
+import { AgendaScene } from "./scenes/AgendaScene";
 import { BoardScene } from "./scenes/BoardScene";
 import { CommentsScene } from "./scenes/CommentsScene";
 import { InboxScene } from "./scenes/InboxScene";
@@ -40,5 +41,7 @@ export function App() {
       return <CommentsScene s={snapshot} />;
     case "inbox":
       return <InboxScene s={snapshot} />;
+    case "agenda":
+      return <AgendaScene s={snapshot} />;
   }
 }
