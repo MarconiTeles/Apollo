@@ -106,7 +106,7 @@ final class BoardAppKitViewportTests: XCTestCase {
                                    ?? { () -> BoardColumnView? in
                                        let index = snapshot(all).columns.firstIndex { $0.key == busiest.key }!
                                        h.view.scrollView.contentView.scroll(
-                                           to: NSPoint(x: BoardViewportView.columnX(index) - 258, y: 0))
+                                           to: NSPoint(x: BoardViewportView.columnX(index) - BoardViewportView.leadingMargin, y: 0))
                                        return h.coordinator.column(busiest.key)
                                    }())
         var maxLive = 0
@@ -142,9 +142,9 @@ final class BoardAppKitViewportTests: XCTestCase {
         XCTAssertEqual(last.verticalOffset, 0, "a remounted column must not inherit another offset")
         h.view.scrollView.contentView.scroll(to: .zero)
         XCTAssertEqual(try XCTUnwrap(h.coordinator.column(snap.columns[0].key)).verticalOffset, 900)
-        // SwiftUI contentOffset.x semantics: −258 at rest.
-        XCTAssertEqual(h.recorder.offsets.last, -258)
-        XCTAssertEqual(h.view.contentOffsetX, -258)
+        // SwiftUI contentOffset.x semantics: the negative leading inset at rest.
+        XCTAssertEqual(h.recorder.offsets.last, -BoardViewportView.leadingMargin)
+        XCTAssertEqual(h.view.contentOffsetX, -BoardViewportView.leadingMargin)
     }
 
     // MARK: Selection and reuse hygiene
