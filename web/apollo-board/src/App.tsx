@@ -196,6 +196,13 @@ export function App() {
     reportLayout();
   });
 
+  // A full snapshot means a new native container: report the geometry even
+  // when it matches what the previous mount received.
+  useLayoutEffect(() => {
+    lastLayout.current = "";
+    reportLayout();
+  }, [state.resetToken, reportLayout]);
+
   useEffect(() => {
     const columns = columnsRef.current;
     if (!columns) return;

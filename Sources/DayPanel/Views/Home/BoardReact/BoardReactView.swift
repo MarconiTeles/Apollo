@@ -247,6 +247,9 @@ final class BoardReactHost: NSObject {
     private(set) var webView: BoardReactWebView?
     private(set) var booted = false
     weak var client: BoardReactCoordinator?
+    /// Last document width the page reported. The page outlives each board
+    /// mount, but every mount gets a fresh container that starts at zero.
+    var contentWidth: CGFloat = 0
     private let avatars = MyTasksAvatarSchemeHandler()
     private let covers = BoardCoverSchemeHandler()
 
@@ -492,6 +495,9 @@ final class BoardReactCoordinator: NSObject {
         gate.begin(hiding: webView)
         gate.armed(seq: .max)
         container.document.addSubview(webView)
+        // Without this the new container stays window-wide until the page's
+        // geometry changes, and the board cannot scroll to the right columns.
+        container.contentWidth = host.contentWidth
         container.onHorizontalScroll = { [weak self] x in self?.parent?.onHorizontalScroll(x) }
         container.needsLayout = true
         if menuAnchor.superview !== webView { webView.addSubview(menuAnchor) }
@@ -944,7 +950,10 @@ final class BoardReactCoordinator: NSObject {
     /// Page geometry: document width for the native scroll view, and the
     /// group headers for the native pill track.
     private func applyLayout(_ message: [String: Any]) {
-        if let width = message["width"] as? Double { container?.contentWidth = CGFloat(width) }
+        if let width = message["width"] as? Double {
+            host.contentWidth = CGFloat(width)
+            container?.contentWidth = CGFloat(width)
+        }
         let headers = (message["headers"] as? [[String: Any]] ?? []).compactMap { raw -> BoardReactHeader? in
             guard let gk = raw["gk"] as? String, let x = raw["x"] as? Double,
                   let width = raw["w"] as? Double else { return nil }

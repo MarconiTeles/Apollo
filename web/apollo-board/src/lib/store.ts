@@ -33,6 +33,8 @@ export interface BoardState {
   insets: Insets;
   glyphs: Record<string, Glyph>;
   resetScrollToken: number;
+  /** Bumped by every full snapshot (a new board mount): geometry is resent. */
+  resetToken: number;
   subtaskComposer: { id: string; token: number } | null;
   query: string;
   command: { value: string; token: number } | null;
@@ -62,6 +64,7 @@ let state: BoardState = {
   insets: { top: 52, leading: 232, bottom: 24 },
   glyphs: {},
   resetScrollToken: 0,
+  resetToken: 0,
   subtaskComposer: null,
   query: "",
   command: null,
@@ -76,6 +79,7 @@ export function apply(patch: Patch) {
   if (patch.reset) {
     cards.clear();
     cardsChanged = true;
+    next.resetToken = state.resetToken + 1;
   }
   if (patch.remove) {
     for (const id of patch.remove) cards.delete(id);
