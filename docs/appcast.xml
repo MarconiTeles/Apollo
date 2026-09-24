@@ -5,6 +5,19 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 2.0.3</title>
+      <pubDate>Thu, 24 Sep 2026 01:48:36 +0000</pubDate>
+      <sparkle:version>102</sparkle:version>
+      <sparkle:shortVersionString>2.0.3</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Nova Agenda com calendário mensal, resumo do mês e navegação entre meses na barra da janela. Barra lateral e barra de ferramentas no padrão nativo do macOS 27, seletor de listas do ClickUp, Ajustes mais compactos e nova tela de abertura. Correções na sincronização do ClickUp quando algum dado auxiliar falha e no carregamento inicial dos status.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v2.0.3/Apollo-2.0.3.zip"
+        sparkle:edSignature="EL4eFuW7nqe90kSFN7CoQ4qP8SGtFLwfzkZyDOKSlG4jCA6sAN25EQ8oS7BF6XKA/tCxV/0yWqEC9xKpTR3CCw=="
+        length="42713614"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 2.0.2</title>
       <pubDate>Wed, 23 Sep 2026 18:07:40 +0000</pubDate>
       <sparkle:version>100</sparkle:version>
