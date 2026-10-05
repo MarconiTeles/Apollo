@@ -5698,6 +5698,49 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Apaga os comentários de envio do Apollo (os do link REVISAR) que só
+    /// carregam anexos removidos. Comentário escrito por gente, ou que leva
+    /// também outro arquivo, fica: o texto não é nosso para apagar.
+    func deleteMediaTransferComments(taskId: String, attachmentIds: Set<String>) async {
+        let ids = attachmentIds.filter { !$0.isEmpty }
+        guard !ids.isEmpty,
+              let comments = try? await cuSvc.getTaskComments(taskId: taskId) else { return }
+        for comment in comments {
+            let carried = comment.attachments.map(\.id) + comment.attachmentIds
+            guard !carried.isEmpty,
+                  comment.text.localizedCaseInsensitiveContains(Self.reviewOpenLinkText),
+                  carried.allSatisfy({ id in ids.contains { Self.mediaAttachmentIdMatches($0, id) } })
+            else { continue }
+            do { try await cuSvc.deleteTaskComment(commentId: comment.id) }
+            catch { Log.error("deleteMediaTransferComments: \(error)") }
+        }
+    }
+
+    /// Lixeira de um anexo (ou de um grupo de versões dele) na tarefa.
+    @MainActor @discardableResult
+    func removeTaskAttachments(taskId: String, attachments: [CUTask.Attachment]) async -> Bool {
+        guard let task = tasksById[taskId] else {
+            notify(.error, title: "Não foi possível remover",
+                   message: "A tarefa não está carregada. Recarregue e tente de novo.")
+            return false
+        }
+        var removed = false
+        do {
+            try await taskMediaTransfers.remove(attachmentIds: attachments.map(\.id),
+                                                from: task, appState: self)
+            notify(.info, title: attachments.count > 1 ? "Vídeos removidos da tarefa"
+                                                       : "Removido da tarefa")
+            removed = true
+        } catch {
+            Log.error("removeTaskAttachments: \(error)")
+            notify(.error, title: "Não foi possível remover",
+                   message: error.localizedDescription)
+        }
+        attachmentHydration.removeValue(forKey: taskId)
+        await hydrateTaskAttachments(taskId: taskId)
+        return removed
+    }
+
     func deleteComment(_ comment: CUComment) async {
         do {
             try await cuSvc.deleteTaskComment(commentId: comment.id)

@@ -83,6 +83,18 @@ struct TaskMediaFlowSheet: View {
     @State private var outputNames: [UUID: String] = [:]
     @State private var localError: String?
     @State private var preparing = false
+    /// Etapa de onde saiu o preparo desta sessão — para onde "Ajustar
+    /// vídeos" volta. `nil` quando a folha abriu já num lote pronto
+    /// (ENVIAR na linha): aí não há escolhas guardadas para rever.
+    @State private var adjustStage: Stage?
+    /// O que já está na tarefa e espera a confirmação da lixeira.
+    @State private var pendingInventoryRemoval: InventoryRemoval?
+    @State private var removingInventory = false
+
+    private enum InventoryRemoval {
+        case output(TaskMediaOutputVersion)
+        case source(TaskMediaAsset)
+    }
 
     // Popup chrome. The body is one opaque rounded surface; the header and
     // footer are Liquid Glass bars pinned on top (zIndex), and the stage's
@@ -152,6 +164,15 @@ struct TaskMediaFlowSheet: View {
             .frame(width: 680, height: 540)
             .task { await start() }
             .onExitCommand(perform: dismiss)
+            .confirmationDialog(inventoryRemovalTitle, isPresented: Binding(
+                get: { pendingInventoryRemoval != nil },
+                set: { if !$0 { pendingInventoryRemoval = nil } }
+            ), titleVisibility: .visible) {
+                Button("Remover", role: .destructive) { confirmInventoryRemoval() }
+                Button("Cancelar", role: .cancel) { pendingInventoryRemoval = nil }
+            } message: {
+                Text(inventoryRemovalMessage)
+            }
             .onAppear { appState.swiftUIPopupOpen = true }
             .onDisappear { appState.swiftUIPopupOpen = false }
     }
@@ -361,6 +382,7 @@ struct TaskMediaFlowSheet: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
+                        if selections.isEmpty { emptySelectionsHint }
                         ForEach($selections) { $selection in
                             classificationRow(selection: $selection)
                         }
@@ -384,7 +406,9 @@ struct TaskMediaFlowSheet: View {
                         .foregroundStyle(Editorial.accent)
                 }
             }
-            if selections.count > 3 {
+            if selections.isEmpty {
+                emptySelectionsHint
+            } else if selections.count > 3 {
                 // Cap the tray so many files don't crowd out the scroll above.
                 ScrollView {
                     VStack(spacing: 6) {
@@ -439,6 +463,7 @@ struct TaskMediaFlowSheet: View {
             Spacer(minLength: 8)
             typeControl(selection: selection)
                 .layoutPriority(1)
+            removeSelectionButton(selection.wrappedValue)
         }
         .padding(.horizontal, 11)
         .frame(height: 46)
@@ -451,6 +476,37 @@ struct TaskMediaFlowSheet: View {
                 .strokeBorder(classified ? Editorial.accent.opacity(0.45) : Editorial.rule,
                               lineWidth: 1)
         )
+    }
+
+    /// Tira o arquivo do envio. Com vários vídeos de uma vez, a conferência
+    /// é o momento de perceber o que entrou sem querer — e não havia como
+    /// desfazer sem fechar tudo e recomeçar.
+    private func removeSelectionButton(_ selection: TaskMediaSelection) -> some View {
+        Button {
+            removeSelection(selection.id)
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Editorial.inkSoft)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .accessibilityLabel("Remover \(selection.fileURL.lastPathComponent)")
+        .help("Não enviar este arquivo")
+    }
+
+    /// Sem arquivo na lista: diz o que aconteceu e aponta o caminho de
+    /// volta, em vez de deixar uma bandeja vazia e o botão apagado.
+    private var emptySelectionsHint: some View {
+        Text(pendingDropReplacements.isEmpty
+             ? "Nenhum arquivo para adicionar. Use Adicionar mais para escolher outros."
+             : "Nenhum arquivo novo — só as substituições serão preparadas.")
+            .font(Editorial.sans(11))
+            .foregroundStyle(Editorial.inkSoft.opacity(0.75))
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 12)
     }
 
     /// CORTAR (opens the trimmer) + the HOOK/BODY/VIDEO toggles. Nothing is
@@ -616,6 +672,9 @@ struct TaskMediaFlowSheet: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 6)
+            inventoryRemoveButton(label: "Remover \(output.fileName) da tarefa") {
+                pendingInventoryRemoval = .output(output)
+            }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -683,10 +742,89 @@ struct TaskMediaFlowSheet: View {
                     .font(.system(size: 8.5, weight: .bold, design: .rounded))
                     .foregroundStyle(Editorial.accent)
             }
+            inventoryRemoveButton(label: "Remover \(asset.displayName) da tarefa") {
+                pendingInventoryRemoval = .source(asset)
+            }
         }
-        .padding(.horizontal, 9).padding(.vertical, 5)
+        .padding(.leading, 9).padding(.trailing, 4).padding(.vertical, 5)
         .background(Capsule().fill(Editorial.paper))
         .overlay(Capsule().strokeBorder(Editorial.rule))
+    }
+
+    private func inventoryRemoveButton(label: String,
+                                       action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(Editorial.inkSoft)
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .disabled(removingInventory)
+        .accessibilityLabel(label)
+        .help("Remover da tarefa")
+    }
+
+    private var inventoryRemovalTitle: String {
+        switch pendingInventoryRemoval {
+        case .output(let output):
+            return "Remover \((output.fileName as NSString).deletingPathExtension)?"
+        case .source(let asset):
+            return "Remover \(asset.role.label) \(asset.displayName)?"
+        case nil:
+            return ""
+        }
+    }
+
+    /// Uma fonte não sai sozinha: toda combinação feita com ela vai junto,
+    /// e a pessoa precisa ver quantas antes de confirmar.
+    private var inventoryRemovalMessage: String {
+        let tail = "Some do Apollo para todo mundo e o comentário do envio é apagado. "
+            + "O arquivo continua nos anexos do ClickUp; se precisar sumir de lá, apague pelo ClickUp."
+        guard case .source(let asset) = pendingInventoryRemoval else { return tail }
+        let catalog = store.catalog(for: request.task.id)
+        let combos = catalog.lineageIds(dependingOn: [asset.id]).count
+        // Fonte que fica sem combinação nenhuma sai junto (ver `removing`).
+        let after = catalog.removing(lineageIds: [], assetIds: [asset.id])
+        let alsoGone = catalog.assets
+            .filter { $0.id != asset.id && after.asset(id: $0.id) == nil }
+            .map { "\($0.role.label) \($0.displayName)" }
+        var parts: [String] = []
+        if combos > 0 {
+            parts.append("\(combos) combinaç\(combos == 1 ? "ão" : "ões") feita\(combos == 1 ? "" : "s") com ele")
+        }
+        if !alsoGone.isEmpty {
+            parts.append(alsoGone.joined(separator: ", ") + ", que fica sem combinação")
+        }
+        guard !parts.isEmpty else { return tail }
+        return "Leva junto " + parts.joined(separator: " e ") + ". " + tail
+    }
+
+    private func confirmInventoryRemoval() {
+        guard let removal = pendingInventoryRemoval else { return }
+        pendingInventoryRemoval = nil
+        removingInventory = true
+        localError = nil
+        let task = request.task
+        Task { @MainActor in
+            do {
+                switch removal {
+                case .output(let output):
+                    try await store.remove(lineageIds: [output.lineageId],
+                                           from: task, appState: appState)
+                case .source(let asset):
+                    try await store.remove(assetIds: [asset.id],
+                                           from: task, appState: appState)
+                }
+                appState.attachmentHydration.removeValue(forKey: task.id)
+                await appState.hydrateTaskAttachments(taskId: task.id)
+            } catch {
+                localError = error.localizedDescription
+            }
+            removingInventory = false
+        }
     }
 
     // MARK: Decisão do arrasto
@@ -919,6 +1057,8 @@ struct TaskMediaFlowSheet: View {
                 .truncationMode(.middle)
 
             Spacer(minLength: 6)
+
+            removeSelectionButton(selection)
         }
         .padding(.vertical, 5)
         .matchedGeometryEffect(id: selection.id, in: dropFileSpace)
@@ -1517,9 +1657,10 @@ struct TaskMediaFlowSheet: View {
             }
         case .classify:
             footerRow {
-                secondaryButton("Escolher outros") { openAddPanel() }
+                secondaryButton("Adicionar mais") { openAddPanel() }
                 Spacer()
-                primaryButton(preparing ? preparingLabel : "PREPARAR \(projectedCount) VÍDEOS",
+                primaryButton(preparing ? preparingLabel
+                              : "PREPARAR \(projectedCount) VÍDEO\(projectedCount == 1 ? "" : "S")",
                               disabled: preparing || !canPrepare) {
                     prepareAdd()
                 }
@@ -1546,6 +1687,9 @@ struct TaskMediaFlowSheet: View {
         case .readyPrompt:
             footerRow {
                 secondaryButton("Agora não") { dismiss() }
+                if adjustStage != nil {
+                    secondaryButton("Ajustar vídeos") { backToAdjust() }
+                }
                 Spacer()
                 primaryButton("ENVIAR AGORA", disabled: false,
                               badge: pendingOutputs.count) {
@@ -1556,6 +1700,9 @@ struct TaskMediaFlowSheet: View {
         case .mentions:
             footerRow {
                 secondaryButton("Cancelar") { dismiss() }
+                if adjustStage != nil, store.phase(for: request.task.id) == .ready {
+                    secondaryButton("Ajustar vídeos") { backToAdjust() }
+                }
                 Spacer()
                 primaryButton("ENVIAR", disabled: !validOutputNames,
                               badge: pendingOutputs.count) {
@@ -1618,8 +1765,11 @@ struct TaskMediaFlowSheet: View {
                                action: action)
     }
 
+    /// Num drop misto, apagar todos os arquivos novos ainda deixa as
+    /// substituições já mapeadas para preparar.
     private var canPrepare: Bool {
-        !selections.isEmpty && selections.allSatisfy { $0.role != nil }
+        (!selections.isEmpty || !pendingDropReplacements.isEmpty)
+            && selections.allSatisfy { $0.role != nil }
     }
 
     private var projectedCount: Int {
@@ -1755,11 +1905,36 @@ struct TaskMediaFlowSheet: View {
         panel.allowedContentTypes = [.movie, .video, .mpeg4Movie, .quickTimeMovie]
         panel.message = "Escolha HOOKs, BODYs e vídeos completos"
         guard panel.runModal() == .OK else {
-            if selections.isEmpty { dismiss() }
+            // Só fecha se o seletor era a porta de entrada; na conferência,
+            // cancelar deixa a lista como estava.
+            if stage == .loading { dismiss() }
             return
         }
-        selections = panel.urls.map { TaskMediaSelection(fileURL: $0) }
+        // Soma à lista em vez de trocá-la: o que já foi conferido, cortado
+        // e marcado como HOOK/BODY não se perde ao buscar mais um arquivo.
+        let known = Set(selections.map(\.fileURL))
+        selections += panel.urls.filter { !known.contains($0) }
+            .map { TaskMediaSelection(fileURL: $0) }
         stage = .classify
+    }
+
+    private func removeSelection(_ id: UUID) {
+        selections.removeAll { $0.id == id }
+        dropReplacementChoice.removeValue(forKey: id)
+        if trimSelectionId == id { trimSelectionId = nil }
+    }
+
+    /// Desfaz o preparo e devolve a pessoa às escolhas que fez, intactas.
+    /// O lote pronto ainda não tocou o ClickUp, então descartá-lo é seguro;
+    /// o preparo seguinte refaz os vídeos com a lista corrigida.
+    private func backToAdjust() {
+        guard let back = adjustStage,
+              store.phase(for: request.task.id) == .ready else { return }
+        store.discard(taskId: request.task.id)
+        outputNames = [:]
+        localError = nil
+        adjustStage = nil
+        stage = back
     }
 
     // MARK: Aplicar a decisão do arrasto
@@ -1803,6 +1978,7 @@ struct TaskMediaFlowSheet: View {
             return
         }
         preparing = true
+        adjustStage = .mapReplacements
         Task { @MainActor in
             await store.prepareReplacements(task: request.task,
                                             replacementURLs: replacements,
@@ -1893,7 +2069,7 @@ struct TaskMediaFlowSheet: View {
     }
 
     private func prepareAdd() {
-        preparing = true; localError = nil; stage = .status
+        preparing = true; localError = nil; adjustStage = .classify; stage = .status
         Task {
             if pendingDropReplacements.isEmpty {
                 await store.prepareAdd(task: request.task, selections: selections, appState: appState)
@@ -1911,7 +2087,7 @@ struct TaskMediaFlowSheet: View {
 
     private func prepareReplacement() {
         guard !replacementURLs.isEmpty else { return }
-        preparing = true; localError = nil; stage = .status
+        preparing = true; localError = nil; adjustStage = .confirmReplacement; stage = .status
         Task {
             await store.prepareReplacements(task: request.task,
                                             replacementURLs: replacementURLs,

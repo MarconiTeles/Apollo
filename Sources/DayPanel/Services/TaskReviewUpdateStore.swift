@@ -829,6 +829,21 @@ final class TaskReviewUpdateStore: ObservableObject {
         }
     }
 
+    /// Lixeira: o vídeo removido deixa de ser vigiado (`probeCandidates`),
+    /// então uma revisão pendente dele nunca seria consumida e a linha
+    /// ficaria acesa para sempre.
+    func forgetRemovedMedia(taskId: String, ids: Set<String>) {
+        let keys = Set(ids.map(AttachmentSupersession.normalize).filter { !$0.isEmpty })
+        guard !keys.isEmpty, let pending = updatesByTask[taskId] else { return }
+        let kept = pending.filter { _, update in
+            ![update.activeAtt, update.attachment.id, update.meta.reviewId ?? ""]
+                .contains { keys.contains(AttachmentSupersession.normalize($0)) }
+        }
+        guard kept.count != pending.count else { return }
+        updatesByTask[taskId] = kept.isEmpty ? nil : kept
+        persistPendingUpdates()
+    }
+
     private func persistPendingUpdates() {
         let records = updatesByTask.values.flatMap(\.values)
             .map(PersistedUpdate.init)
@@ -952,14 +967,17 @@ final class TaskReviewUpdateStore: ObservableObject {
     /// through the stable review id. Older media remains selectable inside the
     /// review version picker; it is not another pending review row.
     private func probeCandidates(in task: CUTask) -> [ProbeCandidate] {
-        let visible = task.visibleAttachments.filter {
+        let reviewable = task.visibleAttachments.filter {
             ReviewLink.isReviewable($0.ext)
         }
         guard let catalog = catalogFetcher(task.id) else {
-            return visible.map {
+            return reviewable.map {
                 ProbeCandidate(attachment: $0, reviewId: $0.id, versionId: nil)
             }
         }
+        // O arquivo removido pela lixeira continua na tarefa do ClickUp; sem
+        // isto ele viraria uma revisão avulsa e voltaria a acender a linha.
+        let visible = reviewable.filter { !catalog.isRemoved(attachmentId: $0.id) }
 
         var candidates: [String: ProbeCandidate] = [:]
         var catalogAttachmentIds: Set<String> = []

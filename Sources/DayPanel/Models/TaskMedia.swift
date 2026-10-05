@@ -142,6 +142,17 @@ struct TaskMediaCatalog: Codable, Equatable, Sendable {
     var assets: [TaskMediaAsset]
     var lineages: [TaskMediaOutputLineage]
     var outputs: [TaskMediaOutputVersion]
+    /// Anexos que alguém tirou da tarefa pelo Apollo. A API do ClickUp não
+    /// apaga arquivo, então eles continuam lá: esta lista os esconde para
+    /// todo mundo que usa o Apollo e impede que voltem como vídeo legado.
+    /// Opcional para manifests de builds anteriores seguirem decodificáveis.
+    var removedAttachmentIds: [String]?
+    /// Combinações removidas. Trocar o HOOK ou o BODY delas depois não pode
+    /// trazê-las de volta como uma versão nova.
+    var removedLineageIds: [String]?
+    /// Fontes (HOOK/BODY/VIDEO) removidas: um envio preparado antes da
+    /// remoção não pode recriá-las por uma combinação nova.
+    var removedAssetIds: [UUID]?
 
     static func empty(taskId: String) -> Self {
         .init(taskId: taskId, sequence: 0, assets: [], lineages: [], outputs: [])
@@ -227,12 +238,100 @@ struct TaskMediaCatalog: Codable, Equatable, Sendable {
             .compactMap { asset(id: $0) }
     }
 
+    static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "avi", "mkv", "webm"]
+
+    /// Um envio grava o catálogo do momento em que foi preparado. Se alguém
+    /// usou a lixeira nesse meio-tempo, o que saiu continua fora e a
+    /// sequência passa à frente da mais nova, senão o manifest dele perde.
+    func carryingRemovals(from latest: TaskMediaCatalog) -> TaskMediaCatalog {
+        let gone = latest.removedLineageIds ?? []
+        let hidden = latest.removedAttachmentIds ?? []
+        let goneAssets = Set(latest.removedAssetIds ?? []).intersection(assets.map(\.id))
+        var next = self
+        if !gone.isEmpty || !hidden.isEmpty || !goneAssets.isEmpty {
+            let doomed = Set(gone).intersection(lineages.map(\.id))
+            next = next.removing(lineageIds: doomed, assetIds: goneAssets,
+                                 hiddenAttachmentIds: hidden)
+            var lineageTombstones = next.removedLineageIds ?? []
+            for id in gone where !lineageTombstones.contains(id) { lineageTombstones.append(id) }
+            next.removedLineageIds = lineageTombstones
+        }
+        next.sequence = max(next.sequence, latest.sequence + 1)
+        return next
+    }
+
+    func isRemoved(attachmentId: String) -> Bool {
+        let key = AttachmentSupersession.normalize(attachmentId)
+        return !key.isEmpty && (removedAttachmentIds ?? []).contains(key)
+    }
+
+    /// As linhagens que um conjunto de anexos representa. Só a versão mais
+    /// nova fala pela linhagem: apagar uma V1 antiga esconde aquela V1, não
+    /// leva a V3 junto. Anexo que não é saída do Apollo não tem linhagem.
+    func lineageIds(forAttachmentIds ids: [String]) -> Set<String> {
+        let keys = Set(ids.map(AttachmentSupersession.normalize).filter { !$0.isEmpty })
+        return Set(lineages.compactMap { lineage in
+            guard let id = latestOutput(for: lineage.id)?.attachmentId,
+                  keys.contains(AttachmentSupersession.normalize(id)) else { return nil }
+            return lineage.id
+        })
+    }
+
+    /// As linhagens que deixam de existir se estas fontes saírem: um HOOK
+    /// leva junto toda combinação em que aparece.
+    func lineageIds(dependingOn assetIds: Set<UUID>) -> Set<String> {
+        Set(lineages.filter { lineage in
+            [lineage.hookAssetId, lineage.bodyAssetId, lineage.videoAssetId]
+                .contains { $0.map(assetIds.contains) == true }
+        }.map(\.id))
+    }
+
+    /// Tira vídeos da tarefa. Cada linhagem sai inteira (V1, V2, V3…), e
+    /// uma fonte que ficou sem nenhum vídeo sai junto — senão um BODY novo
+    /// recriaria a combinação com o HOOK que a pessoa acabou de apagar.
+    /// `hiddenAttachmentIds` cobre anexos que não são saída do Apollo.
+    func removing(lineageIds: Set<String>, assetIds: Set<UUID> = [],
+                  hiddenAttachmentIds: [String] = []) -> TaskMediaCatalog {
+        let doomed = lineageIds.union(self.lineageIds(dependingOn: assetIds))
+        var next = self
+        let removedOutputs = outputs.filter { doomed.contains($0.lineageId) }
+        let touchedAssets = Set(lineages.filter { doomed.contains($0.id) }.flatMap {
+            [$0.hookAssetId, $0.bodyAssetId, $0.videoAssetId].compactMap { $0 }
+        })
+        next.outputs.removeAll { doomed.contains($0.lineageId) }
+        next.lineages.removeAll { doomed.contains($0.id) }
+        let stillUsed = Set(next.lineages.flatMap {
+            [$0.hookAssetId, $0.bodyAssetId, $0.videoAssetId].compactMap { $0 }
+        })
+        let orphaned = touchedAssets.subtracting(stillUsed).union(assetIds)
+        next.assets.removeAll { orphaned.contains($0.id) }
+
+        var hidden = removedAttachmentIds ?? []
+        let incoming = removedOutputs.compactMap(\.attachmentId) + hiddenAttachmentIds
+        for id in incoming.map(AttachmentSupersession.normalize)
+        where !id.isEmpty && !hidden.contains(id) {
+            hidden.append(id)
+        }
+        next.removedAttachmentIds = hidden
+        var gone = removedLineageIds ?? []
+        for id in doomed.sorted() where !gone.contains(id) { gone.append(id) }
+        next.removedLineageIds = gone
+        var goneAssets = removedAssetIds ?? []
+        for id in orphaned.sorted(by: { $0.uuidString < $1.uuidString })
+        where !goneAssets.contains(id) {
+            goneAssets.append(id)
+        }
+        if !goneAssets.isEmpty { next.removedAssetIds = goneAssets }
+        next.sequence += 1
+        return next
+    }
+
     /// Backfills videos that were attached before Apollo introduced its media
     /// manifest. They remain direct VIDEO assets, so Substituir arquivo can
     /// immediately create V2 without asking the user to upload V1 again.
     @discardableResult
     mutating func importLegacyVideoAttachments(_ attachments: [CUTask.Attachment]) -> Int {
-        let videoExtensions = Set(["mov", "mp4", "m4v", "avi", "mkv", "webm"])
+        let videoExtensions = Self.videoExtensions
         var knownIds = Set(assets.flatMap(\.revisions).compactMap(\.attachmentId))
             .union(outputs.compactMap(\.attachmentId))
         var knownURLs = Set(assets.flatMap(\.revisions).compactMap { $0.remoteURL?.absoluteString })
@@ -244,6 +343,7 @@ struct TaskMediaCatalog: Codable, Equatable, Sendable {
                   !attachment.title.hasPrefix(TaskMediaTechnicalName.sourcePrefix),
                   !attachment.title.hasPrefix(TaskMediaTechnicalName.manifestPrefix),
                   !knownIds.contains(attachment.id),
+                  !isRemoved(attachmentId: attachment.id),
                   !knownURLs.contains(attachment.url),
                   let remoteURL = URL(string: attachment.url) else { continue }
 
@@ -521,6 +621,8 @@ enum TaskMediaPlanner {
             }
         }
 
+        for id in catalog.removedLineageIds ?? [] { affected[id] = nil }
+
         var outputs: [TaskMediaPlannedOutput] = []
         for lineage in affected.values.sorted(by: { $0.id < $1.id }) {
             if !catalog.lineages.contains(where: { $0.id == lineage.id }) {
@@ -604,6 +706,19 @@ enum TaskMediaOutputName {
     }
 }
 
+extension CUTask {
+    /// Os anexos que o Apollo mostra: sem arquivos técnicos, sem versões
+    /// substituídas e sem o que foi tirado pela lixeira. Uma regra só, para
+    /// a lista e a contagem da aba não discordarem.
+    func displayedAttachments(catalog: TaskMediaCatalog) -> [Attachment] {
+        let superseded = AttachmentSupersession.supersededIds(taskId: id)
+        return visibleAttachments.filter {
+            !AttachmentSupersession.isSuperseded($0.id, in: superseded)
+                && !catalog.isRemoved(attachmentId: $0.id)
+        }
+    }
+}
+
 /// Persistent record of attachment ids that a newer media-flow version has
 /// superseded. ClickUp's API can't delete or replace-in-place an attachment,
 /// so every "Substituir" leaves the old file on the task. Apollo hides the
@@ -659,6 +774,8 @@ enum AttachmentSupersession {
                 if let aid = v.attachmentId { superseded.append(aid) }
             }
         }
+        // Removidos pela lixeira somem da lista do mesmo jeito.
+        superseded += catalog.removedAttachmentIds ?? []
         return markSuperseded(superseded, taskId: taskId)
     }
 }
