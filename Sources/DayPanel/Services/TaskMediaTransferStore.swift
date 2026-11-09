@@ -52,6 +52,36 @@ final class TaskMediaTransferStore: ObservableObject {
 
     @Published private(set) var catalogs: [String: TaskMediaCatalog] = [:]
     @Published private(set) var batches: [String: BatchState] = [:]
+    /// Remoção em andamento por tarefa (ver `remove`).
+    private var removals: [String: Task<Void, Error>] = [:]
+    /// Tarefas lendo/hasheando arquivos antes de o lote existir: a lixeira
+    /// espera, senão o plano sairia do catálogo de antes da remoção.
+    private var planningTaskIds: Set<String> = []
+
+    /// O catálogo mais novo que se consegue ver agora: o daqui ou o que
+    /// outra pessoa subiu. Lê a tarefa direto do serviço, sem hidratar o
+    /// estado observado pelas telas (isso já causou loop de render).
+    private func latestKnownCatalog(for task: CUTask,
+                                    appState: AppState) async -> TaskMediaCatalog {
+        let local = catalog(for: task.id)
+        guard let fresh = try? await appState.clickUpService.getTask(id: task.id) else {
+            Log.error("TaskMedia: catálogo remoto ilegível antes de gravar; seguindo com o local")
+            return local
+        }
+        guard let remote = await loadRemoteCatalog(from: fresh.attachments),
+              remote.taskId == task.id, remote.sequence > local.sequence else { return local }
+        return remote
+    }
+
+    /// Só o que já está em memória — para quem desenha a tela e não pode
+    /// ler disco a cada passada.
+    func loadedCatalog(for taskId: String) -> TaskMediaCatalog? { catalogs[taskId] }
+
+    /// Preparo novo espera a remoção da tarefa terminar, senão planejaria
+    /// sobre o catálogo de antes dela.
+    private func awaitPendingRemoval(taskId: String) async {
+        _ = try? await removals[taskId]?.value
+    }
 
     private let composer = TaskVideoComposer()
     private let fileManager = FileManager.default
@@ -224,6 +254,9 @@ final class TaskMediaTransferStore: ObservableObject {
 
     func prepareAdd(task: CUTask, selections: [TaskMediaSelection],
                     appState: AppState) async {
+        await awaitPendingRemoval(taskId: task.id)
+        planningTaskIds.insert(task.id)
+        defer { planningTaskIds.remove(task.id) }
         do {
             if catalogs[task.id] == nil { await loadCatalog(for: task, appState: appState) }
             let hashed = try await hash(selections)
@@ -243,6 +276,9 @@ final class TaskMediaTransferStore: ObservableObject {
 
     func prepareReplacements(task: CUTask, replacementURLs: [UUID: URL],
                              additions: [TaskMediaSelection] = [], appState: AppState) async {
+        await awaitPendingRemoval(taskId: task.id)
+        planningTaskIds.insert(task.id)
+        defer { planningTaskIds.remove(task.id) }
         do {
             if catalogs[task.id] == nil { await loadCatalog(for: task, appState: appState) }
             let current = catalog(for: task.id)
@@ -329,7 +365,18 @@ final class TaskMediaTransferStore: ObservableObject {
                 )
             }
             committed.sequence += 1
+            committed = committed.carryingRemovals(
+                from: await latestKnownCatalog(for: task, appState: appState))
+            // Publicado agora, mas removido por alguém nesse meio-tempo: o
+            // vídeo fica escondido e o comentário REVISAR dele não pode ficar.
+            let publishedNowHidden = Set(completedBatch.published.values
+                .compactMap(\.attachmentId)
+                .filter { committed.isRemoved(attachmentId: $0) })
             try await uploadManifest(committed, task: task, appState: appState)
+            if !publishedNowHidden.isEmpty {
+                await appState.deleteMediaTransferComments(taskId: task.id,
+                                                           attachmentIds: publishedNowHidden)
+            }
             catalogs[task.id] = committed
             persistLocal(committed)
             // Record the just-superseded older versions so the attachment list
@@ -362,6 +409,64 @@ final class TaskMediaTransferStore: ObservableObject {
 
     func discard(taskId: String) {
         if let batch = batches.removeValue(forKey: taskId) { cleanupPreparedFiles(batch) }
+    }
+
+    /// Lixeira: tira vídeos (linhagens inteiras), fontes ou anexos soltos
+    /// da tarefa. O catálogo é relido antes para não pisar no que outra
+    /// pessoa publicou, e o manifest novo sobe ANTES de qualquer comentário
+    /// sumir — se ele falhar, nada muda. O arquivo continua no ClickUp (a
+    /// API não apaga anexo); some do Apollo para todo mundo.
+    func remove(lineageIds: Set<String> = [], assetIds: Set<UUID> = [],
+                attachmentIds: [String] = [], from task: CUTask,
+                appState: AppState) async throws {
+        // Uma remoção por vez em cada tarefa: duas em paralelo partiriam do
+        // mesmo catálogo e a segunda devolveria o que a primeira tirou.
+        let previous = removals[task.id]
+        let work = Task { @MainActor in
+            _ = try? await previous?.value
+            try await self.performRemoval(lineageIds: lineageIds, assetIds: assetIds,
+                                          attachmentIds: attachmentIds, task: task,
+                                          appState: appState)
+        }
+        removals[task.id] = work
+        defer { if removals[task.id] == work { removals[task.id] = nil } }
+        try await work.value
+    }
+
+    private func performRemoval(lineageIds: Set<String>, assetIds: Set<UUID>,
+                                attachmentIds: [String], task: CUTask,
+                                appState: AppState) async throws {
+        // Lote pendente (pronto, enviando ou falho no meio) foi planejado
+        // sobre o catálogo de antes: enviá-lo ou repeti-lo depois traria de
+        // volta o que saiu. Uma falha de preparo, sem vídeo, não conta.
+        if planningTaskIds.contains(task.id) { throw TransferError.busy }
+        if let batch = batches[task.id], batch.phase != .sent,
+           !(batch.phase == .failed && batch.total == 0) {
+            throw TransferError.busy
+        }
+        await loadCatalog(for: task, appState: appState)
+        let current = catalog(for: task.id)
+        let lineages = lineageIds.union(current.lineageIds(forAttachmentIds: attachmentIds))
+        let next = current.removing(lineageIds: lineages, assetIds: assetIds,
+                                    hiddenAttachmentIds: attachmentIds)
+        let keptOutputIds = Set(next.outputs.map(\.id))
+        let removedOutputs = current.outputs.filter { !keptOutputIds.contains($0.id) }
+        let removedOutputIds = Set(removedOutputs.compactMap(\.attachmentId))
+        do {
+            try await uploadManifest(next, task: task, appState: appState)
+        } catch {
+            throw TransferError.removalNotSaved
+        }
+        catalogs[task.id] = next
+        persistLocal(next)
+        AttachmentSupersession.syncFromCatalog(next, taskId: task.id)
+        if batches[task.id]?.phase == .failed { discard(taskId: task.id) }
+        TaskReviewUpdateStore.shared.forgetRemovedMedia(
+            taskId: task.id,
+            ids: removedOutputIds.union(removedOutputs.compactMap(\.reviewId))
+                .union(attachmentIds))
+        await appState.deleteMediaTransferComments(
+            taskId: task.id, attachmentIds: removedOutputIds.union(attachmentIds))
     }
 
     var replaceablePendingCountByTask: [String: Int] {
@@ -827,6 +932,8 @@ final class TaskMediaTransferStore: ObservableObject {
         case invalidFileName
         case duplicateOutputName(String)
         case wrongReplacementCount(expected: Int)
+        case busy
+        case removalNotSaved
 
         var errorDescription: String? {
             switch self {
@@ -838,6 +945,10 @@ final class TaskMediaTransferStore: ObservableObject {
             case .duplicateOutputName(let name): return "O nome \(name) está repetido."
             case .wrongReplacementCount(let expected):
                 return "Escolha exatamente \(expected) vídeo\(expected == 1 ? "" : "s") para substituir os pendentes."
+            case .busy:
+                return "Esta tarefa tem um envio pendente. Envie ou descarte antes de remover vídeos."
+            case .removalNotSaved:
+                return "Não foi possível salvar a remoção no ClickUp. Nada foi apagado — tente de novo."
             }
         }
     }

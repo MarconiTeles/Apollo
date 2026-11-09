@@ -120,6 +120,12 @@ struct TaskDetailView: View, Equatable {
     /// only the newest version of each `…v01/v02/v03` set shows
     /// until the user opts to see the history.
     @State private var expandedVersionGroups: Set<String> = []
+    /// Anexo(s) esperando a confirmação da lixeira.
+    @State private var pendingRemoval: [CUTask.Attachment]?
+    /// Some na hora do clique. A tarefa recarregada volta idêntica (o
+    /// arquivo continua no ClickUp), e esta view só se redesenha quando a
+    /// tarefa muda — sem isto o vídeo ficaria na tela até reabrir.
+    @State private var removedLocally: Set<String> = []
 
     /// Local (Apollo-native) reminders for this task, mirrored
     /// from `TaskReminders` (UserDefaults-backed, not @Published)
@@ -1233,6 +1239,39 @@ struct TaskDetailView: View, Equatable {
                 }
             }
         }
+        .confirmationDialog(removalTitle, isPresented: Binding(
+            get: { pendingRemoval != nil },
+            set: { if !$0 { pendingRemoval = nil } }
+        ), titleVisibility: .visible) {
+            Button("Remover", role: .destructive) {
+                guard let doomed = pendingRemoval else { return }
+                pendingRemoval = nil
+                let ids = Set(doomed.map(\.id))
+                removedLocally.formUnion(ids)
+                Task {
+                    let removed = await appState.removeTaskAttachments(taskId: task.id,
+                                                                       attachments: doomed)
+                    if !removed { removedLocally.subtract(ids) }
+                }
+            }
+            Button("Cancelar", role: .cancel) { pendingRemoval = nil }
+        } message: {
+            Text(removalMessage)
+        }
+    }
+
+    private var removalTitle: String {
+        guard let doomed = pendingRemoval, let first = doomed.first else { return "" }
+        return doomed.count > 1 ? "Remover \(first.title) e as \(doomed.count - 1) versões anteriores?"
+                                : "Remover \(first.title)?"
+    }
+
+    /// Diz o que acontece de fato: some do Apollo e o comentário do envio
+    /// vai embora, mas o arquivo fica no ClickUp — a API não deixa apagar.
+    private var removalMessage: String {
+        "Some desta tarefa no Apollo para todo mundo, e o comentário do envio é apagado. "
+            + "O arquivo continua nos anexos do ClickUp; se precisar sumir de lá também, "
+            + "apague pela tarefa no ClickUp."
     }
 
     private var isAttachmentsLoading: Bool {
@@ -1245,11 +1284,18 @@ struct TaskDetailView: View, Equatable {
     /// mutation, so it can't feed a render loop. The superseded set is filled
     /// out of the render path (media flow publish / catalog load).
     private var displayedAttachments: [CUTask.Attachment] {
-        let superseded = AttachmentSupersession.supersededIds(taskId: task.id)
-        guard !superseded.isEmpty else { return task.visibleAttachments }
-        return task.visibleAttachments.filter {
-            !AttachmentSupersession.isSuperseded($0.id, in: superseded)
-        }
+        let shown = task.displayedAttachments(
+            catalog: appState.taskMediaTransfers.catalog(for: task.id))
+        guard !removedLocally.isEmpty else { return shown }
+        return shown.filter { !removedLocally.contains($0.id) }
+    }
+
+    /// Só vídeo tem lixeira: é o que o Apollo envia e cataloga. Link tirado
+    /// da descrição (id == url) nem é anexo — some editando a descrição.
+    private func removeAction(_ attachments: [CUTask.Attachment]) -> (() -> Void)? {
+        guard let first = attachments.first, first.id != first.url,
+              TaskMediaCatalog.videoExtensions.contains(first.ext.lowercased()) else { return nil }
+        return { pendingRemoval = attachments }
     }
 
     private func replaceAttachment(_ att: CUTask.Attachment) {
@@ -1269,7 +1315,8 @@ struct TaskDetailView: View, Equatable {
                            taskURL: task.url,
                            taskId: task.id, listId: task.listId,
                            actorId: reviewActorId, actorName: reviewActorName,
-                           onReplace: { replaceAttachment(group.newest) })
+                           onReplace: { replaceAttachment(group.newest) },
+                           onRemove: removeAction(group.versions))
                 .equatable()
         } else {
             attachmentVersionGroup(group)
@@ -1396,7 +1443,8 @@ struct TaskDetailView: View, Equatable {
                                taskURL: task.url,
                                taskId: task.id, listId: task.listId,
                                actorId: reviewActorId, actorName: reviewActorName,
-                               onReplace: { replaceAttachment(group.newest) })
+                               onReplace: { replaceAttachment(group.newest) },
+                               onRemove: removeAction(group.versions))
                     .equatable()
             }
             Button {
@@ -1431,7 +1479,8 @@ struct TaskDetailView: View, Equatable {
                                        taskURL: task.url,
                                        taskId: task.id, listId: task.listId,
                                        actorId: reviewActorId, actorName: reviewActorName,
-                                       onReplace: { replaceAttachment(old) })
+                                       onReplace: { replaceAttachment(old) },
+                                       onRemove: removeAction([old]))
                             .equatable()
                             .opacity(0.72)
                     }
@@ -3002,6 +3051,8 @@ private struct AttachmentChip: View, Equatable {
     /// Replace action (uploads a new revision). Excluded from `==` (closures
     /// aren't comparable and only capture the stable attachment + task id).
     var onReplace: (() -> Void)? = nil
+    /// Lixeira. Também fora do `==`, pelo mesmo motivo.
+    var onRemove: (() -> Void)? = nil
 
     static func == (lhs: AttachmentChip, rhs: AttachmentChip) -> Bool {
         lhs.attachment == rhs.attachment && lhs.taskURL == rhs.taskURL
@@ -3151,8 +3202,7 @@ private struct AttachmentChip: View, Equatable {
                 }
 
                 // Substituir — envia uma nova revisão. Nested plain button
-                // takes its own tap before the chip's open-file tap. (Não há
-                // "Excluir": a API pública do ClickUp não deleta anexo.)
+                // takes its own tap before the chip's open-file tap.
                 if let onReplace {
                     Button(action: onReplace) {
                         Image(systemName: "arrow.triangle.2.circlepath")
@@ -3164,6 +3214,22 @@ private struct AttachmentChip: View, Equatable {
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
                     .help("Substituir anexo (envia uma nova versão)")
+                }
+
+                // Lixeira — tira da tarefa no Apollo. A API pública do
+                // ClickUp não deleta anexo, então o arquivo fica lá; o
+                // alerta de confirmação diz isso antes.
+                if let onRemove {
+                    Button(action: onRemove) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Editorial.inkMute)
+                            .frame(width: 26, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Remover da tarefa")
                 }
 
                 Image(systemName: "arrow.up.right")
