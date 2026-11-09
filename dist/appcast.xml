@@ -5,6 +5,19 @@
     <description>Atualizações OTA do Apollo</description>
     <language>pt-br</language>
     <item>
+      <title>Apollo 2.0.7</title>
+      <pubDate>Mon, 09 Nov 2026 15:05:44 +0000</pubDate>
+      <sparkle:version>107</sparkle:version>
+      <sparkle:shortVersionString>2.0.7</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Agora dá para tirar um vídeo do envio antes de mandar (o “x” em cada arquivo, “Adicionar mais” e “Ajustar vídeos”) e remover um vídeo já enviado pela lixeira. O vídeo some do Apollo para todo mundo; o arquivo continua nos anexos do ClickUp.]]></description>
+      <enclosure
+        url="https://github.com/MarconiTeles/Apollo/releases/download/v2.0.7/Apollo-2.0.7.zip"
+        sparkle:edSignature="3kzNv0f89fXRZ+5vb1hV8hUI1r/XEuqQlZ4bSdYyO0F7jnBcsQ5k1drtNRcyk1KiQjSqkAckr98vIuwsIRrHCA=="
+        length="54248966"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Apollo 2.0.6</title>
       <pubDate>Thu, 24 Sep 2026 21:47:50 +0000</pubDate>
       <sparkle:version>106</sparkle:version>
